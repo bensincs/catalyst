@@ -10,9 +10,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
-	"github.com/inception42/cortex/control-plane/api/internal/auth"
-	"github.com/inception42/cortex/control-plane/api/internal/model"
-	"github.com/inception42/cortex/control-plane/api/internal/store"
+	"github.com/inception42/cortex/control-plane/internal/auth"
+	"github.com/inception42/cortex/control-plane/internal/model"
+	"github.com/inception42/cortex/control-plane/internal/store"
 	"github.com/inception42/cortex/shared"
 )
 

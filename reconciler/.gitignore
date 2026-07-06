@@ -5,5 +5,5 @@
 
 # build
 /bin/
-api
+/reconciler
 *.test

@@ -9,7 +9,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 
-	"github.com/inception42/cortex/control-plane/api/internal/model"
+	"github.com/inception42/cortex/control-plane/internal/model"
 )
 
 const (

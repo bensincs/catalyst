@@ -140,10 +140,10 @@ echo "$ACR"
 Both images build **from the repo root** (the Go module and `shared/` must be in
 context). Save these two Dockerfiles, then let ACR build them in the cloud.
 
-**`control-plane/api/Dockerfile`**
+**`control-plane/Dockerfile`**
 
 ```dockerfile
-# Build from the REPO ROOT:  az acr build -f control-plane/api/Dockerfile .
+# Build from the REPO ROOT:  az acr build -f control-plane/Dockerfile .
 FROM golang:1.26 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -151,7 +151,7 @@ RUN go mod download
 COPY shared ./shared
 COPY control-plane ./control-plane
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" \
-    -o /out/api ./control-plane/api/cmd/api
+    -o /out/api ./control-plane/cmd/api
 
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/api /api
@@ -188,7 +188,7 @@ CMD ["node", "server.js"]
 Build both in ACR (run from the repo root):
 
 ```bash
-az acr build -r "$ACR" -t cortex-api:latest     -f control-plane/api/Dockerfile .
+az acr build -r "$ACR" -t cortex-api:latest     -f control-plane/Dockerfile .
 az acr build -r "$ACR" -t cortex-console:latest -f web/Dockerfile .
 ```
 
@@ -284,7 +284,7 @@ open https://catalyst.sincs.dev                    # sign in with Entra
 ## Configuration reference
 
 Injected by `main.bicep`; app defaults come from
-`control-plane/api/internal/config/config.go` and the console's `auth.ts`.
+`control-plane/internal/config/config.go` and the console's `auth.ts`.
 
 **API (`cortex-cp-api`)**
 
@@ -320,7 +320,7 @@ Rebuild the image and restart the revision (single-revision mode picks up
 `:latest`):
 
 ```bash
-az acr build -r "$ACR" -t cortex-api:latest -f control-plane/api/Dockerfile .
+az acr build -r "$ACR" -t cortex-api:latest -f control-plane/Dockerfile .
 az containerapp revision restart -g "$RG" -n cortex-cp-api \
   --revision "$(az containerapp revision list -g "$RG" -n cortex-cp-api --query '[0].name' -o tsv)"
 ```

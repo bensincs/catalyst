@@ -3,7 +3,7 @@
 This guide creates the **one** Microsoft Entra ID (Azure AD) app registration that
 powers Cortex sign-in and API authorization. Follow it exactly; the values it
 produces map 1:1 to the environment variables in `web/.env.local` and
-`control-plane/api/.env`.
+`control-plane/.env`.
 
 The app registration plays two roles at once:
 
@@ -182,7 +182,7 @@ PLATFORM_TENANT_ID=<Directory (tenant) ID>
 # AUTH_SECRET / AUTH_URL / NEXT_PUBLIC_CORTEX_ENV / CORTEX_API_URL
 ```
 
-### `control-plane/api/.env`
+### `control-plane/.env`
 
 ```dotenv
 ENTRA_CLIENT_ID=<Application (client) ID>     # SAME value as web
@@ -201,7 +201,7 @@ Two long-running processes (Postgres must be running):
 
 ```bash
 # terminal 1 — control-plane API (:8080)
-cd control-plane/api && go run ./cmd/api
+cd control-plane && go run ./cmd/api
 
 # terminal 2 — console (:4200)
 cd web && npm run dev
@@ -225,9 +225,9 @@ Microsoft** → complete the Entra flow.
 | Multitenant + redirect URI | `web/auth.ts` (Auth.js `microsoft-entra-id` provider, `/common/v2.0`) |
 | Client id + secret | `web/.env.local` → Auth.js confidential client |
 | `api://<id>/access_as_user` scope requested | `web/auth.ts` `authorization.params.scope` (+ `offline_access` for refresh) |
-| Access token audience (`aud` == client id or `api://<id>`) | `control-plane/api/internal/auth/auth.go` |
-| Scope present (`scp` contains `access_as_user`) | `control-plane/api/internal/auth/auth.go` |
-| Signed by Entra (RS256 via JWKS) | `control-plane/api/internal/auth/entra.go` |
+| Access token audience (`aud` == client id or `api://<id>`) | `control-plane/internal/auth/auth.go` |
+| Scope present (`scp` contains `access_as_user`) | `control-plane/internal/auth/auth.go` |
+| Signed by Entra (RS256 via JWKS) | `control-plane/internal/auth/entra.go` |
 | Per-tenant issuer + `tid` → role | `auth.go` + `PLATFORM_TENANT_ID` |
 
 The console **never** puts a token in the browser: the access token lives in the
@@ -259,7 +259,7 @@ applications" pre-authorization (A4 / the CLI `preAuthorizedApplications`).
 | `AADSTS650051 / invalid scope` at sign-in | The Application ID URI or scope isn't set yet (A3), or the client id in the scope string is wrong. |
 | Everyone is a Tenant Admin | `PLATFORM_TENANT_ID` doesn't equal your sign-in tenant. Copy the **Directory (tenant) ID** from the app Overview into both env files. |
 | `AADSTS700016: application … not found in directory` | The service principal isn't in the tenant. Run `az ad sp create --id <APP_ID>` (or sign in once to auto-create it). |
-| Warnings `ENTRA_CLIENT_ID not set` / `PLATFORM_TENANT_ID not set` on API start | You haven't filled `control-plane/api/.env` yet. |
+| Warnings `ENTRA_CLIENT_ID not set` / `PLATFORM_TENANT_ID not set` on API start | You haven't filled `control-plane/.env` yet. |
 
 ---
 

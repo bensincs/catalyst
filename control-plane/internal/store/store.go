@@ -13,7 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/inception42/cortex/control-plane/api/internal/model"
+	"github.com/inception42/cortex/control-plane/internal/model"
 	"github.com/inception42/cortex/shared"
 )
 

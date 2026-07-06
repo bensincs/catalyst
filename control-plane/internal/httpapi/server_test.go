@@ -3,7 +3,7 @@ package httpapi
 import (
 	"testing"
 
-	"github.com/inception42/cortex/control-plane/api/internal/model"
+	"github.com/inception42/cortex/control-plane/internal/model"
 )
 
 func TestGateAgentHealth(t *testing.T) {
