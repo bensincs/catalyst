@@ -1,0 +1,38 @@
+.shell {
+  display: grid;
+  grid-template-columns: var(--rail-current) minmax(0, 1fr);
+  grid-template-rows: auto 1fr;
+  grid-template-areas:
+    "rail topbar"
+    "rail main";
+  min-height: 100dvh;
+  transition: grid-template-columns var(--dur-slow) var(--ease-out-expo);
+}
+
+.main {
+  grid-area: main;
+  min-width: 0;
+  outline: none;
+}
+
+.content {
+  max-width: var(--content-max);
+  margin-inline: auto;
+  padding: clamp(20px, 2.6vw, 32px) clamp(16px, 2.6vw, 32px) var(--space-3xl);
+}
+
+@media (max-width: 900px) {
+  .shell {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "topbar"
+      "main";
+    transition: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shell {
+    transition: none;
+  }
+}

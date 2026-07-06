@@ -1,0 +1,169 @@
+.driftMeta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+  background: var(--info-bg);
+  color: var(--info-ink);
+  font-size: var(--text-caption);
+  font-weight: 600;
+}
+.driftMeta svg {
+  animation: agents-spin 1.6s linear infinite;
+}
+@keyframes agents-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.panelEmpty {
+  display: grid;
+  place-items: center;
+  min-height: 400px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background-image: radial-gradient(
+    circle at 50% 38%,
+    color-mix(in srgb, var(--text) 3%, transparent),
+    transparent 60%
+  );
+}
+
+.list {
+  margin: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--border);
+  transition: background var(--dur-fast) var(--ease-out-quart);
+}
+.list li:last-child .row {
+  border-bottom: none;
+}
+.row:hover {
+  background: var(--surface-hover);
+}
+
+.icon {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+}
+
+.main {
+  flex: 1;
+  min-width: 0;
+}
+.nameRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.name {
+  font-size: var(--text-body);
+  font-weight: 560;
+  color: var(--text);
+}
+.beta {
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--info-bg);
+  color: var(--info-ink);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.meta {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 2px;
+  font-size: var(--text-caption);
+  color: var(--text-muted);
+}
+.sep {
+  color: var(--border-strong);
+}
+/* converging: actual → desired version */
+.drift {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px 1px 5px;
+  border-radius: var(--radius-full);
+  background: var(--info-bg);
+  color: var(--info-ink);
+  font-weight: 600;
+}
+.drift svg {
+  animation: agents-spin 1.6s linear infinite;
+}
+
+.publish {
+  display: flex;
+  gap: 5px;
+  flex: none;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: var(--radius-full);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  font-size: 11px;
+  font-weight: 540;
+  color: var(--text-secondary);
+}
+
+.status {
+  flex: none;
+  width: 104px;
+}
+
+.chevron {
+  flex: none;
+  color: var(--text-disabled);
+  transition:
+    transform var(--dur-fast) var(--ease-out-quart),
+    color var(--dur-fast) var(--ease-out-quart);
+}
+.row:hover .chevron {
+  color: var(--text-muted);
+  transform: translateX(2px);
+}
+
+@media (max-width: 680px) {
+  .publish,
+  .status {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .drift svg,
+  .driftMeta svg {
+    animation: none;
+  }
+  .row:hover .chevron {
+    transform: none;
+  }
+}

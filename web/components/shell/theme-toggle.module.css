@@ -1,0 +1,29 @@
+.toggle {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-md);
+  color: var(--text-muted);
+  transition: background-color var(--dur-fast) var(--ease-out-quart),
+    color var(--dur-fast) var(--ease-out-quart);
+}
+.toggle:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.iconWrap {
+  display: grid;
+  place-items: center;
+  transition: transform var(--dur-slow) var(--ease-out-expo);
+}
+.iconWrap[data-dark] {
+  transform: rotate(180deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .iconWrap {
+    transition: none;
+  }
+}

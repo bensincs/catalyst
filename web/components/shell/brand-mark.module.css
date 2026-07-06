@@ -1,0 +1,47 @@
+.mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.glyph {
+  flex: none;
+}
+
+.frame {
+  stroke: var(--border-strong);
+  fill: var(--surface);
+}
+
+.node {
+  fill: var(--text-disabled);
+}
+
+.spokes {
+  stroke: var(--border-strong);
+}
+
+.core {
+  fill: var(--accent);
+  stroke: var(--on-accent);
+  stroke-width: 0.5;
+}
+
+.wordmark {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.05;
+  font-size: 15px;
+  font-weight: 620;
+  letter-spacing: -0.02em;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.by {
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: var(--text-muted);
+}

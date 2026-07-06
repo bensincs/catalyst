@@ -1,0 +1,402 @@
+/* ── Install / identity panel ── */
+.backLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: var(--space-base);
+  font-size: var(--text-body-sm);
+  font-weight: 500;
+  color: var(--text-muted);
+  transition: color var(--dur-fast) var(--ease-out-quart);
+}
+.backLink:hover {
+  color: var(--text);
+}
+.backSep {
+  color: var(--border-strong);
+}
+.backNote {
+  color: var(--text-muted);
+}
+
+.agentEmpty {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.install {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 20px 24px;
+  margin-bottom: var(--space-base);
+}
+
+.installHead {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.shield {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  flex: none;
+  border-radius: var(--radius-lg);
+  background: var(--accent-bg);
+  color: var(--accent-ink);
+}
+
+.installTitle {
+  flex: 1;
+  min-width: 0;
+}
+
+.installTitleRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.installName {
+  font-size: var(--text-h2);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+.sovereign {
+  padding: 2px 9px;
+  border-radius: var(--radius-full);
+  background: var(--accent-bg);
+  color: var(--accent-ink);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.installSub {
+  margin-top: 5px;
+  font-size: var(--text-body-sm);
+  color: var(--text-muted);
+  line-height: 1.55;
+  max-width: 62ch;
+}
+
+.heartbeat {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  padding: 7px 12px;
+  border-radius: var(--radius-md);
+  background: var(--neutral-bg);
+}
+.heartbeat[data-installed] {
+  background: var(--success-bg);
+}
+.heartbeatText {
+  display: flex;
+  flex-direction: column;
+  font-size: var(--text-caption);
+  font-weight: 600;
+  color: var(--text-muted);
+  line-height: 1.3;
+}
+.heartbeat[data-installed] .heartbeatText {
+  color: var(--success-ink);
+}
+.heartbeatTime {
+  font-weight: 500;
+  color: inherit;
+  opacity: 0.8;
+  font-variant-numeric: tabular-nums;
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px 28px;
+  margin: 18px 0 0;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+}
+
+.fact {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.factLabel {
+  font-size: var(--text-caption);
+  color: var(--text-muted);
+}
+.factValue {
+  font-size: var(--text-body-sm);
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.factValue.mono {
+  font-size: 12px;
+}
+
+.installFoot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-base);
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.installFootText {
+  font-size: var(--text-caption);
+  color: var(--text-muted);
+}
+.installLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--text-body-sm);
+  font-weight: 550;
+  color: var(--text-secondary);
+  transition: color var(--dur-fast) var(--ease-out-quart);
+}
+.installLink:hover {
+  color: var(--text);
+}
+
+@media (max-width: 760px) {
+  .facts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .installHead {
+    flex-wrap: wrap;
+  }
+  .heartbeat {
+    order: 3;
+    width: 100%;
+  }
+}
+@media (max-width: 460px) {
+  .facts {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── Usage snapshot ── */
+.snapshot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: clamp(20px, 5vw, 52px);
+  padding: 16px 24px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  margin-bottom: var(--space-xl);
+}
+.snap {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.snapLabel {
+  font-size: var(--text-caption);
+  color: var(--text-muted);
+}
+.snapValue {
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: -0.018em;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.snap[data-wide] .snapValue {
+  font-size: var(--text-body-lg);
+  letter-spacing: 0;
+}
+
+/* ── Enabled agents ── */
+.sectionHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-base);
+  margin-bottom: 10px;
+}
+.sectionTitle {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: var(--text-h2);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+.sectionCount {
+  display: inline-grid;
+  place-items: center;
+  min-width: 22px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: var(--radius-full);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  font-size: var(--text-caption);
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.sectionLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--text-body-sm);
+  font-weight: 550;
+  color: var(--text-secondary);
+  transition: color var(--dur-fast) var(--ease-out-quart);
+}
+.sectionLink:hover {
+  color: var(--text);
+}
+
+.agentList {
+  margin: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.agent {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.agentList .agent:last-child {
+  border-bottom: none;
+}
+
+.agentMain {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.agentIcon {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+}
+.agentInfo {
+  min-width: 0;
+}
+.agentNameRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.agentName {
+  font-size: var(--text-body);
+  font-weight: 560;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.betaTag {
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--info-bg);
+  color: var(--info-ink);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.agentMeta {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 2px;
+  font-size: var(--text-caption);
+  color: var(--text-muted);
+}
+.metaSep {
+  color: var(--border-strong);
+}
+.agentNote {
+  color: var(--warning-ink);
+}
+
+.publish {
+  display: flex;
+  gap: 5px;
+  flex: none;
+}
+.publishChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: var(--radius-full);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  font-size: 11px;
+  font-weight: 540;
+  color: var(--text-secondary);
+}
+
+.agentCalls {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  flex: none;
+  width: 92px;
+}
+.agentCalls span:first-child {
+  font-size: var(--text-body-sm);
+  font-weight: 560;
+  color: var(--text-secondary);
+}
+.agentCallsLabel {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.agentStatus {
+  flex: none;
+  width: 104px;
+}
+
+.agentConfig {
+  flex: none;
+}
+
+@media (max-width: 900px) {
+  .agentCalls {
+    display: none;
+  }
+}
+@media (max-width: 680px) {
+  .publish {
+    display: none;
+  }
+  .agentStatus {
+    width: auto;
+  }
+}

@@ -1,0 +1,349 @@
+/* ============================================================================
+   Cortex Console — design tokens & base
+   Tokens mirror DESIGN.md 1:1. Light is the default theme; [data-theme="dark"]
+   swaps the semantic color set. Component logic never changes between themes.
+   ============================================================================ */
+
+:root {
+  /* ---- Fonts (--font-sans / --font-mono provided by next/font on <html>) ---- */
+  --font-display: var(--font-sans);
+
+  /* ---- Semantic color roles — LIGHT (default) ---- */
+  --canvas: #fbf8ff;
+  --surface: #ffffff;
+  --surface-sunken: #f3f1f7;
+  --surface-hover: #f4f2fa;
+  --surface-raised: #ffffff;
+
+  --text: #1e1f1e;
+  --text-secondary: #3d3f43;
+  --text-muted: #565961;
+  --text-disabled: #9a9da3;
+
+  --border: #e6e3ef;
+  --border-strong: #c2c8d6;
+
+  --accent: #91ff01;
+  --accent-hover: #84e800;
+  --accent-ink: #356b00;
+  --accent-bg: #edfbd2;
+  --on-accent: #1e1f1e;
+  --focus: #1e1f1e;
+  --focus-glow: rgb(145 255 1 / 0.35);
+
+  /* status */
+  --success: #91ff01;
+  --success-ink: #356b00;
+  --success-bg: #edfbd2;
+  --info: #ae74ff;
+  --info-ink: #7c3aed;
+  --info-bg: #f2ebff;
+  --warning: #f5a623;
+  --warning-ink: #9a5b00;
+  --warning-bg: #fdf3e0;
+  --danger: #f90019;
+  --danger-strong: #e60017;
+  --danger-ink: #cc0016;
+  --danger-bg: #ffeef0;
+  --neutral: #6b7280;
+  --neutral-ink: #565961;
+  --neutral-bg: #eef0f4;
+
+  --overlay: rgb(30 31 30 / 0.32);
+  --track: #dedbe8;
+
+  /* ---- Elevation ---- */
+  --shadow-sm: 0 1px 2px rgb(30 31 30 / 0.06);
+  --shadow-md: 0 4px 14px -2px rgb(30 31 30 / 0.10), 0 2px 6px -2px rgb(30 31 30 / 0.08);
+  --shadow-lg: 0 12px 32px -6px rgb(30 31 30 / 0.16), 0 4px 10px -4px rgb(30 31 30 / 0.10);
+
+  /* ---- Spacing (4px base / 8px rhythm) ---- */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-base: 16px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+  --space-2xl: 48px;
+  --space-3xl: 64px;
+
+  /* ---- Structure ---- */
+  --rail-w: 248px;
+  --rail-collapsed-w: 68px;
+  --rail-current: var(--rail-w);
+  --topbar-h: 56px;
+  --content-max: 1360px;
+
+  /* ---- Radii ---- */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-full: 9999px;
+
+  /* ---- Type scale (fixed rem, 1.125–1.2 ratio) ---- */
+  --text-display: 2rem;      /* 32 */
+  --text-h1: 1.5rem;         /* 24 */
+  --text-h2: 1.125rem;       /* 18 */
+  --text-h3: 0.9375rem;      /* 15 */
+  --text-body-lg: 1rem;      /* 16 */
+  --text-body: 0.875rem;     /* 14 */
+  --text-body-sm: 0.8125rem; /* 13 */
+  --text-label: 0.8125rem;   /* 13 */
+  --text-label-sm: 0.75rem;  /* 12 */
+  --text-caption: 0.75rem;   /* 12 */
+  --text-overline: 0.6875rem;/* 11 */
+
+  /* ---- Z-index scale (semantic) ---- */
+  --z-rail: 10;
+  --z-sticky: 20;
+  --z-dropdown: 40;
+  --z-backdrop: 50;
+  --z-modal: 60;
+  --z-toast: 70;
+  --z-tooltip: 80;
+
+  /* ---- Motion ---- */
+  --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-fast: 120ms;
+  --dur: 180ms;
+  --dur-slow: 240ms;
+
+  color-scheme: light;
+}
+
+[data-rail="collapsed"] {
+  --rail-current: var(--rail-collapsed-w);
+}
+
+[data-theme="dark"] {
+  --canvas: #151615;
+  --surface: #1e1f1e;
+  --surface-sunken: #121312;
+  --surface-hover: #282a29;
+  --surface-raised: #26282a;
+
+  --text: #fbf8ff;
+  --text-secondary: #c8cad0;
+  --text-muted: #989ca4;
+  --text-disabled: #63666c;
+
+  --border: #313235;
+  --border-strong: #484a4e;
+
+  --accent: #91ff01;
+  --accent-hover: #a6ff33;
+  --accent-ink: #b6ff5c;
+  --accent-bg: #243100;
+  --on-accent: #12130f;
+  --focus: #91ff01;
+  --focus-glow: rgb(145 255 1 / 0.28);
+
+  --success: #91ff01;
+  --success-ink: #b6ff5c;
+  --success-bg: #243100;
+  --info: #c29bff;
+  --info-ink: #c29bff;
+  --info-bg: #2a2140;
+  --warning: #f5b642;
+  --warning-ink: #f5b642;
+  --warning-bg: #3a2c10;
+  --danger: #ff5a6a;
+  --danger-strong: #e60017;
+  --danger-ink: #ff8a95;
+  --danger-bg: #3a1418;
+  --neutral: #989ca4;
+  --neutral-ink: #b6b9bf;
+  --neutral-bg: #26282a;
+
+  --overlay: rgb(0 0 0 / 0.55);
+  --track: #3a3c3f;
+
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow-md: 0 6px 18px -4px rgb(0 0 0 / 0.5);
+  --shadow-lg: 0 16px 40px -8px rgb(0 0 0 / 0.6);
+
+  color-scheme: dark;
+}
+
+/* ============================================================================
+   Reset
+   ============================================================================ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+* {
+  margin: 0;
+}
+
+html {
+  font-size: 100%;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  font-family: var(--font-sans), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: var(--text-body);
+  line-height: 1.55;
+  font-weight: 400;
+  color: var(--text);
+  background: var(--canvas);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-kerning: normal;
+  font-feature-settings: "cv11", "ss01";
+  text-rendering: optimizeLegibility;
+  transition: background-color var(--dur) var(--ease-out-quart),
+    color var(--dur) var(--ease-out-quart);
+}
+
+img,
+picture,
+svg,
+video {
+  display: block;
+  max-width: 100%;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+ul[role="list"],
+ol[role="list"] {
+  list-style: none;
+  padding: 0;
+}
+
+:where(h1, h2, h3, h4) {
+  line-height: 1.2;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+}
+
+p {
+  text-wrap: pretty;
+}
+
+/* ============================================================================
+   Focus — keyboard only, high contrast, never removed without replacement
+   ============================================================================ */
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+::selection {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+/* Refined, unobtrusive scrollbars — not a custom control, just tamed */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--track) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--track);
+  border-radius: var(--radius-full);
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--border-strong);
+  background-clip: content-box;
+}
+
+/* ============================================================================
+   Utilities
+   ============================================================================ */
+
+.mono {
+  font-family: var(--font-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-feature-settings: "zero" 1, "ss01" 1;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.skip-link {
+  position: fixed;
+  top: var(--space-sm);
+  left: var(--space-sm);
+  z-index: var(--z-tooltip);
+  padding: 10px 16px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  font-weight: 550;
+  transform: translateY(-160%);
+  transition: transform var(--dur) var(--ease-out-expo);
+}
+.skip-link:focus {
+  transform: translateY(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

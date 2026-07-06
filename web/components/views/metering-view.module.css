@@ -1,0 +1,182 @@
+/* ── Summary stats ── */
+.stats {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: clamp(20px, 5vw, 52px);
+  padding: 16px 24px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  margin-bottom: var(--space-xl);
+}
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.statLabel {
+  font-size: var(--text-caption);
+  color: var(--text-muted);
+}
+.statValue {
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: -0.018em;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.statSub {
+  font-size: var(--text-caption);
+  color: var(--text-muted);
+}
+
+.sectionTitle {
+  font-size: var(--text-h3);
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 10px;
+}
+
+/* ── Tenant usage table ── */
+.table {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+.row {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.2fr) minmax(120px, 1.5fr) 128px;
+  align-items: center;
+  gap: 18px;
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.row:last-child {
+  border-bottom: none;
+}
+.rowHead {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+.rowName {
+  font-size: var(--text-body);
+  font-weight: 550;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.plan {
+  flex: none;
+  padding: 1px 7px;
+  border-radius: var(--radius-full);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: capitalize;
+  color: var(--text-secondary);
+}
+.plan[data-plan="sovereign"] {
+  background: var(--accent-bg);
+  border-color: transparent;
+  color: var(--accent-ink);
+}
+.rowRegion {
+  font-size: var(--text-caption);
+  color: var(--text-muted);
+  white-space: nowrap;
+  flex: none;
+}
+
+.bar {
+  position: relative;
+  height: 8px;
+  border-radius: var(--radius-full);
+  background: var(--surface-sunken);
+  overflow: hidden;
+}
+.barFill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  height: 100%;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  transition: width var(--dur-slow) var(--ease-out-expo);
+}
+
+.rowFigs {
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.rowCalls {
+  font-size: var(--text-body-sm);
+  font-weight: 560;
+  color: var(--text-secondary);
+}
+.rowShare {
+  font-size: var(--text-caption);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  width: 38px;
+  text-align: right;
+}
+
+/* ── Cost showback ── */
+.cost {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-lg);
+  margin-top: var(--space-xl);
+  padding: 18px 24px;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+.costText {
+  min-width: 0;
+}
+.costTitle {
+  font-size: var(--text-body);
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 3px;
+}
+.costBody {
+  font-size: var(--text-body-sm);
+  color: var(--text-muted);
+  line-height: 1.55;
+  max-width: 74ch;
+}
+
+.emptyWrap {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  margin-bottom: var(--space-xl);
+}
+
+@media (max-width: 720px) {
+  .row {
+    grid-template-columns: 1fr 96px;
+    gap: 10px 14px;
+  }
+  .bar {
+    grid-column: 1 / -1;
+    order: 3;
+  }
+  .rowRegion {
+    display: none;
+  }
+  .cost {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}

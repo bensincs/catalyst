@@ -1,0 +1,173 @@
+.page {
+  position: relative;
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: var(--space-lg);
+  background: var(--canvas);
+  overflow: hidden;
+}
+
+/* Engineered grid — the reconciler surface, faded into the canvas */
+.grid {
+  position: absolute;
+  inset: 0;
+  background-image: linear-gradient(var(--border) 1px, transparent 1px),
+    linear-gradient(90deg, var(--border) 1px, transparent 1px);
+  background-size: 44px 44px;
+  mask-image: radial-gradient(ellipse 70% 60% at 50% 38%, #000 8%, transparent 68%);
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+/* Restrained lime energy — the "live" signature, not decoration */
+.glow {
+  position: absolute;
+  top: -14%;
+  left: 50%;
+  width: min(680px, 120vw);
+  height: 460px;
+  transform: translateX(-50%);
+  background: radial-gradient(ellipse at center, var(--focus-glow) 0%, transparent 62%);
+  opacity: 0.42;
+  pointer-events: none;
+}
+
+.card {
+  position: relative;
+  width: min(430px, 100%);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-lg);
+  padding: clamp(30px, 5vw, 42px);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  margin-bottom: 30px;
+}
+.wordmark {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.05;
+  font-size: 17px;
+  font-weight: 620;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+.by {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+/* Headline — the one brand moment the auth screen earns */
+.title {
+  font-size: clamp(26px, 4.6vw, 30px);
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  line-height: 1.12;
+  color: var(--text);
+  margin-bottom: 12px;
+}
+
+.lede {
+  font-size: var(--text-body-sm);
+  line-height: 1.6;
+  color: var(--text-muted);
+  margin-bottom: 24px;
+  max-width: 46ch;
+}
+
+/* Error — full-bordered inline alert, never a side stripe */
+.alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin-bottom: 18px;
+  padding: 11px 13px;
+  border: 1px solid var(--danger);
+  background: var(--danger-bg);
+  border-radius: var(--radius-md);
+  color: var(--danger-ink);
+  font-size: var(--text-body-sm);
+  line-height: 1.5;
+}
+.alert svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+.button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  height: 44px;
+  border-radius: var(--radius-md);
+  background: var(--text);
+  color: var(--canvas);
+  font-size: var(--text-body);
+  font-weight: 560;
+  transition:
+    opacity var(--dur-fast) var(--ease-out-quart),
+    transform var(--dur-fast) var(--ease-out-quart);
+}
+.button:hover {
+  opacity: 0.92;
+}
+.button:active {
+  transform: translateY(0.5px);
+}
+.button[data-pending] {
+  opacity: 0.85;
+  cursor: progress;
+}
+.button:disabled {
+  cursor: progress;
+}
+
+.spinner {
+  animation: signin-spin 0.7s linear infinite;
+}
+@keyframes signin-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.foot {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+  font-size: var(--text-caption);
+  line-height: 1.55;
+  color: var(--text-muted);
+}
+/* Small "control plane operational" signal — the signature, used with meaning */
+.dot {
+  flex: none;
+  position: relative;
+  top: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--success);
+  box-shadow: 0 0 0 3px var(--success-bg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .button:active {
+    transform: none;
+  }
+  .spinner {
+    animation: none;
+  }
+}

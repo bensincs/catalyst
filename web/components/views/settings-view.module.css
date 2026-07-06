@@ -1,0 +1,225 @@
+.page {
+  max-width: 860px;
+}
+
+/* ── Panel ── */
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 20px 24px;
+  margin-bottom: var(--space-base);
+}
+.panelHead {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 16px;
+}
+.panelIcon {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+.panelTitle {
+  font-size: var(--text-h3);
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* ── Facts ── */
+.facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px 28px;
+  margin: 0;
+}
+.fact {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.factLabel {
+  font-size: var(--text-caption);
+  color: var(--text-muted);
+}
+.factValue {
+  font-size: var(--text-body-sm);
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.factValue.mono {
+  font-size: 12px;
+  color: var(--text);
+}
+
+.note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  font-size: var(--text-body-sm);
+  color: var(--text-muted);
+  line-height: 1.5;
+  max-width: 74ch;
+}
+.note svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--accent-ink);
+}
+
+/* ── Setting row (label + control) ── */
+.settingRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-lg);
+}
+.settingText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.settingLabel {
+  font-size: var(--text-body);
+  font-weight: 550;
+  color: var(--text);
+}
+.settingHelp {
+  font-size: var(--text-body-sm);
+  color: var(--text-muted);
+}
+
+/* ── Segmented control (theme) ── */
+.segmented {
+  display: inline-flex;
+  flex: none;
+  padding: 3px;
+  gap: 2px;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.segment {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-body-sm);
+  font-weight: 550;
+  color: var(--text-muted);
+  transition:
+    background var(--dur-fast) var(--ease-out-quart),
+    color var(--dur-fast) var(--ease-out-quart);
+}
+.segment:hover {
+  color: var(--text);
+}
+.segment[data-active] {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
+}
+
+/* ── Governance list ── */
+.govList {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+}
+.govItem {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border);
+}
+.govItem:first-child {
+  padding-top: 0;
+}
+.govItem:last-child {
+  padding-bottom: 0;
+  border-bottom: none;
+}
+.govIcon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  flex: none;
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+.govText {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.govTitle {
+  font-size: var(--text-body);
+  font-weight: 550;
+  color: var(--text);
+}
+.govBody {
+  font-size: var(--text-body-sm);
+  color: var(--text-muted);
+  line-height: 1.5;
+  max-width: 68ch;
+}
+.govLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  padding: 7px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  font-size: var(--text-body-sm);
+  font-weight: 550;
+  color: var(--text-secondary);
+  transition:
+    background var(--dur-fast) var(--ease-out-quart),
+    color var(--dur-fast) var(--ease-out-quart),
+    border-color var(--dur-fast) var(--ease-out-quart);
+}
+.govLink:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+@media (max-width: 640px) {
+  .facts {
+    grid-template-columns: 1fr;
+  }
+  .settingRow {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-md);
+  }
+  .govItem {
+    flex-wrap: wrap;
+  }
+  .govLink {
+    margin-left: 48px;
+  }
+}

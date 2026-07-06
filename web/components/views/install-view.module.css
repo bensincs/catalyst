@@ -1,0 +1,274 @@
+/* ── Deployment lifecycle stepper ── */
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 20px 24px;
+  margin-bottom: var(--space-base);
+}
+
+.steps {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-base);
+  margin: 0;
+}
+
+/* Mark sits ABOVE its label, so the horizontal connector runs in the empty band
+   between marks and never strikes through the text. */
+.step {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.step:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  top: 12px;
+  left: 34px;
+  right: calc(-1 * var(--space-base));
+  height: 2px;
+  background: var(--border);
+  border-radius: var(--radius-full);
+}
+.step[data-state="done"]:not(:last-child)::after {
+  background: var(--accent);
+}
+
+.stepMark {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  border-radius: var(--radius-full);
+  background: var(--surface);
+  border: 1.5px solid var(--border-strong);
+  color: var(--text-muted);
+}
+.step[data-state="done"] .stepMark {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+.step[data-state="current"] .stepMark {
+  border-color: var(--text);
+  color: var(--text);
+}
+.step[data-state="current"][data-tone="warning"] .stepMark {
+  border-color: var(--warning);
+  color: var(--warning-ink);
+  background: var(--warning-bg);
+}
+
+.stepText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.stepTitle {
+  font-size: var(--text-body-sm);
+  font-weight: 560;
+  color: var(--text);
+}
+.step[data-state="pending"] .stepTitle {
+  color: var(--text-muted);
+}
+.stepNote {
+  font-size: var(--text-caption);
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+/* ── Reconciler status strip ── */
+.reconciler {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 24px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  margin-bottom: var(--space-base);
+}
+.reconIcon {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  flex: none;
+  border-radius: var(--radius-lg);
+  background: var(--neutral-bg);
+  color: var(--text-muted);
+}
+.reconIcon[data-tone="success"] {
+  background: var(--success-bg);
+  color: var(--success-ink);
+}
+.reconIcon[data-tone="warning"] {
+  background: var(--warning-bg);
+  color: var(--warning-ink);
+}
+.reconIcon[data-tone="info"] {
+  background: var(--info-bg);
+  color: var(--info-ink);
+}
+.reconBody {
+  flex: 1;
+  min-width: 0;
+}
+.reconTop {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.reconLabel {
+  font-size: var(--text-body);
+  font-weight: 600;
+  color: var(--text);
+}
+.reconTime {
+  font-size: var(--text-caption);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.reconSub {
+  margin-top: 3px;
+  font-size: var(--text-body-sm);
+  color: var(--text-muted);
+  line-height: 1.5;
+  max-width: 68ch;
+}
+.reconVersion {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  flex: none;
+  padding-left: var(--space-base);
+  border-left: 1px solid var(--border);
+}
+.reconVersionLabel {
+  font-size: var(--text-caption);
+  color: var(--text-muted);
+}
+.reconVersionValue {
+  font-size: var(--text-body-sm);
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+/* ── Install identity manifest ── */
+.manifestWrap {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 20px 24px;
+}
+.sectionTitle {
+  font-size: var(--text-h3);
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 16px;
+}
+.manifest {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px 28px;
+  margin: 0;
+}
+.fact {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+.factLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-caption);
+  color: var(--text-muted);
+}
+.factValue {
+  font-size: var(--text-body-sm);
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.factValue.mono {
+  font-size: 12px;
+  color: var(--text);
+}
+
+.sovereign {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  font-size: var(--text-body-sm);
+  color: var(--text-muted);
+  line-height: 1.55;
+  max-width: 78ch;
+}
+.sovereign svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--accent-ink);
+}
+
+/* ── Responsive ── */
+@media (min-width: 561px) and (max-width: 900px) {
+  .steps {
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-lg) var(--space-base);
+  }
+  /* step 2 ends a row — no connector across the wrap */
+  .step:nth-child(2)::after {
+    display: none;
+  }
+}
+@media (max-width: 900px) {
+  .manifest {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 560px) {
+  /* stack to a vertical stepper: connector runs down the mark gutter */
+  .steps {
+    grid-template-columns: 1fr;
+  }
+  .step {
+    flex-direction: row;
+    gap: 13px;
+    padding-bottom: 18px;
+  }
+  .step:last-child {
+    padding-bottom: 0;
+  }
+  .step:not(:last-child)::after {
+    top: 30px;
+    left: 12px;
+    right: auto;
+    bottom: 0;
+    width: 2px;
+    height: auto;
+  }
+  .stepText {
+    padding-top: 3px;
+  }
+  .reconVersion {
+    display: none;
+  }
+  .manifest {
+    grid-template-columns: 1fr;
+  }
+}

@@ -1,0 +1,133 @@
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.label {
+  font-size: var(--text-label);
+  font-weight: 550;
+  color: var(--text);
+}
+
+.hint {
+  font-size: var(--text-caption);
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+
+.input {
+  width: 100%;
+  height: 36px;
+  padding: 0 11px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--text-body);
+  font-family: inherit;
+  transition: border-color var(--dur-fast) var(--ease-out-quart),
+    box-shadow var(--dur-fast) var(--ease-out-quart);
+}
+.input::placeholder {
+  color: var(--text-muted);
+}
+.input:hover {
+  border-color: var(--text-disabled);
+}
+.input:focus-visible {
+  outline: none;
+  border-color: var(--focus);
+  box-shadow: 0 0 0 3px var(--focus-glow);
+}
+
+.textarea {
+  height: auto;
+  min-height: 76px;
+  padding: 9px 11px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.selectWrap {
+  position: relative;
+}
+.select {
+  appearance: none;
+  padding-right: 32px;
+  cursor: pointer;
+}
+.selectIcon {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+/* Checkbox */
+.checkRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 10px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease-out-quart);
+}
+.checkRow:hover {
+  background: var(--surface-hover);
+}
+.checkRow[data-disabled] {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.checkInput {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+}
+
+.checkBox {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  flex: none;
+  border-radius: var(--radius-sm);
+  border: 1.5px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--on-accent);
+  transition: background-color var(--dur-fast) var(--ease-out-quart),
+    border-color var(--dur-fast) var(--ease-out-quart);
+}
+.checkBox[data-checked] {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.checkInput:focus-visible + .checkText,
+.checkRow:has(.checkInput:focus-visible) .checkBox {
+  box-shadow: 0 0 0 3px var(--focus-glow);
+  border-radius: var(--radius-sm);
+}
+
+.checkText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.checkLabel {
+  font-size: var(--text-body-sm);
+  font-weight: 500;
+  color: var(--text);
+}
+.checkDesc {
+  font-size: var(--text-caption);
+  color: var(--text-muted);
+  line-height: 1.45;
+}

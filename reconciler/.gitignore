@@ -1,0 +1,9 @@
+# env & secrets
+.env
+.env.*
+!.env.example
+
+# build
+/bin/
+api
+*.test

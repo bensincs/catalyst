@@ -1,0 +1,234 @@
+.rail {
+  grid-area: rail;
+  position: sticky;
+  top: 0;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-sunken);
+  border-right: 1px solid var(--border);
+  overflow: hidden;
+}
+
+@media (max-width: 900px) {
+  .rail {
+    display: none;
+  }
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  height: var(--topbar-h);
+  padding-inline: 18px;
+  flex: none;
+}
+
+[data-rail="collapsed"] .rail .head {
+  padding-inline: 0;
+  justify-content: center;
+}
+
+.brandLink {
+  display: inline-flex;
+  align-items: center;
+  border-radius: var(--radius-md);
+  outline-offset: 3px;
+}
+
+.nav {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-sm) 12px var(--space-md);
+}
+
+[data-rail="collapsed"] .rail .nav {
+  padding-inline: 10px;
+}
+
+.mainNav {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-base);
+}
+
+.systemNav {
+  margin-top: var(--space-md);
+  padding-top: var(--space-sm);
+  border-top: 1px solid var(--border);
+}
+
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.groupLabel {
+  padding: 6px 10px;
+  font-size: var(--text-overline);
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.link {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  height: 36px;
+  padding: 0 10px;
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  font-size: var(--text-body);
+  font-weight: 500;
+  transition: background-color var(--dur-fast) var(--ease-out-quart),
+    color var(--dur-fast) var(--ease-out-quart);
+}
+
+.link:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.link[data-active] {
+  background: var(--surface-hover);
+  color: var(--text);
+  font-weight: 560;
+}
+
+/* Lime "you are here" indicator */
+.link[data-active]::before {
+  content: "";
+  position: absolute;
+  left: -12px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 18px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+}
+
+[data-rail="collapsed"] .rail .link[data-active]::before {
+  left: -10px;
+}
+
+.linkIcon {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  flex: none;
+  color: var(--text-muted);
+  transition: color var(--dur-fast) var(--ease-out-quart);
+}
+.link:hover .linkIcon,
+.link[data-active] .linkIcon {
+  color: var(--text);
+}
+.link[data-active] .linkIcon {
+  color: var(--accent-ink);
+}
+
+.linkLabel {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+[data-rail="collapsed"] .rail .link {
+  justify-content: center;
+  padding: 0;
+  width: 40px;
+  height: 40px;
+  margin-inline: auto;
+}
+[data-rail="collapsed"] .rail .linkLabel {
+  display: none;
+}
+[data-rail="collapsed"] .rail .groupLabel {
+  display: none;
+}
+
+/* Tooltip for collapsed rail */
+.tooltip {
+  position: absolute;
+  left: calc(100% + 12px);
+  top: 50%;
+  transform: translateY(-50%) translateX(-4px);
+  padding: 5px 9px;
+  background: var(--text);
+  color: var(--canvas);
+  font-size: var(--text-label-sm);
+  font-weight: 550;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  z-index: var(--z-tooltip);
+  box-shadow: var(--shadow-md);
+  transition: opacity var(--dur-fast) var(--ease-out-quart),
+    transform var(--dur-fast) var(--ease-out-quart);
+}
+.link:hover .tooltip,
+.link:focus-visible .tooltip {
+  opacity: 1;
+  transform: translateY(-50%) translateX(0);
+}
+
+.foot {
+  flex: none;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+}
+[data-rail="collapsed"] .rail .foot {
+  padding-inline: 10px;
+}
+
+.collapseBtn {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  height: 34px;
+  padding: 0 10px;
+  border-radius: var(--radius-md);
+  color: var(--text-muted);
+  font-size: var(--text-body-sm);
+  font-weight: 500;
+  transition: background-color var(--dur-fast) var(--ease-out-quart),
+    color var(--dur-fast) var(--ease-out-quart);
+}
+.collapseBtn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+[data-rail="collapsed"] .rail .collapseBtn {
+  justify-content: center;
+  padding: 0;
+  width: 40px;
+  height: 40px;
+  margin-inline: auto;
+}
+[data-rail="collapsed"] .rail .collapseLabel {
+  display: none;
+}
+
+.collapseIcon {
+  display: grid;
+  place-items: center;
+  flex: none;
+}

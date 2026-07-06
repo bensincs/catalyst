@@ -1,0 +1,13 @@
+.panel {
+  display: grid;
+  place-items: center;
+  min-height: 420px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background-image: radial-gradient(
+    circle at 50% 38%,
+    color-mix(in srgb, var(--text) 3%, transparent),
+    transparent 60%
+  );
+}

@@ -1,0 +1,75 @@
+.drawer {
+  margin: 0;
+  padding: 0;
+  height: 100dvh;
+  max-height: 100dvh;
+  width: min(300px, 84vw);
+  border: none;
+  background: transparent;
+  inset-block: 0;
+  inset-inline-start: 0;
+}
+
+.drawer::backdrop {
+  background: var(--overlay);
+  backdrop-filter: blur(2px);
+}
+
+.drawer[open] {
+  animation: drawer-in 260ms var(--ease-out-expo);
+}
+
+.sheet {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  background: var(--surface-sunken);
+  border-right: 1px solid var(--border);
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: var(--topbar-h);
+  padding: 0 12px 0 18px;
+  flex: none;
+  border-bottom: 1px solid var(--border);
+}
+
+.close {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+}
+.close:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.nav {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-sm) 12px var(--space-base);
+}
+
+@keyframes drawer-in {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .drawer[open] {
+    animation: none;
+  }
+}

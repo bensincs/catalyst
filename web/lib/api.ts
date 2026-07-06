@@ -1,0 +1,316 @@
+import "server-only";
+import { cache } from "react";
+import { cookies } from "next/headers";
+import { decode } from "next-auth/jwt";
+import type {
+  AgentDefinition,
+  AgentType,
+  CatalogAgent,
+  EnabledAgent,
+  FleetStats,
+  Plan,
+  EnrollmentStatus,
+  Health,
+  Lifecycle,
+  PublishTarget,
+  Role,
+  TenantContextInfo,
+  TenantRegistryRow,
+  TenantSummary,
+} from "@/lib/types";
+
+const API_URL = process.env.CORTEX_API_URL ?? "http://localhost:8080";
+
+/* ── Raw API shapes (mirror the Go control-plane) ─────────────────────────── */
+
+interface ApiTenant {
+  id: string;
+  name: string;
+  tenantId: string;
+  region: string;
+  plan: string;
+  enrollment: string;
+  lifecycle?: string;
+  agentCount: number;
+  reconcilingCount: number;
+  version: string;
+  lastHeartbeat: string | null;
+  monthlyCalls: number;
+  drift: number;
+  subscriptionId?: string;
+  reconcilerIdentity?: string;
+  foundryProject?: string;
+  reconcilerVersion?: string;
+  installedAt?: string;
+}
+interface ApiAgent {
+  id: string;
+  name: string;
+  type: string;
+  version: string;
+  desiredVersion: string;
+  drift: boolean;
+  channel: string;
+  model: string;
+  definition: AgentDefinition;
+  health: string;
+  publishTo: string[];
+  calls30d: number;
+  note?: string;
+}
+interface ApiMe {
+  oid: string;
+  tid: string;
+  name: string;
+  email: string;
+  role: Role;
+  tenant: ApiTenant | null;
+}
+interface ApiFleet {
+  stats: FleetStats;
+  tenants: ApiTenant[];
+}
+interface ApiTenantContext {
+  tenant: ApiTenant;
+  agents: ApiAgent[];
+}
+
+/* ── Auth: forward the API access token (server-side only) ────────────────── */
+
+// The access token (minted for this API) lives in the encrypted, httpOnly
+// session cookie. We read + decode it on the server and forward it as a Bearer
+// token; the Go API validates it against Entra's JWKS. Never sent to the browser.
+const SESSION_COOKIES = ["authjs.session-token", "__Secure-authjs.session-token"];
+
+async function getAccessToken(): Promise<string> {
+  const store = await cookies();
+  for (const base of SESSION_COOKIES) {
+    let raw = store.get(base)?.value;
+    if (!raw) {
+      // Cookie chunking: Auth.js splits large session cookies into `<name>.0`,
+      // `.1`, … — reassemble them before decoding.
+      const parts: string[] = [];
+      for (let i = 0; ; i++) {
+        const chunk = store.get(`${base}.${i}`)?.value;
+        if (!chunk) break;
+        parts.push(chunk);
+      }
+      if (parts.length) raw = parts.join("");
+    }
+    if (!raw) continue;
+    const decoded = await decode({
+      token: raw,
+      secret: process.env.AUTH_SECRET!,
+      salt: base,
+    });
+    if (decoded?.error) throw new ApiError(401, `token ${decoded.error}`);
+    const accessToken = decoded?.accessToken as string | undefined;
+    if (accessToken) return accessToken;
+  }
+  throw new ApiError(401, "no access token in session");
+}
+
+export class ApiError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+async function apiGet<T>(path: string): Promise<T> {
+  const token = await getAccessToken();
+  const res = await fetch(`${API_URL}${path}`, {
+    headers: { Authorization: `Bearer ${token}` },
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new ApiError(res.status, `GET ${path} → ${res.status} ${body}`);
+  }
+  return (await res.json()) as T;
+}
+
+/** POST/PATCH/DELETE with the API access token. Used by server actions. */
+export async function apiSend<T = unknown>(
+  method: "POST" | "PATCH" | "DELETE",
+  path: string,
+  body?: unknown,
+): Promise<T> {
+  const token = await getAccessToken();
+  const res = await fetch(`${API_URL}${path}`, {
+    method,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    const b = await res.text().catch(() => "");
+    throw new ApiError(res.status, `${method} ${path} → ${res.status} ${b}`);
+  }
+  const text = await res.text();
+  return (text ? JSON.parse(text) : {}) as T;
+}
+
+/* ── Mappers → console view models ────────────────────────────────────────── */
+
+const ms = (iso: string | null): number => (iso ? Date.parse(iso) : 0);
+
+function toSummary(t: ApiTenant): TenantSummary {
+  return {
+    id: t.id,
+    name: t.name,
+    tenantId: t.tenantId,
+    region: t.region,
+    plan: t.plan as Plan,
+    enrollment: t.enrollment as EnrollmentStatus,
+    agentCount: t.agentCount,
+    reconcilingCount: t.reconcilingCount,
+    version: t.version,
+    lastHeartbeatMs: ms(t.lastHeartbeat),
+    monthlyCalls: t.monthlyCalls,
+    drift: t.drift,
+    lifecycle: (t.lifecycle ?? "enrolling") as Lifecycle,
+  };
+}
+
+function toContext(t: ApiTenant): TenantContextInfo {
+  return {
+    id: t.id,
+    name: t.name,
+    tenantId: t.tenantId,
+    subscriptionId: t.subscriptionId ?? "",
+    region: t.region,
+    plan: t.plan as Plan,
+    enrollment: t.enrollment as EnrollmentStatus,
+    reconcilerIdentity: t.reconcilerIdentity ?? "",
+    foundryProject: t.foundryProject ?? "",
+    installedAt: t.installedAt ?? "",
+    reconcilerVersion: t.reconcilerVersion ?? "",
+    lastHeartbeatMs: ms(t.lastHeartbeat),
+    lifecycle: (t.lifecycle ?? "enrolling") as Lifecycle,
+  };
+}
+
+function toAgent(a: ApiAgent): EnabledAgent {
+  return {
+    id: a.id,
+    name: a.name,
+    type: (a.type as AgentType) || "prompt",
+    version: a.version,
+    desiredVersion: a.desiredVersion || a.version,
+    drift: Boolean(a.drift),
+    channel: a.channel as EnabledAgent["channel"],
+    model: a.model,
+    definition: a.definition ?? {},
+    health: a.health as Health,
+    publishTo: a.publishTo as PublishTarget[],
+    calls30d: a.calls30d,
+    note: a.note,
+  };
+}
+
+/* ── Public fetchers ──────────────────────────────────────────────────────── */
+
+export interface Me {
+  name: string;
+  email: string;
+  role: Role;
+  tid: string;
+  oid: string;
+  tenant: TenantSummary | null;
+}
+
+export const getMe = cache(async (): Promise<Me> => {
+  const m = await apiGet<ApiMe>("/api/me");
+  return {
+    name: m.name,
+    email: m.email,
+    role: m.role,
+    tid: m.tid,
+    oid: m.oid,
+    tenant: m.tenant ? toSummary(m.tenant) : null,
+  };
+});
+
+export const getFleet = cache(
+  async (): Promise<{ stats: FleetStats; tenants: TenantSummary[] }> => {
+    const f = await apiGet<ApiFleet>("/api/fleet");
+    return { stats: f.stats, tenants: (f.tenants ?? []).map(toSummary) };
+  },
+);
+
+export interface TenantContext {
+  tenant: TenantContextInfo;
+  summary: TenantSummary;
+  agents: EnabledAgent[];
+}
+
+const context = cache(async (path: string): Promise<TenantContext> => {
+  const c = await apiGet<ApiTenantContext>(path);
+  return {
+    tenant: toContext(c.tenant),
+    summary: toSummary(c.tenant),
+    agents: (c.agents ?? []).map(toAgent),
+  };
+});
+
+export const getMyContext = () => context("/api/tenant/context");
+export const getTenantContext = (slug: string) =>
+  context(`/api/tenants/${encodeURIComponent(slug)}/context`);
+
+/* ── Catalog + registry ───────────────────────────────────────────────────── */
+
+interface ApiCatalogAgent {
+  id: string;
+  name: string;
+  description: string;
+  type: string;
+  model: string;
+  latestVersion: string;
+  versions: { version: string; channel: string; notes?: string; rolloutPercent: number; definition: AgentDefinition; createdAt: string }[];
+  createdAt: string;
+  entitled: boolean;
+  enabled: boolean;
+}
+
+export const getCatalog = cache(async (): Promise<CatalogAgent[]> => {
+  const c = await apiGet<{ agents: ApiCatalogAgent[] }>("/api/catalog");
+  return (c.agents ?? []).map((a) => ({
+    ...a,
+    type: (a.type as AgentType) || "prompt",
+    versions: (a.versions ?? []).map((v) => ({
+      ...v,
+      channel: v.channel === "beta" ? "beta" : "stable",
+      definition: v.definition ?? {},
+    })),
+  }));
+});
+
+interface ApiRegistryRow extends ApiTenant {
+  entitledAgents: string[];
+  entitledCount: number;
+}
+
+export const getTenantsRegistry = cache(async (): Promise<TenantRegistryRow[]> => {
+  const c = await apiGet<{ tenants: ApiRegistryRow[] }>("/api/tenants");
+  return (c.tenants ?? []).map((t) => ({
+    id: t.id,
+    name: t.name,
+    tenantId: t.tenantId,
+    region: t.region,
+    plan: t.plan as Plan,
+    enrollment: t.enrollment as EnrollmentStatus,
+    agentCount: t.agentCount,
+    version: t.version,
+    lastHeartbeatMs: ms(t.lastHeartbeat),
+    monthlyCalls: t.monthlyCalls,
+    entitledAgents: t.entitledAgents ?? [],
+    entitledCount: t.entitledCount,
+    lifecycle: (t.lifecycle ?? "enrolling") as Lifecycle,
+  }));
+});

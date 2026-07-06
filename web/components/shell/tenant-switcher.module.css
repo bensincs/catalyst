@@ -1,0 +1,127 @@
+.trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  height: 40px;
+  padding: 0 10px 0 8px;
+  max-width: 280px;
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  transition: background-color var(--dur-fast) var(--ease-out-quart),
+    border-color var(--dur-fast) var(--ease-out-quart);
+}
+.trigger:hover,
+.trigger[data-open] {
+  background: var(--surface-hover);
+}
+
+.badge {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  flex: none;
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+.badge[data-sovereign] {
+  background: var(--accent-bg);
+  border-color: transparent;
+  color: var(--accent-ink);
+}
+
+.text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  line-height: 1.15;
+  text-align: left;
+}
+
+.primary {
+  font-size: var(--text-body-sm);
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--text-caption);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.sovLabel {
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+.sep {
+  color: var(--border-strong);
+}
+
+.chevron {
+  color: var(--text-muted);
+  flex: none;
+}
+
+/* Tenant identity panel */
+.identity {
+  padding: 4px 4px 8px;
+}
+
+.identityLede {
+  padding: 2px 9px 10px;
+  font-size: var(--text-caption);
+  line-height: 1.55;
+  color: var(--text-muted);
+}
+.identityLede strong {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.facts {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0;
+}
+
+.fact {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-base);
+  padding: 7px 9px;
+  border-radius: var(--radius-sm);
+}
+.fact:hover {
+  background: var(--surface-hover);
+}
+
+.fact dt {
+  font-size: var(--text-caption);
+  color: var(--text-muted);
+  flex: none;
+}
+
+.fact dd {
+  font-size: var(--text-label-sm);
+  color: var(--text-secondary);
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fact dd.mono {
+  font-size: 11px;
+}

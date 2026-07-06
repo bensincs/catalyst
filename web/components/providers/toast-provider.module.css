@@ -1,0 +1,126 @@
+.viewport {
+  position: fixed;
+  inset-block-end: var(--space-lg);
+  inset-inline-end: var(--space-lg);
+  z-index: var(--z-toast);
+  pointer-events: none;
+  max-width: min(380px, calc(100vw - 2 * var(--space-base)));
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.toast {
+  pointer-events: auto;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: var(--space-sm);
+  align-items: start;
+  padding: 12px 12px 12px 12px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  animation: toast-in 240ms var(--ease-out-expo);
+}
+
+.toast[data-leaving] {
+  animation: toast-out 160ms var(--ease-out-quart) forwards;
+}
+
+.icon {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-full);
+  margin-top: 1px;
+}
+
+.toast[data-tone="success"] .icon {
+  background: var(--success-bg);
+  color: var(--success-ink);
+}
+.toast[data-tone="info"] .icon {
+  background: var(--info-bg);
+  color: var(--info-ink);
+}
+.toast[data-tone="warning"] .icon {
+  background: var(--warning-bg);
+  color: var(--warning-ink);
+}
+.toast[data-tone="danger"] .icon {
+  background: var(--danger-bg);
+  color: var(--danger-ink);
+}
+.toast[data-tone="neutral"] .icon {
+  background: var(--neutral-bg);
+  color: var(--neutral-ink);
+}
+
+.body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 1px;
+}
+
+.title {
+  font-size: var(--text-body-sm);
+  font-weight: 560;
+  color: var(--text);
+  line-height: 1.35;
+}
+
+.description {
+  font-size: var(--text-caption);
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.close {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  transition: background-color var(--dur-fast) var(--ease-out-quart),
+    color var(--dur-fast) var(--ease-out-quart);
+}
+.close:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes toast-out {
+  to {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast,
+  .toast[data-leaving] {
+    animation: none;
+  }
+}
