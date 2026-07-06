@@ -13,10 +13,10 @@ domains on `sincs.dev`.
                      ▼
              cortex-cp-pg-*.postgres.database.azure.com   PostgreSQL (database: cortex)
 
- in-tenant reconcilers (managed-app) ──▶ https://api.catalyst.sincs.dev  (/recon/*)
+ in-tenant reconcilers (reconciler/infra) ──▶ https://api.catalyst.sincs.dev  (/recon/*)
 ```
 
-The API is public because the in-tenant reconcilers (shipped by `managed-app/`)
+The API is public because the in-tenant reconcilers (shipped by `reconciler/infra/`)
 call it from customer subscriptions. Both services authenticate against the same
 Entra app registration; no shared secrets cross the boundary.
 
@@ -271,7 +271,8 @@ open https://catalyst.sincs.dev                    # sign in with Entra
 
 - **Entra redirect URI** — confirm `https://catalyst.sincs.dev/api/auth/callback/microsoft-entra-id`
   is present on the app registration (Step 1.5).
-- **Point reconcilers at production** — when installing the `managed-app/`, set
+- **Point reconcilers at production** — when installing the reconciler managed app
+  (`reconciler/infra/`), set
   `controlPlaneUrl=https://api.catalyst.sincs.dev` and
   `cortexApiScope=api://<client-id>/.default`.
 - **First sign-in** — the API auto-migrates its schema on boot (`SEED_DEMO=false`,

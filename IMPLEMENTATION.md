@@ -76,13 +76,10 @@ cortex/
 │   └── web/                  # Next.js console (platform + tenant admin)
 ├── reconciler/               # Go: loop, foundry REST client, arm ops, state cache
 │   ├── cmd/reconciler/
-│   └── internal/{loop,foundry,arm,enroll,cache}/
+│   ├── internal/{loop,foundry,arm,enroll,cache}/
+│   └── infra/                # Managed Application package (main.bicep + createUiDefinition.json)
 ├── shared/                   # Go: models, foundry client, auth helpers (imported by both)
 │   └── {model,foundry,azauth}/
-├── managed-app/              # Managed Application package
-│   ├── mainTemplate.bicep    # reconciler CA + Foundry + KV + MI + role assignments
-│   ├── createUiDefinition.json
-│   └── viewDefinition.json
 ├── catalog/                  # Seed agent definitions (versioned JSON), CI-validated
 ├── infra/                    # Terraform (control-plane landing zone)
 ├── spikes/                   # M0 scripts (throwaway-but-kept)
@@ -227,7 +224,7 @@ Go binary, continuous loop (default 60s; jittered). See `PLAN.md §7` for the lo
 
 ## 8. The Cortex managed application
 
-`managed-app/` — a `Microsoft.Solutions` Managed Application published to Partner Center.
+`reconciler/infra/` — a `Microsoft.Solutions` Managed Application published to Partner Center.
 
 **`createUiDefinition.json`** collects: company name, admin group/users for tenant-admin, Foundry region,
 model choice, consent acknowledgement. **Enrollment token + control-plane URL** are passed through (the
