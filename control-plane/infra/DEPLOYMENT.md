@@ -268,7 +268,7 @@ Injected by `main.bicep`; app defaults come from
 | `AUTH_MICROSOFT_ENTRA_ID_ISSUER` | `https://login.microsoftonline.com/common/v2.0` |
 | `PLATFORM_TENANT_ID` | `platformTenantId` |
 | `CORTEX_API_URL` | `https://api.catalyst.sincs.dev` |
-| `NEXT_PUBLIC_CORTEX_ENV` | `production` |
+| `NEXT_PUBLIC_CORTEX_ENV` | `prod` |
 
 ---
 

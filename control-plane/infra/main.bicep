@@ -59,8 +59,8 @@ param platformTenantId string
 @description('Entra issuer for console sign-in. Multi-tenant keeps /common.')
 param entraIssuer string = 'https://login.microsoftonline.com/common/v2.0'
 
-@description('Value surfaced as NEXT_PUBLIC_CORTEX_ENV (drives the console env badge).')
-param cortexEnv string = 'production'
+@description('Value surfaced as NEXT_PUBLIC_CORTEX_ENV (drives the console env badge). One of dev|qa|uat|prod.')
+param cortexEnv string = 'prod'
 
 @description('PostgreSQL administrator login.')
 param postgresAdminUser string = 'cortexadmin'
