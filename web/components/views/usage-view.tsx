@@ -60,7 +60,7 @@ export function UsageView({ agents }: { agents: EnabledAgent[] }) {
                       <span className={"mono " + styles.rowModel}>{a.model}</span>
                     </div>
                     <div className={styles.bar} aria-hidden>
-                      <span className={styles.barFill} style={{ width: `${Math.max(share * 100, 1.5)}%` }} />
+                      <span className={styles.barFill} style={{ transform: `scaleX(${Math.max(share, 0.015)})` }} />
                     </div>
                     <div className={styles.rowFigs}>
                       <span className={"tnum " + styles.rowCalls}>{formatInt(a.calls30d)}</span>
@@ -83,7 +83,7 @@ export function UsageView({ agents }: { agents: EnabledAgent[] }) {
                       <span
                         className={styles.barFill}
                         data-series="model"
-                        style={{ width: `${Math.max((total > 0 ? m.calls / total : 0) * 100, 1.5)}%` }}
+                        style={{ transform: `scaleX(${Math.max(total > 0 ? m.calls / total : 0, 0.015)})` }}
                       />
                     </div>
                     <span className={"tnum " + styles.modelCalls}>{formatCount(m.calls)}</span>

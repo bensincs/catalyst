@@ -156,6 +156,7 @@ spacing:
   content-max: 1360px
 rounded:
   none: 0
+  xs: 2px
   sm: 4px
   md: 6px
   lg: 8px

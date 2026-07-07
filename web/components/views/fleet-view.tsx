@@ -373,6 +373,23 @@ function FleetRow({
         <div className={styles.tenantCell}>
           <span className={styles.tenantName}>{tenant.name}</span>
           <span className={styles.tenantId + " mono"}>{tenant.tenantId}</span>
+          {/* Fleet's core signal (version + drift) is a column on desktop; surface
+              it in the cell once that column is dropped on narrow screens. */}
+          <span className={styles.tenantMeta}>
+            <span className={styles.version + " mono"} data-behind={behind || undefined}>
+              {tenant.version ? `v${tenant.version}` : "—"}
+            </span>
+            {behind && (
+              <span className={styles.metaFlag} data-tone="warning">
+                behind
+              </span>
+            )}
+            {tenant.drift ? (
+              <span className={styles.metaFlag} data-tone="info">
+                {tenant.drift} drift
+              </span>
+            ) : null}
+          </span>
         </div>
       </td>
       <td className={styles.colPlan}>

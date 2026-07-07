@@ -64,7 +64,7 @@ export function MeteringView({ stats, tenants }: { stats: FleetStats; tenants: T
                       <span className={styles.rowRegion}>{t.region}</span>
                     </div>
                     <div className={styles.bar} aria-hidden>
-                      <span className={styles.barFill} style={{ width: `${Math.max(share * 100, 1.5)}%` }} />
+                      <span className={styles.barFill} style={{ transform: `scaleX(${Math.max(share, 0.015)})` }} />
                     </div>
                     <div className={styles.rowFigs}>
                       <span className={"tnum " + styles.rowCalls}>{formatInt(t.monthlyCalls)}</span>

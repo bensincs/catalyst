@@ -75,6 +75,7 @@
   --content-max: 1360px;
 
   /* ---- Radii ---- */
+  --radius-xs: 2px;
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 8px;
@@ -259,7 +260,7 @@ p {
 :focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
-  border-radius: 3px;
+  border-radius: var(--radius-xs);
 }
 
 :focus:not(:focus-visible) {

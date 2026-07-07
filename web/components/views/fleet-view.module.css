@@ -94,7 +94,7 @@
 
 .healthSeg {
   display: block;
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
   min-width: 5px;
   transition: flex-grow var(--dur-slow) var(--ease-out-quart);
 }
@@ -344,6 +344,21 @@
   text-overflow: ellipsis;
 }
 
+/* Version + drift, surfaced in the cell only when the Version column is
+   dropped (<=1040px) — Fleet's whole job is the desired-vs-actual gap. */
+.tenantMeta {
+  display: none;
+}
+.metaFlag {
+  font-weight: 600;
+}
+.metaFlag[data-tone="warning"] {
+  color: var(--warning-ink);
+}
+.metaFlag[data-tone="info"] {
+  color: var(--info-ink);
+}
+
 .plan {
   display: inline-block;
   padding: 2px 9px;
@@ -421,6 +436,13 @@
   .colRegion,
   .colVersion {
     display: none;
+  }
+  .tenantMeta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 2px;
+    font-size: var(--text-caption);
   }
 }
 @media (max-width: 900px) {
