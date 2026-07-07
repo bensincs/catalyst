@@ -2,6 +2,7 @@ import {
   Activity,
   Bot,
   Boxes,
+  Database,
   Gauge,
   LayoutDashboard,
   Radar,
@@ -41,6 +42,12 @@ const PLATFORM_NAV: NavGroup[] = [
         href: "/catalog",
         icon: Boxes,
         hint: "Author agents, cut versions, and gate rollouts",
+      },
+      {
+        label: "Memory stores",
+        href: "/memory-stores",
+        icon: Database,
+        hint: "Author shared memory stores and entitle tenants to them",
       },
       {
         label: "Metering",
@@ -85,6 +92,12 @@ const TENANT_NAV: NavGroup[] = [
         href: "/agents",
         icon: Bot,
         hint: "Configure, publish, and monitor enabled agents",
+      },
+      {
+        label: "Memory stores",
+        href: "/memory-stores",
+        icon: Database,
+        hint: "Create memory stores and connect your agents to them",
       },
       {
         label: "Install",

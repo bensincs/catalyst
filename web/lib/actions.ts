@@ -69,3 +69,47 @@ export async function disableAgent(agentId: string): Promise<ActionResult> {
   );
 }
 
+/* ── Memory stores ────────────────────────────────────────────────────────── */
+
+export async function createMemoryStore(input: {
+  name: string;
+  description: string;
+  config: unknown;
+}): Promise<ActionResult> {
+  return run(() => apiSend("POST", "/api/memory-stores", input), ["/memory-stores"]);
+}
+
+export async function updateMemoryStore(
+  id: string,
+  input: { name: string; description: string; config: unknown },
+): Promise<ActionResult> {
+  return run(
+    () => apiSend("PATCH", `/api/memory-stores/${encodeURIComponent(id)}`, input),
+    ["/memory-stores"],
+  );
+}
+
+export async function deleteMemoryStore(id: string): Promise<ActionResult> {
+  return run(
+    () => apiSend("DELETE", `/api/memory-stores/${encodeURIComponent(id)}`),
+    ["/memory-stores"],
+  );
+}
+
+export async function setStoreEntitlements(
+  slug: string,
+  entitledStores: string[],
+): Promise<ActionResult> {
+  return run(
+    () => apiSend("PATCH", `/api/tenants/${encodeURIComponent(slug)}/store-entitlements`, { entitledStores }),
+    [`/tenants/${slug}`, "/memory-stores"],
+  );
+}
+
+export async function connectAgentStore(agentId: string, storeId: string): Promise<ActionResult> {
+  return run(
+    () => apiSend("POST", `/api/tenant/agents/${encodeURIComponent(agentId)}/store`, { storeId }),
+    ["/", "/agents", "/memory-stores"],
+  );
+}
+

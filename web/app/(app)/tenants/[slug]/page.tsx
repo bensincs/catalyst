@@ -1,7 +1,8 @@
 import { notFound } from "next/navigation";
-import { ApiError, getCatalog, getMe, getTenantContext, getTenantsRegistry } from "@/lib/api";
+import { ApiError, getCatalog, getMe, getMemoryStores, getTenantContext, getTenantsRegistry } from "@/lib/api";
 import { TenantOverview } from "@/components/views/tenant-overview";
 import { EntitlementsPanel } from "@/components/views/entitlements-panel";
+import { StoreEntitlementsPanel } from "@/components/views/store-entitlements-panel";
 
 export default async function TenantDrillInPage({
   params,
@@ -16,15 +17,27 @@ export default async function TenantDrillInPage({
 
     let entitlements = null;
     if (platform) {
-      const [registry, catalog] = await Promise.all([getTenantsRegistry(), getCatalog()]);
+      const [registry, catalog, stores] = await Promise.all([
+        getTenantsRegistry(),
+        getCatalog(),
+        getMemoryStores(),
+      ]);
       const row = registry.find((r) => r.id === slug);
       entitlements = (
-        <EntitlementsPanel
-          slug={slug}
-          name={ctx.tenant.name}
-          entitled={row?.entitledAgents ?? []}
-          catalog={catalog}
-        />
+        <>
+          <EntitlementsPanel
+            slug={slug}
+            name={ctx.tenant.name}
+            entitled={row?.entitledAgents ?? []}
+            catalog={catalog}
+          />
+          <StoreEntitlementsPanel
+            slug={slug}
+            name={ctx.tenant.name}
+            entitled={row?.entitledStores ?? []}
+            stores={stores.filter((s) => s.owner === "")}
+          />
+        </>
       );
     }
 

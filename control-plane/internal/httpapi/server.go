@@ -63,7 +63,7 @@ func (s *Server) Router() http.Handler {
 		// Tenant desired state
 		r.Post("/tenant/agents", s.handleEnableAgent)
 		r.Delete("/tenant/agents/{agentId}", s.handleDisableAgent)
-		r.Put("/tenant/agents/{agentId}/store", s.handleConnectAgentStore)
+		r.Post("/tenant/agents/{agentId}/store", s.handleConnectAgentStore)
 	})
 
 	// Reconciler-facing endpoints. The in-tenant reconciler authenticates with

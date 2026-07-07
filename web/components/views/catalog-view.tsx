@@ -17,7 +17,7 @@ import {
   publishVersion,
   type ActionResult,
 } from "@/lib/actions";
-import type { AgentDefinition, AgentType, CatalogAgent, PublishTarget, Role } from "@/lib/types";
+import type { AgentDefinition, AgentType, CatalogAgent, MemoryStore, PublishTarget, Role } from "@/lib/types";
 import styles from "./catalog-view.module.css";
 
 const MODELS = ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "jais-30b", "o3-mini"];
@@ -41,7 +41,7 @@ function TypeTag({ type }: { type: AgentType }) {
   );
 }
 
-export function CatalogView({ role, agents }: { role: Role; agents: CatalogAgent[] }) {
+export function CatalogView({ role, agents, memoryStores }: { role: Role; agents: CatalogAgent[]; memoryStores: MemoryStore[] }) {
   const router = useRouter();
   const { toast } = useToast();
   const [pending, startTransition] = useTransition();
@@ -60,7 +60,7 @@ export function CatalogView({ role, agents }: { role: Role; agents: CatalogAgent
   };
 
   return role === "platform" ? (
-    <PlatformCatalog agents={agents} pending={pending} runAction={runAction} />
+    <PlatformCatalog agents={agents} pending={pending} runAction={runAction} memoryStores={memoryStores} />
   ) : (
     <TenantCatalog agents={agents} pending={pending} runAction={runAction} />
   );
@@ -74,10 +74,12 @@ function PlatformCatalog({
   agents,
   pending,
   runAction,
+  memoryStores,
 }: {
   agents: CatalogAgent[];
   pending: boolean;
   runAction: RunAction;
+  memoryStores: MemoryStore[];
 }) {
   const [newOpen, setNewOpen] = useState(false);
   const [publishFor, setPublishFor] = useState<CatalogAgent | null>(null);
@@ -141,6 +143,7 @@ function PlatformCatalog({
         open={newOpen}
         pending={pending}
         onClose={() => setNewOpen(false)}
+        stores={memoryStores}
         onSubmit={(input) =>
           runAction(() => createCatalogAgent(input), `Created ${input.name}`, () => setNewOpen(false))
         }
@@ -150,6 +153,7 @@ function PlatformCatalog({
         agent={publishFor}
         pending={pending}
         onClose={() => setPublishFor(null)}
+        stores={memoryStores}
         onSubmit={(agent, input) =>
           runAction(
             () => publishVersion(agent.id, input),
@@ -279,10 +283,12 @@ function DefinitionFields({
   type,
   value,
   onChange,
+  stores,
 }: {
   type: AgentType;
   value: AgentDefinition;
   onChange: (d: AgentDefinition) => void;
+  stores: MemoryStore[];
 }) {
   const set = (patch: Partial<AgentDefinition>) => onChange({ ...value, ...patch });
 
@@ -350,6 +356,20 @@ function DefinitionFields({
           />
         </Field>
       </div>
+      <Field
+        label="Memory store"
+        htmlFor="def-memory"
+        hint="A shared memory store this agent connects to. Tenants are auto-entitled to it when they get this agent."
+      >
+        <Select id="def-memory" value={value.memoryStore ?? ""} onChange={(e) => set({ memoryStore: e.target.value || undefined })}>
+          <option value="">None</option>
+          {stores.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.name}
+            </option>
+          ))}
+        </Select>
+      </Field>
     </>
   );
 }
@@ -359,11 +379,13 @@ function NewAgentModal({
   pending,
   onClose,
   onSubmit,
+  stores,
 }: {
   open: boolean;
   pending: boolean;
   onClose: () => void;
   onSubmit: (input: { name: string; description: string; type: AgentType; model: string; definition: AgentDefinition }) => void;
+  stores: MemoryStore[];
 }) {
   const [type, setType] = useState<AgentType>("prompt");
   const [name, setName] = useState("");
@@ -412,7 +434,7 @@ function NewAgentModal({
           </Select>
         </Field>
       )}
-      <DefinitionFields type={type} value={def} onChange={setDef} />
+      <DefinitionFields type={type} value={def} onChange={setDef} stores={stores} />
     </Modal>
   );
 }
@@ -422,6 +444,7 @@ function PublishModal({
   pending,
   onClose,
   onSubmit,
+  stores,
 }: {
   agent: CatalogAgent | null;
   pending: boolean;
@@ -430,6 +453,7 @@ function PublishModal({
     agent: CatalogAgent,
     input: { version: string; channel: string; notes: string; rolloutPercent: number; definition: AgentDefinition },
   ) => void;
+  stores: MemoryStore[];
 }) {
   const latest = agent ? [...agent.versions].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))[0] : undefined;
   const [version, setVersion] = useState("");
@@ -485,7 +509,7 @@ function PublishModal({
           />
         </Field>
       </div>
-      <DefinitionFields type={agent.type} value={def} onChange={setDef} />
+      <DefinitionFields type={agent.type} value={def} onChange={setDef} stores={stores} />
       <Field label="Release notes" htmlFor="notes">
         <Textarea id="notes" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="What changed." />
       </Field>

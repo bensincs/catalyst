@@ -1,16 +1,17 @@
 "use client";
 
-import { useTransition } from "react";
+import { useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AppWindow, ArrowLeft, ArrowRight, Ban, Globe, MessageSquare, RefreshCw } from "lucide-react";
 import { PageHeader } from "@/components/ui/page-header";
 import { Button } from "@/components/ui/button";
+import { Select } from "@/components/ui/form";
 import { StatusBadge, StatusDot } from "@/components/ui/status";
 import { useToast } from "@/components/providers/toast-provider";
-import { disableAgent } from "@/lib/actions";
+import { connectAgentStore, disableAgent } from "@/lib/actions";
 import { formatInt, formatRelative } from "@/lib/format";
-import { HEALTH_META, type EnabledAgent, type PublishTarget } from "@/lib/types";
+import { HEALTH_META, type EnabledAgent, type MemoryStore, type PublishTarget } from "@/lib/types";
 import styles from "./agent-detail-view.module.css";
 
 const PUBLISH: Record<PublishTarget, { label: string; icon: typeof Globe }> = {
@@ -24,15 +25,18 @@ export function AgentDetailView({
   live,
   lastHeartbeatMs,
   now,
+  stores,
 }: {
   agent: EnabledAgent;
   live: boolean;
   lastHeartbeatMs: number;
   now: number;
+  stores: MemoryStore[];
 }) {
   const router = useRouter();
   const { toast } = useToast();
   const [pending, startTransition] = useTransition();
+  const [storeSel, setStoreSel] = useState(agent.memoryStore ?? "");
   const h = HEALTH_META[agent.health];
 
   const disable = () =>
@@ -43,6 +47,17 @@ export function AgentDetailView({
         router.push("/agents");
       } else {
         toast({ title: "Couldn't disable", description: res.error, tone: "danger" });
+      }
+    });
+
+  const connectStore = (storeId: string) =>
+    startTransition(async () => {
+      const res = await connectAgentStore(agent.id, storeId);
+      if (res.ok) {
+        toast({ title: storeId ? "Connected memory store" : "Disconnected memory store", tone: "success" });
+        router.refresh();
+      } else {
+        toast({ title: "Couldn't update memory store", description: res.error, tone: "danger" });
       }
     });
 
@@ -161,6 +176,38 @@ export function AgentDetailView({
           </>
         )}
       </section>
+
+      {/* Memory store — tenant connects an enabled prompt agent to a store */}
+      {agent.type === "prompt" && (
+        <section className={styles.defSection} aria-label="Memory store">
+          <h2 className={styles.sectionTitle}>Memory store</h2>
+          <p className={styles.reconNote}>
+            Connect this agent to a memory store your tenant owns or is entitled to. The reconciler
+            wires the store&rsquo;s config into the agent&rsquo;s memory on its next poll.
+          </p>
+          <div style={{ display: "flex", gap: "10px", alignItems: "center", maxWidth: "480px" }}>
+            <div style={{ flex: 1 }}>
+              <Select value={storeSel} onChange={(e) => setStoreSel(e.target.value)} aria-label="Memory store">
+                <option value="">None</option>
+                {stores.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                    {s.platform ? " · platform" : ""}
+                  </option>
+                ))}
+              </Select>
+            </div>
+            <Button
+              variant="primary"
+              loading={pending}
+              disabled={storeSel === (agent.memoryStore ?? "")}
+              onClick={() => connectStore(storeSel)}
+            >
+              {storeSel ? "Connect" : "Disconnect"}
+            </Button>
+          </div>
+        </section>
+      )}
 
       {/* Publish targets */}
       <section className={styles.publishSection} aria-label="Publish targets">

@@ -40,6 +40,7 @@ export interface AgentDefinition {
   knowledge?: string[];
   temperature?: number;
   topP?: number;
+  memoryStore?: string; // id of a connected memory store
   // hosted
   image?: string;
   endpoint?: string;
@@ -78,6 +79,7 @@ export interface EnabledAgent {
   publishTo: PublishTarget[];
   calls30d: number;
   note?: string;
+  memoryStore?: string; // effective connected memory store (override or catalog default)
 }
 
 export interface TenantContextInfo {
@@ -140,7 +142,26 @@ export interface TenantRegistryRow {
   monthlyCalls: number;
   entitledAgents: string[];
   entitledCount: number;
+  entitledStores: string[];
   lifecycle: Lifecycle;
+}
+
+/** A reusable Foundry memory configuration that agents connect to. Platform
+ * stores (owner === "") are granted via entitlements; tenant stores (owner ===
+ * the tenant slug) are private to their tenant. */
+export interface MemoryStore {
+  id: string;
+  name: string;
+  description: string;
+  owner: string; // "" = platform-authored; else tenant slug
+  config: unknown; // the Foundry memory definition (forwarded verbatim)
+  createdAt: string;
+  // platform view
+  ownerName?: string;
+  // tenant view flags
+  platform: boolean;
+  owned: boolean;
+  entitled: boolean;
 }
 
 export interface HealthMeta {

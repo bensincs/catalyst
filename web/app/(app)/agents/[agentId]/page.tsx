@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import { Bot } from "lucide-react";
-import { getMe, getMyContext } from "@/lib/api";
+import { getMe, getMemoryStores, getMyContext } from "@/lib/api";
 import { AgentDetailView } from "@/components/views/agent-detail-view";
 import { PlaceholderPage } from "@/components/views/placeholder-page";
 
@@ -18,7 +18,7 @@ export default async function AgentDetailPage({ params }: { params: Promise<{ ag
     );
   }
   const { agentId } = await params;
-  const ctx = await getMyContext();
+  const [ctx, stores] = await Promise.all([getMyContext(), getMemoryStores()]);
   const agent = ctx.agents.find((a) => a.id === agentId);
   if (!agent) notFound();
   return (
@@ -27,6 +27,7 @@ export default async function AgentDetailPage({ params }: { params: Promise<{ ag
       live={ctx.tenant.lifecycle === "live"}
       lastHeartbeatMs={ctx.tenant.lastHeartbeatMs}
       now={Date.now()}
+      stores={stores}
     />
   );
 }

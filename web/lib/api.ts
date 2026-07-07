@@ -8,6 +8,7 @@ import type {
   CatalogAgent,
   EnabledAgent,
   FleetStats,
+  MemoryStore,
   Plan,
   EnrollmentStatus,
   Health,
@@ -57,6 +58,7 @@ interface ApiAgent {
   publishTo: string[];
   calls30d: number;
   note?: string;
+  memoryStore?: string;
 }
 interface ApiMe {
   oid: string;
@@ -211,6 +213,7 @@ function toAgent(a: ApiAgent): EnabledAgent {
     publishTo: a.publishTo as PublishTarget[],
     calls30d: a.calls30d,
     note: a.note,
+    memoryStore: a.memoryStore || undefined,
   };
 }
 
@@ -294,6 +297,7 @@ export const getCatalog = cache(async (): Promise<CatalogAgent[]> => {
 interface ApiRegistryRow extends ApiTenant {
   entitledAgents: string[];
   entitledCount: number;
+  entitledStores: string[];
 }
 
 export const getTenantsRegistry = cache(async (): Promise<TenantRegistryRow[]> => {
@@ -311,6 +315,38 @@ export const getTenantsRegistry = cache(async (): Promise<TenantRegistryRow[]> =
     monthlyCalls: t.monthlyCalls,
     entitledAgents: t.entitledAgents ?? [],
     entitledCount: t.entitledCount,
+    entitledStores: t.entitledStores ?? [],
     lifecycle: (t.lifecycle ?? "enrolling") as Lifecycle,
+  }));
+});
+
+/* ── Memory stores ────────────────────────────────────────────────────────── */
+
+interface ApiMemoryStore {
+  id: string;
+  name: string;
+  description: string;
+  owner: string;
+  config: unknown;
+  createdAt: string;
+  ownerName?: string;
+  platform?: boolean;
+  owned?: boolean;
+  entitled?: boolean;
+}
+
+export const getMemoryStores = cache(async (): Promise<MemoryStore[]> => {
+  const c = await apiGet<{ stores: ApiMemoryStore[] }>("/api/memory-stores");
+  return (c.stores ?? []).map((s) => ({
+    id: s.id,
+    name: s.name,
+    description: s.description,
+    owner: s.owner ?? "",
+    config: s.config ?? {},
+    createdAt: s.createdAt,
+    ownerName: s.ownerName,
+    platform: s.platform ?? s.owner === "",
+    owned: Boolean(s.owned),
+    entitled: Boolean(s.entitled),
   }));
 });
