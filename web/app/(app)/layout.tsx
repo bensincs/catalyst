@@ -1,9 +1,12 @@
 import type { ReactNode } from "react";
 import { redirect } from "next/navigation";
+import { CloudOff } from "lucide-react";
 import { ApiError, getFleet, getMe, getMyContext, type Me } from "@/lib/api";
 import { ConsoleProvider, type ConsoleData } from "@/components/providers/console-provider";
 import { ToastProvider } from "@/components/providers/toast-provider";
 import { AppShell } from "@/components/shell/app-shell";
+import { ErrorState } from "@/components/ui/error-state";
+import { RetryButton } from "@/components/ui/retry-button";
 import type { Environment, TenantContextInfo, TenantSummary } from "@/lib/types";
 
 // Every authed page reads the signed-in session and the control-plane API per
@@ -33,7 +36,18 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   } catch (e) {
     // Session alive but token missing/expired → send them back to sign in.
     if (e instanceof ApiError && e.status === 401) redirect("/signin");
-    throw e;
+    // The control plane is unreachable (or erroring) — render a calm, retryable
+    // state instead of a raw 500. Tenants and their agents keep running; the
+    // console just can't read their state until the connection is restored.
+    return (
+      <ErrorState
+        variant="page"
+        icon={CloudOff}
+        title="Control plane unreachable"
+        description="Cortex can't reach the control-plane API right now. Your tenants and their agents keep running — the console just can't read their state until the connection returns."
+        action={<RetryButton />}
+      />
+    );
   }
 
   const data: ConsoleData = {

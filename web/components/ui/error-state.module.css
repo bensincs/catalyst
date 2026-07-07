@@ -1,0 +1,25 @@
+.wrap {
+  display: grid;
+  place-items: center;
+}
+
+/* Full viewport — used when the shell itself can't render (control plane
+   unreachable). */
+.wrap[data-variant="page"] {
+  min-height: 100dvh;
+  padding: var(--space-lg);
+}
+
+/* Inside the content area, shell intact — matches the empty-state panels used
+   across the console. */
+.wrap[data-variant="panel"] {
+  min-height: 420px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background-image: radial-gradient(
+    circle at 50% 38%,
+    color-mix(in srgb, var(--text) 3%, transparent),
+    transparent 60%
+  );
+}
