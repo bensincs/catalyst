@@ -163,32 +163,6 @@
   display: none;
 }
 
-/* Tooltip for collapsed rail */
-.tooltip {
-  position: absolute;
-  left: calc(100% + 12px);
-  top: 50%;
-  transform: translateY(-50%) translateX(-4px);
-  padding: 5px 9px;
-  background: var(--text);
-  color: var(--canvas);
-  font-size: var(--text-label-sm);
-  font-weight: 550;
-  border-radius: var(--radius-sm);
-  white-space: nowrap;
-  pointer-events: none;
-  opacity: 0;
-  z-index: var(--z-tooltip);
-  box-shadow: var(--shadow-md);
-  transition: opacity var(--dur-fast) var(--ease-out-quart),
-    transform var(--dur-fast) var(--ease-out-quart);
-}
-.link:hover .tooltip,
-.link:focus-visible .tooltip {
-  opacity: 1;
-  transform: translateY(-50%) translateX(0);
-}
-
 .foot {
   flex: none;
   padding: 10px 12px;

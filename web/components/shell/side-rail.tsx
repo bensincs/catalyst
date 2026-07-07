@@ -42,13 +42,13 @@ export function RailNav({
                 data-active={active || undefined}
                 aria-current={active ? "page" : undefined}
                 aria-label={collapsed ? item.label : undefined}
+                title={collapsed ? item.label : undefined}
                 onClick={onNavigate}
               >
                 <span className={styles.linkIcon} aria-hidden>
                   <Icon size={18} strokeWidth={2} />
                 </span>
                 <span className={styles.linkLabel}>{item.label}</span>
-                {collapsed && <span className={styles.tooltip}>{item.label}</span>}
               </Link>
             </li>
           );
