@@ -35,17 +35,19 @@ Everything is in [`main.bicep`](./main.bicep) with defaults in
 
 ---
 
-## Why three passes
+## Why two passes + a bind step
 
-Container Apps custom domains have two ordering constraints: an image must exist
-in the registry before an app can start, and DNS must resolve before a managed
-certificate can be issued. The template handles both with two flags:
+An image must exist in the registry before an app can start, so the template
+deploys in two passes gated by `deployApps`:
 
-| Pass | `deployApps` | `bindCustomDomains` | Creates |
-| --- | --- | --- | --- |
-| 1 | `false` | `false` | registry, Postgres, env, identity |
-| 2 | `true` | `false` | the two apps, on their default `*.azurecontainerapps.io` FQDNs |
-| 3 | `true` | `true` | managed certs + binds `catalyst.sincs.dev` / `api.catalyst.sincs.dev` |
+| Pass | `deployApps` | Creates |
+| --- | --- | --- |
+| 1 | `false` | registry, Postgres, env, identity |
+| 2 | `true` | the two apps, on their default `*.azurecontainerapps.io` FQDNs |
+
+Custom domains + managed certificates are then bound with the CLI (Step 7), not in
+Bicep: Container Apps requires a hostname to be *added* before its managed cert can
+be created — an ordering a single template pass can't express.
 
 ---
 
@@ -104,7 +106,9 @@ written to disk):
 export CORTEX_ENTRA_CLIENT_ID="<client-id>"
 export CORTEX_PLATFORM_TENANT_ID="<your platform tenant guid>"   # users from this tenant are Platform Admins
 
-export CORTEX_PG_ADMIN_PASSWORD="$(openssl rand -base64 24)"     # store in your password manager
+# Postgres goes into a postgres:// DSN, so the password must be URL-safe — base64url
+# (A-Za-z0-9-_) keeps upper+lower+digit for PG complexity with no /, +, = to break the URL.
+export CORTEX_PG_ADMIN_PASSWORD="$(openssl rand -base64 24 | tr '+/' '-_' | tr -d '=')"  # store it — Azure can't recover it
 export CORTEX_AUTH_SECRET="$(openssl rand -base64 33)"           # Auth.js session secret
 export CORTEX_ENTRA_CLIENT_SECRET="<client secret from step 1.4>"
 
@@ -194,7 +198,7 @@ record needed):
 | CNAME | `api.catalyst` | `$API_FQDN` |
 | TXT | `asuid.api.catalyst` | `$ASUID` |
 
-Wait for propagation before Pass 3:
+Wait for propagation before binding:
 
 ```bash
 dig +short catalyst.sincs.dev
@@ -205,21 +209,40 @@ dig +short TXT asuid.api.catalyst.sincs.dev
 
 ---
 
-## 7. Pass 3 — bind the custom domains
+## 7. Bind the custom domains (CLI)
 
-Issues a free managed certificate for each host and binds it (validated via the
-CNAME you just created):
+DNS resolves, so add each hostname (validated via its `asuid` TXT) and issue a
+free managed certificate. This is a CLI step, not a Bicep pass — Container Apps
+won't create a managed cert for a hostname that hasn't been added first.
 
 ```bash
-az deployment group create \
-  -g "$RG" -f main.bicep -p main.bicepparam \
-  -p deployApps=true -p bindCustomDomains=true
+ENV=cortex-cp-env
+
+# 1) add the hostnames
+az containerapp hostname add -g "$RG" -n cortex-cp-console --hostname catalyst.sincs.dev
+az containerapp hostname add -g "$RG" -n cortex-cp-api     --hostname api.catalyst.sincs.dev
+
+# 2) issue + SNI-bind a managed cert for each (a few minutes each)
+az containerapp hostname bind -g "$RG" -n cortex-cp-console \
+  --hostname catalyst.sincs.dev --environment "$ENV" --validation-method CNAME
+az containerapp hostname bind -g "$RG" -n cortex-cp-api \
+  --hostname api.catalyst.sincs.dev --environment "$ENV" --validation-method CNAME
 ```
 
-Certificate issuance takes a few minutes. Verify:
+If a cert issues but the hostname stays `bindingType: Disabled`, attach the
+existing cert by name:
 
 ```bash
-curl -s https://api.catalyst.sincs.dev/healthz    # -> ok
+CERT=$(az containerapp env certificate list -g "$RG" -n "$ENV" --managed-certificates-only \
+  --query "[?properties.subjectName=='api.catalyst.sincs.dev'].name" -o tsv)
+az containerapp hostname bind -g "$RG" -n cortex-cp-api \
+  --hostname api.catalyst.sincs.dev --certificate "$CERT" --environment "$ENV"
+```
+
+Verify:
+
+```bash
+curl -s https://api.catalyst.sincs.dev/healthz    # -> {"status":"ok"}
 open https://catalyst.sincs.dev                    # sign in with Entra
 ```
 
@@ -274,17 +297,18 @@ Injected by `main.bicep`; app defaults come from
 
 ## Updating a service
 
-Rebuild the image and restart the revision (single-revision mode picks up
-`:latest`):
+Rebuild the image, then roll it onto the running app with `az containerapp update`
+— **not** by re-running the template. A full app deploy PUTs the whole app and would
+drop the CLI-bound custom domains.
 
 ```bash
-az acr build -r "$ACR" -t cortex-api:latest -f control-plane/Dockerfile .
-az containerapp revision restart -g "$RG" -n cortex-cp-api \
-  --revision "$(az containerapp revision list -g "$RG" -n cortex-cp-api --query '[0].name' -o tsv)"
+az acr build -r "$ACR" -t cortex-console:latest -f web/Dockerfile .
+az containerapp update -g "$RG" -n cortex-cp-console \
+  --image "$ACR.azurecr.io/cortex-console:latest"
 ```
 
-Prefer immutable tags (`cortex-api:<git-sha>`) in production and pass
-`-p imageTag=<git-sha>` on Pass 2/3 for auditable rollouts.
+`az containerapp update --set-env-vars KEY=value` adjusts config without a rebuild.
+Prefer immutable tags (`cortex-console:<git-sha>`) in production for auditable rollouts.
 
 ---
 

@@ -10,14 +10,17 @@
 //   api      ->  https://api.catalyst.sincs.dev    (external ingress; in-tenant reconcilers call this)
 //   postgres ->  Azure Database for PostgreSQL Flexible Server (database: cortex)
 //
-// Custom domains on Container Apps need DNS in place before a managed
-// certificate can be issued, and images in the registry before the apps can
-// start. So this template deploys in three passes, gated by two flags — see
-// DEPLOYMENT.md:
+// Images must exist in the registry before the apps can start, so this template
+// deploys in two passes gated by `deployApps` — see DEPLOYMENT.md:
 //
-//   pass 1   deployApps=false  bindCustomDomains=false   base infra + registry
-//   pass 2   deployApps=true   bindCustomDomains=false   apps on their default FQDNs
-//   pass 3   deployApps=true   bindCustomDomains=true     bind catalyst.sincs.dev + api.catalyst.sincs.dev
+//   pass 1   deployApps=false   base infra + registry (push images between passes)
+//   pass 2   deployApps=true    the two apps, on their default *.azurecontainerapps.io FQDNs
+//
+// Custom domains + managed certs are then bound out-of-band with the CLI
+// (az containerapp hostname add/bind): Container Apps requires a hostname to be
+// *added* before its managed cert can be created, which a single template pass
+// can't express. After binding, update apps with `az containerapp update`, not by
+// re-running this template (a full app PUT would drop the bound domains).
 
 targetScope = 'resourceGroup'
 
@@ -37,9 +40,6 @@ param apiDomain string = 'api.catalyst.sincs.dev'
 
 @description('Create the container apps. False for the first (registry-only) pass; push images; then true.')
 param deployApps bool = false
-
-@description('Bind custom domains + issue managed certificates. Requires DNS (CNAME + asuid TXT) to already resolve.')
-param bindCustomDomains bool = false
 
 @description('API image. Defaults to <acr-login-server>/cortex-api:<imageTag>.')
 param apiImage string = ''
@@ -211,28 +211,6 @@ resource env 'Microsoft.App/managedEnvironments@2024-03-01' = {
   }
 }
 
-// ─────────────────────────── managed certificates (pass 3) ───────────────────────────
-
-resource consoleCert 'Microsoft.App/managedEnvironments/managedCertificates@2024-03-01' = if (deployApps && bindCustomDomains) {
-  parent: env
-  name: 'cert-console'
-  location: location
-  properties: {
-    subjectName: consoleDomain
-    domainControlValidation: 'CNAME'
-  }
-}
-
-resource apiCert 'Microsoft.App/managedEnvironments/managedCertificates@2024-03-01' = if (deployApps && bindCustomDomains) {
-  parent: env
-  name: 'cert-api'
-  location: location
-  properties: {
-    subjectName: apiDomain
-    domainControlValidation: 'CNAME'
-  }
-}
-
 // ─────────────────────────── control-plane API (pass 2+) ───────────────────────────
 
 resource api 'Microsoft.App/containerApps@2024-03-01' = if (deployApps) {
@@ -253,13 +231,7 @@ resource api 'Microsoft.App/containerApps@2024-03-01' = if (deployApps) {
         targetPort: 8080
         transport: 'auto'
         allowInsecure: false
-        customDomains: bindCustomDomains ? [
-          {
-            name: apiDomain
-            bindingType: 'SniEnabled'
-            certificateId: apiCert.id
-          }
-        ] : []
+        // api.catalyst.sincs.dev is bound out-of-band via the CLI (see DEPLOYMENT.md).
       }
       registries: [
         {
@@ -326,13 +298,7 @@ resource console 'Microsoft.App/containerApps@2024-03-01' = if (deployApps) {
         targetPort: 3000
         transport: 'auto'
         allowInsecure: false
-        customDomains: bindCustomDomains ? [
-          {
-            name: consoleDomain
-            bindingType: 'SniEnabled'
-            certificateId: consoleCert.id
-          }
-        ] : []
+        // catalyst.sincs.dev is bound out-of-band via the CLI (see DEPLOYMENT.md).
       }
       registries: [
         {
