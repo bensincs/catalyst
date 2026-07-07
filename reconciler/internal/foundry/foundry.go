@@ -23,6 +23,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -78,8 +79,14 @@ func New(cfg config.Config, ts tokens.Source) *Foundry {
 // for drifted ones, prunes managed agents that are no longer desired, and reports
 // honest state: telemetry it cannot yet measure stays zero, and anything it
 // cannot realize (a failed call, or a hosted agent) is reported blocked.
-func (f *Foundry) Reconcile(ctx context.Context, desired []shared.DesiredAgent) []shared.AgentStatus {
+func (f *Foundry) Reconcile(ctx context.Context, desired []shared.DesiredAgent, stores []shared.DesiredMemoryStore) []shared.AgentStatus {
 	out := make([]shared.AgentStatus, 0, len(desired))
+
+	// Memory-store id → config, so each agent can be bound to its store's memory.
+	storeConfigs := make(map[string]json.RawMessage, len(stores))
+	for _, ms := range stores {
+		storeConfigs[ms.ID] = ms.Config
+	}
 
 	// The agents Cortex already manages in this project, keyed by control-plane
 	// agent id. If we can't read the project we can't assert anything true about
@@ -102,7 +109,7 @@ func (f *Foundry) Reconcile(ctx context.Context, desired []shared.DesiredAgent) 
 			out = append(out, blocked(d.AgentID, ""))
 			continue
 		}
-		out = append(out, f.converge(ctx, d, managed[d.AgentID]))
+		out = append(out, f.converge(ctx, d, managed[d.AgentID], storeConfigs))
 	}
 
 	// Prune managed prompt agents that are no longer desired (de-provisioned).
@@ -127,8 +134,8 @@ func (f *Foundry) Reconcile(ctx context.Context, desired []shared.DesiredAgent) 
 // converge creates the agent backing one prompt agent, or publishes a new
 // version when it has drifted, and returns its actual status. existing is the
 // currently-managed agent for this control-plane id, or nil if none exists yet.
-func (f *Foundry) converge(ctx context.Context, d shared.DesiredAgent, existing *agent) shared.AgentStatus {
-	def, skipped := f.definitionFor(d)
+func (f *Foundry) converge(ctx context.Context, d shared.DesiredAgent, existing *agent, storeConfigs map[string]json.RawMessage) shared.AgentStatus {
+	def, skipped := f.definitionFor(d, storeConfigs)
 	meta := metadataFor(d)
 
 	if existing == nil {
@@ -171,7 +178,9 @@ var bareTools = map[string]bool{
 
 // definitionFor derives the desired kind:"prompt" definition from a prompt agent,
 // returning the names of any tools skipped because they need unmodeled config.
-func (f *Foundry) definitionFor(d shared.DesiredAgent) (definition, []string) {
+// storeConfigs maps memory-store id → config; the agent's connected store's
+// config is injected as the Foundry definition.memory.
+func (f *Foundry) definitionFor(d shared.DesiredAgent, storeConfigs map[string]json.RawMessage) (definition, []string) {
 	tools := make([]toolDef, 0, len(d.Definition.Tools))
 	var skipped []string
 	for _, t := range d.Definition.Tools {
@@ -193,6 +202,11 @@ func (f *Foundry) definitionFor(d shared.DesiredAgent) (definition, []string) {
 		Temperature:  d.Definition.Temperature,
 		TopP:         d.Definition.TopP,
 	}
+	if d.Definition.MemoryStore != "" {
+		if cfg, ok := storeConfigs[d.Definition.MemoryStore]; ok && len(cfg) > 0 {
+			def.Memory = cfg
+		}
+	}
 	return def, skipped
 }
 
@@ -213,7 +227,9 @@ func metadataFor(d shared.DesiredAgent) map[string]string {
 
 // sameDefinition reports whether the live definition already equals the desired
 // one. Temperature/TopP are compared exactly (the Agents API stores only what
-// was sent — it injects no defaults — so nil stays nil and never loops).
+// was sent — it injects no defaults — so nil stays nil and never loops). Memory
+// (a connected store's config) is compared structurally so key reordering by the
+// service doesn't cause a spurious republish.
 func sameDefinition(have, want definition) bool {
 	if have.Model != want.Model || have.Instructions != want.Instructions {
 		return false
@@ -221,7 +237,25 @@ func sameDefinition(have, want definition) bool {
 	if !sameFloat(have.Temperature, want.Temperature) || !sameFloat(have.TopP, want.TopP) {
 		return false
 	}
+	if !sameJSON(have.Memory, want.Memory) {
+		return false
+	}
 	return sameToolTypes(have.Tools, want.Tools)
+}
+
+// sameJSON compares two raw JSON values structurally (order-insensitive).
+func sameJSON(a, b json.RawMessage) bool {
+	if len(a) == 0 && len(b) == 0 {
+		return true
+	}
+	var x, y any
+	if err := json.Unmarshal(a, &x); err != nil {
+		return bytes.Equal(a, b)
+	}
+	if err := json.Unmarshal(b, &y); err != nil {
+		return bytes.Equal(a, b)
+	}
+	return reflect.DeepEqual(x, y)
 }
 
 func sameFloat(a, b *float64) bool {
@@ -301,12 +335,13 @@ type toolDef struct {
 
 // definition is a kind:"prompt" agent definition.
 type definition struct {
-	Kind         string    `json:"kind"`
-	Model        string    `json:"model"`
-	Instructions string    `json:"instructions,omitempty"`
-	Tools        []toolDef `json:"tools"`
-	Temperature  *float64  `json:"temperature,omitempty"`
-	TopP         *float64  `json:"top_p,omitempty"`
+	Kind         string          `json:"kind"`
+	Model        string          `json:"model"`
+	Instructions string          `json:"instructions,omitempty"`
+	Tools        []toolDef       `json:"tools"`
+	Temperature  *float64        `json:"temperature,omitempty"`
+	TopP         *float64        `json:"top_p,omitempty"`
+	Memory       json.RawMessage `json:"memory,omitempty"`
 }
 
 // agentVersion is one version of an agent (agents.versions.latest).

@@ -164,7 +164,8 @@ func (s *Store) Agents(ctx context.Context, slug string) ([]model.Agent, error) 
 		                  ORDER BY v.created_at DESC LIMIT 1), a.version) AS desired_version,
 		        coalesce((SELECT v.definition FROM catalog_versions v
 		                  WHERE v.agent_id = a.agent_id AND v.channel = a.channel
-		                  ORDER BY v.created_at DESC LIMIT 1), '{}'::jsonb) AS definition
+		                  ORDER BY v.created_at DESC LIMIT 1), '{}'::jsonb) AS definition,
+		        a.memory_store
 		 FROM agents a LEFT JOIN catalog_agents ca ON ca.id = a.agent_id
 		 WHERE a.tenant_slug = $1 ORDER BY a.sort_order, a.name`, slug)
 	if err != nil {
@@ -176,16 +177,26 @@ func (s *Store) Agents(ctx context.Context, slug string) ([]model.Agent, error) 
 	for rows.Next() {
 		var a model.Agent
 		var defRaw []byte
+		var override string
 		if err := rows.Scan(&a.ID, &a.Name, &a.Type, &a.Version, &a.Channel, &a.Model,
 			&a.Health, &a.PublishTo, &a.Calls30d, &a.Note,
-			&a.DesiredVersion, &defRaw); err != nil {
+			&a.DesiredVersion, &defRaw, &override); err != nil {
 			return nil, err
 		}
 		a.Definition = defFromRaw(defRaw)
+		a.MemoryStore = firstNonEmpty(override, a.Definition.MemoryStore)
 		a.Drift = a.DesiredVersion != "" && a.DesiredVersion != a.Version
 		agents = append(agents, a)
 	}
 	return agents, rows.Err()
+}
+
+// firstNonEmpty returns a if non-empty, else b.
+func firstNonEmpty(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
 }
 
 // UpsertUser records the authenticated user and their resolved role/tenant.
@@ -402,11 +413,213 @@ func (s *Store) PublishVersion(ctx context.Context, agentID, version, channel, n
 	return err
 }
 
+/* ── Memory stores ──────────────────────────────────────────────────────── */
+
+const memoryStoreCols = `id, name, description, owner_tenant, config, created_by, created_at`
+
+func configToText(c json.RawMessage) string {
+	if len(c) == 0 {
+		return "{}"
+	}
+	return string(c)
+}
+
+func scanMemoryStore(row pgx.Row) (model.MemoryStore, error) {
+	var m model.MemoryStore
+	var cfg []byte
+	err := row.Scan(&m.ID, &m.Name, &m.Description, &m.Owner, &cfg, &m.CreatedBy, &m.CreatedAt)
+	m.Config = json.RawMessage(cfg)
+	m.Platform = m.Owner == ""
+	return m, err
+}
+
+// MemoryStoreList returns every memory store (platform view), with owner names.
+func (s *Store) MemoryStoreList(ctx context.Context) ([]model.MemoryStore, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT m.id, m.name, m.description, m.owner_tenant, m.config, m.created_by, m.created_at, coalesce(t.name,'')
+		 FROM memory_stores m LEFT JOIN tenants t ON t.id = m.owner_tenant
+		 ORDER BY m.created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []model.MemoryStore{}
+	for rows.Next() {
+		var m model.MemoryStore
+		var cfg []byte
+		if err := rows.Scan(&m.ID, &m.Name, &m.Description, &m.Owner, &cfg, &m.CreatedBy, &m.CreatedAt, &m.OwnerName); err != nil {
+			return nil, err
+		}
+		m.Config = json.RawMessage(cfg)
+		m.Platform = m.Owner == ""
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// MemoryStoresForTenant returns the stores a tenant can use: its own, plus the
+// platform stores it's entitled to, each flagged accordingly.
+func (s *Store) MemoryStoresForTenant(ctx context.Context, slug string) ([]model.MemoryStore, error) {
+	var entitled []string
+	if err := s.pool.QueryRow(ctx, `SELECT entitled_stores FROM tenants WHERE id = $1`, slug).Scan(&entitled); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return []model.MemoryStore{}, nil
+		}
+		return nil, err
+	}
+	entitledSet := map[string]bool{}
+	for _, id := range entitled {
+		entitledSet[id] = true
+	}
+	rows, err := s.pool.Query(ctx,
+		`SELECT `+memoryStoreCols+` FROM memory_stores
+		 WHERE owner_tenant = $1 OR (owner_tenant = '' AND id = ANY($2))
+		 ORDER BY created_at DESC`, slug, entitled)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []model.MemoryStore{}
+	for rows.Next() {
+		m, err := scanMemoryStore(rows)
+		if err != nil {
+			return nil, err
+		}
+		m.Owned = m.Owner == slug
+		m.Entitled = entitledSet[m.ID]
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) MemoryStoreByID(ctx context.Context, id string) (model.MemoryStore, error) {
+	m, err := scanMemoryStore(s.pool.QueryRow(ctx, `SELECT `+memoryStoreCols+` FROM memory_stores WHERE id = $1`, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return m, ErrNotFound
+	}
+	return m, err
+}
+
+func (s *Store) CreateMemoryStore(ctx context.Context, id, name, description, owner string, config json.RawMessage, createdBy string) error {
+	_, err := s.pool.Exec(ctx,
+		`INSERT INTO memory_stores (id, name, description, owner_tenant, config, created_by) VALUES ($1,$2,$3,$4,$5,$6)`,
+		id, name, description, owner, configToText(config), createdBy)
+	return err
+}
+
+func (s *Store) UpdateMemoryStore(ctx context.Context, id, name, description string, config json.RawMessage) error {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE memory_stores SET name = $2, description = $3, config = $4 WHERE id = $1`,
+		id, name, description, configToText(config))
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) DeleteMemoryStore(ctx context.Context, id string) error {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM memory_stores WHERE id = $1`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	// Detach the store from tenant entitlements + agent connections.
+	_, _ = s.pool.Exec(ctx, `UPDATE tenants SET entitled_stores = array_remove(entitled_stores, $1)`, id)
+	_, _ = s.pool.Exec(ctx, `UPDATE agents SET memory_store = '' WHERE memory_store = $1`, id)
+	return nil
+}
+
+func (s *Store) SetStoreEntitlements(ctx context.Context, slug string, storeIDs []string) error {
+	tag, err := s.pool.Exec(ctx, `UPDATE tenants SET entitled_stores = $2 WHERE id = $1`, slug, storeIDs)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+var ErrStoreNotAccessible = errors.New("memory store not accessible")
+
+// ConnectAgentStore connects (storeID != "") or disconnects (storeID == "") an
+// enabled agent to a memory store the tenant owns or is entitled to.
+func (s *Store) ConnectAgentStore(ctx context.Context, slug, catalogAgentID, storeID string) error {
+	if storeID != "" {
+		var ok bool
+		if err := s.pool.QueryRow(ctx,
+			`SELECT EXISTS(SELECT 1 FROM memory_stores m WHERE m.id = $2 AND
+			   (m.owner_tenant = $1 OR (m.owner_tenant = '' AND m.id IN
+			     (SELECT unnest(entitled_stores) FROM tenants WHERE id = $1))))`,
+			slug, storeID).Scan(&ok); err != nil {
+			return err
+		}
+		if !ok {
+			return ErrStoreNotAccessible
+		}
+	}
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE agents SET memory_store = $3 WHERE tenant_slug = $1 AND agent_id = $2`, slug, catalogAgentID, storeID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// referencedStores returns the platform memory-store ids referenced by the
+// latest definition of each given catalog agent.
+func (s *Store) referencedStores(ctx context.Context, agentIDs []string) ([]string, error) {
+	if len(agentIDs) == 0 {
+		return nil, nil
+	}
+	rows, err := s.pool.Query(ctx,
+		`SELECT m.id FROM memory_stores m WHERE m.owner_tenant = '' AND m.id IN (
+		   SELECT (SELECT v.definition->>'memoryStore' FROM catalog_versions v
+		           WHERE v.agent_id = ca.id ORDER BY v.created_at DESC LIMIT 1)
+		   FROM catalog_agents ca WHERE ca.id = ANY($1))`, agentIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+// autoEntitleStores ensures a tenant is entitled to every platform memory store
+// referenced by the given agents — so entitling or enabling an agent also grants
+// the stores it needs.
+func (s *Store) autoEntitleStores(ctx context.Context, slug string, agentIDs []string) error {
+	stores, err := s.referencedStores(ctx, agentIDs)
+	if err != nil || len(stores) == 0 {
+		return err
+	}
+	_, err = s.pool.Exec(ctx,
+		`UPDATE tenants SET entitled_stores =
+		   (SELECT coalesce(array_agg(DISTINCT e), '{}') FROM unnest(entitled_stores || $2::text[]) e)
+		 WHERE id = $1`, slug, stores)
+	return err
+}
+
 /* ── Tenants registry + entitlements ────────────────────────────────────── */
 
 func (s *Store) TenantsRegistry(ctx context.Context) ([]model.TenantRegistryRow, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT `+tenantCols+`, entitled_agents FROM tenants WHERE is_platform = false ORDER BY name`)
+		`SELECT `+tenantCols+`, entitled_agents, entitled_stores FROM tenants WHERE is_platform = false ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -419,7 +632,7 @@ func (s *Store) TenantsRegistry(ctx context.Context) ([]model.TenantRegistryRow,
 		if err := rows.Scan(&r.ID, &r.Name, &r.TenantID, &r.Region, &r.Plan, &r.Enrollment,
 			&r.Version, &r.AgentCount, &r.ReconcilingCount, &r.MonthlyCalls, &r.Drift, &r.LastHeartbeat,
 			&r.SubscriptionID, &r.ReconcilerIdentity, &r.FoundryProject, &r.ReconcilerVersion, &installedAt,
-			&r.EntitledAgents); err != nil {
+			&r.EntitledAgents, &r.EntitledStores); err != nil {
 			return nil, err
 		}
 		if installedAt != "" {
@@ -428,6 +641,9 @@ func (s *Store) TenantsRegistry(ctx context.Context) ([]model.TenantRegistryRow,
 		r.Lifecycle = deriveLifecycle(r.Enrollment, r.LastHeartbeat)
 		if r.EntitledAgents == nil {
 			r.EntitledAgents = []string{}
+		}
+		if r.EntitledStores == nil {
+			r.EntitledStores = []string{}
 		}
 		r.EntitledCount = len(r.EntitledAgents)
 		out = append(out, r)
@@ -443,7 +659,8 @@ func (s *Store) SetEntitlements(ctx context.Context, slug string, agentIDs []str
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
 	}
-	return nil
+	// Ensure the tenant is entitled to every memory store these agents need.
+	return s.autoEntitleStores(ctx, slug, agentIDs)
 }
 
 /* ── Enable / disable / install (tenant desired state) ──────────────────── */
@@ -461,6 +678,11 @@ func (s *Store) EnableAgent(ctx context.Context, slug, catalogAgentID string, pu
 	}
 	if !entitled {
 		return ErrNotEntitled
+	}
+
+	// Ensure the tenant is entitled to any platform memory store this agent uses.
+	if err := s.autoEntitleStores(ctx, slug, []string{catalogAgentID}); err != nil {
+		return err
 	}
 
 	var name, agentModel, version, channel string
@@ -507,7 +729,6 @@ func (s *Store) DisableAgent(ctx context.Context, slug, catalogAgentID string) e
 // never fabricates install state. The admin launches the managed-app deployment
 // from the console; the reconciler reports authoritative identity when it boots.
 
-
 // recountAgents derives the tenant's rollups from its agent rows: how many
 // agents it runs, and its 30-day call volume (the sum of per-agent counts the
 // reconciler reports). Both are derived, never client-supplied.
@@ -542,25 +763,60 @@ func (s *Store) SyncDesired(ctx context.Context, tid string) (shared.DesiredStat
 		        coalesce((SELECT v.definition FROM catalog_versions v
 		                  WHERE v.agent_id = a.agent_id AND v.channel = a.channel
 		                  ORDER BY v.created_at DESC LIMIT 1), '{}'::jsonb) AS definition,
-		        a.publish_to
+		        a.publish_to, a.memory_store
 		 FROM agents a LEFT JOIN catalog_agents ca ON ca.id = a.agent_id
 		 WHERE a.tenant_slug = $1 ORDER BY a.sort_order`, t.ID)
 	if err != nil {
 		return out, err
 	}
 	defer rows.Close()
+	storeIDs := map[string]bool{}
 	for rows.Next() {
 		var a shared.DesiredAgent
 		var typeStr string
 		var defRaw []byte
-		if err := rows.Scan(&a.AgentID, &a.Name, &typeStr, &a.Version, &a.Channel, &a.Model, &defRaw, &a.PublishTo); err != nil {
+		var override string
+		if err := rows.Scan(&a.AgentID, &a.Name, &typeStr, &a.Version, &a.Channel, &a.Model, &defRaw, &a.PublishTo, &override); err != nil {
 			return out, err
 		}
 		a.Type = shared.AgentType(typeStr)
 		a.Definition = defFromRaw(defRaw)
+		// The effective store is the per-tenant override, else the catalog default.
+		if eff := firstNonEmpty(override, a.Definition.MemoryStore); eff != "" {
+			a.Definition.MemoryStore = eff
+			storeIDs[eff] = true
+		}
 		out.Agents = append(out.Agents, a)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return out, err
+	}
+	// Attach the config of every memory store the desired agents reference, so
+	// the reconciler can bind each agent to its store's memory.
+	if len(storeIDs) > 0 {
+		ids := make([]string, 0, len(storeIDs))
+		for id := range storeIDs {
+			ids = append(ids, id)
+		}
+		srows, err := s.pool.Query(ctx, `SELECT id, name, config FROM memory_stores WHERE id = ANY($1)`, ids)
+		if err != nil {
+			return out, err
+		}
+		defer srows.Close()
+		for srows.Next() {
+			var ms shared.DesiredMemoryStore
+			var cfg []byte
+			if err := srows.Scan(&ms.ID, &ms.Name, &cfg); err != nil {
+				return out, err
+			}
+			ms.Config = json.RawMessage(cfg)
+			out.MemoryStores = append(out.MemoryStores, ms)
+		}
+		if err := srows.Err(); err != nil {
+			return out, err
+		}
+	}
+	return out, nil
 }
 
 // ApplyHeartbeat records a reconciler heartbeat: it upserts the tenant with the

@@ -2,6 +2,7 @@
 package model
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/inception42/cortex/shared"
@@ -51,7 +52,7 @@ type Tenant struct {
 type Agent struct {
 	ID             string                 `json:"id"`
 	Name           string                 `json:"name"`
-	Type           string                 `json:"type"` // prompt | hosted
+	Type           string                 `json:"type"`           // prompt | hosted
 	Version        string                 `json:"version"`        // actual — what the reconciler has converged to
 	DesiredVersion string                 `json:"desiredVersion"` // desired — latest catalog version for its channel
 	Drift          bool                   `json:"drift"`          // desired ≠ actual (a reconcile is pending/underway)
@@ -62,6 +63,9 @@ type Agent struct {
 	PublishTo      []string               `json:"publishTo"`
 	Calls30d       int64                  `json:"calls30d"`
 	Note           string                 `json:"note,omitempty"`
+	// MemoryStore is the effective store this tenant's agent connects to (the
+	// per-tenant override if set, else the catalog definition's memoryStore).
+	MemoryStore string `json:"memoryStore,omitempty"`
 }
 
 type FleetStats struct {
@@ -120,4 +124,26 @@ type TenantRegistryRow struct {
 	Tenant
 	EntitledAgents []string `json:"entitledAgents"`
 	EntitledCount  int      `json:"entitledCount"`
+	EntitledStores []string `json:"entitledStores"`
+}
+
+// MemoryStore is a reusable Foundry memory configuration that agents connect to.
+// Platform-authored stores (Owner == "") are granted to tenants via
+// entitlements; tenant-created stores (Owner == <tenant slug>) are private to
+// their tenant.
+type MemoryStore struct {
+	ID          string          `json:"id"`
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Owner       string          `json:"owner"` // "" = platform-authored; else tenant slug
+	Config      json.RawMessage `json:"config"`
+	CreatedBy   string          `json:"createdBy,omitempty"`
+	CreatedAt   time.Time       `json:"createdAt"`
+
+	// Populated in the tenant view:
+	Platform bool `json:"platform"` // platform-authored (vs tenant-owned)
+	Owned    bool `json:"owned"`    // owned by the viewing tenant
+	Entitled bool `json:"entitled"` // entitled to the viewing tenant
+	// Populated in the platform view:
+	OwnerName string `json:"ownerName,omitempty"` // owning tenant's display name
 }

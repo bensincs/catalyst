@@ -53,7 +53,7 @@ func (r *Reconciler) once(ctx context.Context) {
 		slog.Warn("sync failed; will retry", "err", err)
 		return
 	}
-	statuses := r.foundry.Reconcile(ctx, desired.Agents)
+	statuses := r.foundry.Reconcile(ctx, desired.Agents, desired.MemoryStores)
 	hb := r.heartbeat(statuses)
 	if err := r.cp.Heartbeat(ctx, hb); err != nil {
 		slog.Warn("heartbeat failed", "err", err)

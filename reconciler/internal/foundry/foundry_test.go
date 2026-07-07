@@ -123,7 +123,7 @@ func TestReconcile_CreateNoopVersionPrune(t *testing.T) {
 	ctx := context.Background()
 	a := promptAgent()
 
-	st := f.Reconcile(ctx, []shared.DesiredAgent{a})
+	st := f.Reconcile(ctx, []shared.DesiredAgent{a}, nil)
 	if len(st) != 1 || st[0].Health != healthHealthy || st[0].Version != "v1" {
 		t.Fatalf("create: got %+v", st)
 	}
@@ -131,7 +131,7 @@ func TestReconcile_CreateNoopVersionPrune(t *testing.T) {
 		t.Fatalf("create counts: c=%d v=%d d=%d", fake.creates, fake.versions, fake.deletes)
 	}
 
-	if st := f.Reconcile(ctx, []shared.DesiredAgent{a}); st[0].Health != healthHealthy {
+	if st := f.Reconcile(ctx, []shared.DesiredAgent{a}, nil); st[0].Health != healthHealthy {
 		t.Fatalf("noop health: %+v", st)
 	}
 	if fake.creates != 1 || fake.versions != 0 {
@@ -141,7 +141,7 @@ func TestReconcile_CreateNoopVersionPrune(t *testing.T) {
 	a2 := a
 	a2.Version = "v2"
 	a2.Definition.Instructions = "help more"
-	st = f.Reconcile(ctx, []shared.DesiredAgent{a2})
+	st = f.Reconcile(ctx, []shared.DesiredAgent{a2}, nil)
 	if st[0].Health != healthHealthy || st[0].Version != "v2" {
 		t.Fatalf("version status: %+v", st)
 	}
@@ -149,7 +149,7 @@ func TestReconcile_CreateNoopVersionPrune(t *testing.T) {
 		t.Fatalf("expected 1 new version, got %d", fake.versions)
 	}
 
-	if st := f.Reconcile(ctx, nil); len(st) != 0 {
+	if st := f.Reconcile(ctx, nil, nil); len(st) != 0 {
 		t.Fatalf("expected no statuses after prune, got %+v", st)
 	}
 	if fake.deletes != 1 || len(fake.items) != 0 {
@@ -169,7 +169,7 @@ func TestReconcile_HostedReportedBlocked(t *testing.T) {
 		AgentID: "h1", Name: "Worker", Type: shared.AgentHosted, Version: "v1",
 		Definition: shared.AgentDefinition{Image: "ghcr.io/x:1"},
 	}
-	st := f.Reconcile(context.Background(), []shared.DesiredAgent{h})
+	st := f.Reconcile(context.Background(), []shared.DesiredAgent{h}, nil)
 	if len(st) != 1 || st[0].Health != healthBlocked || st[0].Version != "" {
 		t.Fatalf("hosted: %+v", st)
 	}
@@ -187,7 +187,7 @@ func TestReconcile_ListFailureBlocksWithoutMutating(t *testing.T) {
 	f := newClient(srv.URL)
 
 	a := promptAgent()
-	st := f.Reconcile(context.Background(), []shared.DesiredAgent{a})
+	st := f.Reconcile(context.Background(), []shared.DesiredAgent{a}, nil)
 	if len(st) != 1 || st[0].Health != healthBlocked {
 		t.Fatalf("expected blocked on list failure, got %+v", st)
 	}
@@ -209,7 +209,7 @@ func TestReconcile_LeavesUnmanagedAgentsAlone(t *testing.T) {
 	defer srv.Close()
 	f := newClient(srv.URL)
 
-	_ = f.Reconcile(context.Background(), nil)
+	_ = f.Reconcile(context.Background(), nil, nil)
 	if fake.deletes != 0 {
 		t.Fatalf("must not delete unmanaged agents, got %d", fake.deletes)
 	}
@@ -240,7 +240,7 @@ func TestDefinitionFor_SkipsUnconfigurableTools(t *testing.T) {
 		AgentID: "a1", Model: "gpt-4o",
 		Definition: shared.AgentDefinition{Tools: []string{"code_interpreter", "file_search", "web", "function"}},
 	}
-	def, skipped := f.definitionFor(d)
+	def, skipped := f.definitionFor(d, nil)
 
 	var kept []string
 	for _, td := range def.Tools {
@@ -251,5 +251,45 @@ func TestDefinitionFor_SkipsUnconfigurableTools(t *testing.T) {
 	}
 	if len(skipped) != 2 || skipped[0] != "file_search" || skipped[1] != "function" {
 		t.Fatalf("skipped = %v, want [file_search function]", skipped)
+	}
+}
+
+// A connected memory store's config is injected as the Foundry definition.memory,
+// and a change to that config republishes a new version even when the agent
+// version is unchanged (the effective definition changed).
+func TestReconcile_MemoryStoreBinding(t *testing.T) {
+	fake := newFake()
+	srv := httptest.NewServer(fake.handler())
+	defer srv.Close()
+	f := newClient(srv.URL)
+	ctx := context.Background()
+
+	a := shared.DesiredAgent{
+		AgentID: "a1", Name: "Support", Type: shared.AgentPrompt, Version: "v1", Model: "gpt-4o",
+		Definition: shared.AgentDefinition{Instructions: "help", MemoryStore: "mem-1"},
+	}
+	stores := []shared.DesiredMemoryStore{{ID: "mem-1", Name: "Mem", Config: json.RawMessage(`{"scope":"user"}`)}}
+
+	def, _ := f.definitionFor(a, map[string]json.RawMessage{"mem-1": stores[0].Config})
+	if !sameJSON(def.Memory, json.RawMessage(`{"scope":"user"}`)) {
+		t.Fatalf("memory not injected: %s", def.Memory)
+	}
+
+	if st := f.Reconcile(ctx, []shared.DesiredAgent{a}, stores); st[0].Health != healthHealthy {
+		t.Fatalf("create: %+v", st)
+	}
+	if fake.creates != 1 {
+		t.Fatalf("expected 1 create, got %d", fake.creates)
+	}
+
+	f.Reconcile(ctx, []shared.DesiredAgent{a}, stores) // unchanged
+	if fake.versions != 0 {
+		t.Fatalf("unchanged memory must not republish, got %d", fake.versions)
+	}
+
+	stores2 := []shared.DesiredMemoryStore{{ID: "mem-1", Name: "Mem", Config: json.RawMessage(`{"scope":"tenant"}`)}}
+	f.Reconcile(ctx, []shared.DesiredAgent{a}, stores2) // config changed, same agent version
+	if fake.versions != 1 {
+		t.Fatalf("changed memory config must republish, got %d", fake.versions)
 	}
 }

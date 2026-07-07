@@ -52,10 +52,18 @@ func (s *Server) Router() http.Handler {
 		// Tenant registry + entitlements (platform)
 		r.Get("/tenants", s.handleTenantsRegistry)
 		r.Patch("/tenants/{slug}/entitlements", s.handleSetEntitlements)
+		r.Patch("/tenants/{slug}/store-entitlements", s.handleSetStoreEntitlements)
+
+		// Memory stores (platform-authored + tenant-created)
+		r.Get("/memory-stores", s.handleMemoryStores)
+		r.Post("/memory-stores", s.handleCreateMemoryStore)
+		r.Patch("/memory-stores/{id}", s.handleUpdateMemoryStore)
+		r.Delete("/memory-stores/{id}", s.handleDeleteMemoryStore)
 
 		// Tenant desired state
 		r.Post("/tenant/agents", s.handleEnableAgent)
 		r.Delete("/tenant/agents/{agentId}", s.handleDisableAgent)
+		r.Put("/tenant/agents/{agentId}/store", s.handleConnectAgentStore)
 	})
 
 	// Reconciler-facing endpoints. The in-tenant reconciler authenticates with
@@ -311,6 +319,167 @@ func (s *Server) handleSetEntitlements(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
+/* ── Memory stores (platform-authored + tenant-created) ──────────────────── */
+
+func (s *Server) handleMemoryStores(w http.ResponseWriter, r *http.Request) {
+	id, _ := auth.IdentityFrom(r.Context())
+	if id.Role == model.RolePlatform {
+		list, err := s.store.MemoryStoreList(r.Context())
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"stores": list})
+		return
+	}
+	t, err := s.store.EnsureTenantForTID(r.Context(), id.TID, orgNameFromEmail(id.Email))
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	list, err := s.store.MemoryStoresForTenant(r.Context(), t.ID)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"stores": list})
+}
+
+func (s *Server) handleCreateMemoryStore(w http.ResponseWriter, r *http.Request) {
+	id, _ := auth.IdentityFrom(r.Context())
+	var body struct {
+		Name        string          `json:"name"`
+		Description string          `json:"description"`
+		Config      json.RawMessage `json:"config"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	slug := slugify(body.Name)
+	if slug == "" {
+		writeErr(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	owner := "" // platform-authored by default
+	if id.Role == model.RoleTenant {
+		t, ok := s.callerTenant(w, r)
+		if !ok {
+			return
+		}
+		owner = t.ID
+		slug = t.ID + "-" + slug // namespace tenant stores to avoid platform-slug collisions
+	}
+	if err := s.store.CreateMemoryStore(r.Context(), slug, strings.TrimSpace(body.Name),
+		strings.TrimSpace(body.Description), owner, body.Config, id.OID); err != nil {
+		if isDup(err) {
+			writeErr(w, http.StatusConflict, "a memory store with that name already exists")
+			return
+		}
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]string{"id": slug})
+}
+
+// storeWriteAllowed loads a store and checks the caller may modify it: platform
+// admins may modify any store; a tenant only its own.
+func (s *Server) storeWriteAllowed(w http.ResponseWriter, r *http.Request, id model.Identity, storeID string) bool {
+	ms, err := s.store.MemoryStoreByID(r.Context(), storeID)
+	if errors.Is(err, store.ErrNotFound) {
+		writeErr(w, http.StatusNotFound, "memory store not found")
+		return false
+	}
+	if err != nil {
+		s.fail(w, r, err)
+		return false
+	}
+	if id.Role == model.RolePlatform {
+		return true
+	}
+	t, err := s.store.EnsureTenantForTID(r.Context(), id.TID, orgNameFromEmail(id.Email))
+	if err != nil {
+		s.fail(w, r, err)
+		return false
+	}
+	if ms.Owner != t.ID {
+		writeErr(w, http.StatusForbidden, "not your memory store")
+		return false
+	}
+	return true
+}
+
+func (s *Server) handleUpdateMemoryStore(w http.ResponseWriter, r *http.Request) {
+	id, _ := auth.IdentityFrom(r.Context())
+	storeID := chi.URLParam(r, "id")
+	if !s.storeWriteAllowed(w, r, id, storeID) {
+		return
+	}
+	var body struct {
+		Name        string          `json:"name"`
+		Description string          `json:"description"`
+		Config      json.RawMessage `json:"config"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if strings.TrimSpace(body.Name) == "" {
+		writeErr(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	if err := s.store.UpdateMemoryStore(r.Context(), storeID, strings.TrimSpace(body.Name),
+		strings.TrimSpace(body.Description), body.Config); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "memory store not found")
+			return
+		}
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
+func (s *Server) handleDeleteMemoryStore(w http.ResponseWriter, r *http.Request) {
+	id, _ := auth.IdentityFrom(r.Context())
+	storeID := chi.URLParam(r, "id")
+	if !s.storeWriteAllowed(w, r, id, storeID) {
+		return
+	}
+	if err := s.store.DeleteMemoryStore(r.Context(), storeID); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "memory store not found")
+			return
+		}
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+func (s *Server) handleSetStoreEntitlements(w http.ResponseWriter, r *http.Request) {
+	id, _ := auth.IdentityFrom(r.Context())
+	if !s.requirePlatform(w, id) {
+		return
+	}
+	var body struct {
+		EntitledStores []string `json:"entitledStores"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if body.EntitledStores == nil {
+		body.EntitledStores = []string{}
+	}
+	if err := s.store.SetStoreEntitlements(r.Context(), chi.URLParam(r, "slug"), body.EntitledStores); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "tenant not found")
+			return
+		}
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
 /* ── Tenant desired state ────────────────────────────────────────────────── */
 
 func (s *Server) handleEnableAgent(w http.ResponseWriter, r *http.Request) {
@@ -351,6 +520,31 @@ func (s *Server) handleDisableAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "disabled"})
+}
+
+// handleConnectAgentStore connects (or, with an empty storeId, disconnects) a
+// tenant's enabled agent to a memory store it owns or is entitled to.
+func (s *Server) handleConnectAgentStore(w http.ResponseWriter, r *http.Request) {
+	t, ok := s.callerTenant(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		StoreID string `json:"storeId"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	switch err := s.store.ConnectAgentStore(r.Context(), t.ID, chi.URLParam(r, "agentId"), strings.TrimSpace(body.StoreID)); {
+	case errors.Is(err, store.ErrStoreNotAccessible):
+		writeErr(w, http.StatusForbidden, "that memory store isn't available to your tenant")
+	case errors.Is(err, store.ErrNotFound):
+		writeErr(w, http.StatusNotFound, "agent not enabled")
+	case err != nil:
+		s.fail(w, r, err)
+	default:
+		writeJSON(w, http.StatusOK, map[string]string{"status": "connected"})
+	}
 }
 
 /* ── Reconciler (in-tenant, Entra-token auth; tenant = token tid) ─────────── */

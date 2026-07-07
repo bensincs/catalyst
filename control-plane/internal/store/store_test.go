@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"testing"
 
@@ -115,5 +116,91 @@ func TestCatalogEntitleEnableLoop(t *testing.T) {
 	}
 	if agents, _ := st.Agents(ctx, slug); len(agents) != 0 {
 		t.Fatalf("expected 0 agents after disable, got %d", len(agents))
+	}
+}
+
+func TestMemoryStoreLifecycle(t *testing.T) {
+	st, ctx := testStore(t)
+	defer st.Close()
+
+	const (
+		storeID = "zz-ms-platform"
+		agentID = "zz-ms-agent"
+		slug    = "zz-ms-tenant"
+		tid     = "zz-ms-tid-0001"
+	)
+	cleanup := func() {
+		st.pool.Exec(ctx, `DELETE FROM catalog_agents WHERE id = $1`, agentID)
+		st.pool.Exec(ctx, `DELETE FROM memory_stores WHERE id = $1 OR owner_tenant = $2`, storeID, slug)
+		st.pool.Exec(ctx, `DELETE FROM tenants WHERE id = $1`, slug)
+	}
+	cleanup()
+	defer cleanup()
+
+	// 1. Platform authors a memory store; a catalog agent references it.
+	if err := st.CreateMemoryStore(ctx, storeID, "ZZ Store", "platform memory", "", json.RawMessage(`{"scope":"user"}`), "oid-test"); err != nil {
+		t.Fatalf("create store: %v", err)
+	}
+	if err := st.CreateCatalogAgent(ctx, agentID, "ZZ MS Agent", "d", "prompt", "gpt-4o", "oid-test",
+		shared.AgentDefinition{Instructions: "v1", MemoryStore: storeID}); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	if _, err := st.pool.Exec(ctx,
+		`INSERT INTO tenants (id, name, tenant_id, enrollment) VALUES ($1,'ZZ MS Tenant',$2,'bound')`, slug, tid); err != nil {
+		t.Fatalf("insert tenant: %v", err)
+	}
+
+	// 2. Entitling the agent auto-entitles the store it references.
+	if err := st.SetEntitlements(ctx, slug, []string{agentID}); err != nil {
+		t.Fatalf("entitle: %v", err)
+	}
+	stores, err := st.MemoryStoresForTenant(ctx, slug)
+	if err != nil {
+		t.Fatalf("stores for tenant: %v", err)
+	}
+	entitled := false
+	for _, s := range stores {
+		if s.ID == storeID {
+			entitled = s.Entitled
+		}
+	}
+	if !entitled {
+		t.Fatalf("expected store auto-entitled after entitling its agent; got %+v", stores)
+	}
+
+	// 3. Enable the agent; SyncDesired carries the effective store + its config.
+	if err := st.EnableAgent(ctx, slug, agentID, nil); err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+	ds, err := st.SyncDesired(ctx, tid)
+	if err != nil || len(ds.Agents) != 1 {
+		t.Fatalf("sync: %d agents (err %v)", len(ds.Agents), err)
+	}
+	if ds.Agents[0].Definition.MemoryStore != storeID {
+		t.Fatalf("desired agent store = %q, want %q", ds.Agents[0].Definition.MemoryStore, storeID)
+	}
+	if len(ds.MemoryStores) != 1 || ds.MemoryStores[0].ID != storeID || len(ds.MemoryStores[0].Config) == 0 {
+		t.Fatalf("desired memory stores wrong: %+v", ds.MemoryStores)
+	}
+
+	// 4. Tenant creates their own store and connects the agent to it (override).
+	tenantStore := slug + "-notes"
+	if err := st.CreateMemoryStore(ctx, tenantStore, "Notes", "tenant memory", slug, json.RawMessage(`{"scope":"tenant"}`), "oid-tenant"); err != nil {
+		t.Fatalf("create tenant store: %v", err)
+	}
+	if err := st.ConnectAgentStore(ctx, slug, agentID, tenantStore); err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	agents, err := st.Agents(ctx, slug)
+	if err != nil || len(agents) != 1 || agents[0].MemoryStore != tenantStore {
+		t.Fatalf("effective store after connect wrong: %+v (err %v)", agents, err)
+	}
+	if ds2, _ := st.SyncDesired(ctx, tid); len(ds2.Agents) != 1 || ds2.Agents[0].Definition.MemoryStore != tenantStore {
+		t.Fatalf("sync override store wrong: %+v", ds2.Agents)
+	}
+
+	// 5. Connecting to an inaccessible store is rejected.
+	if err := st.ConnectAgentStore(ctx, slug, agentID, "nonexistent-store"); err != ErrStoreNotAccessible {
+		t.Fatalf("expected ErrStoreNotAccessible, got %v", err)
 	}
 }

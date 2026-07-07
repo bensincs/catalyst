@@ -4,6 +4,8 @@
 // shared auth header is part of the contract.
 package shared
 
+import "encoding/json"
+
 // AgentType is how an agent is realized in Foundry (see AGENT-MODEL.md).
 type AgentType string
 
@@ -25,12 +27,25 @@ type AgentDefinition struct {
 	Knowledge    []string `json:"knowledge,omitempty"`
 	Temperature  *float64 `json:"temperature,omitempty"`
 	TopP         *float64 `json:"topP,omitempty"`
+	// MemoryStore is the id of a memory store this agent connects to (see the
+	// memory-store catalog). The reconciler resolves it to the store's config and
+	// injects it into the Foundry agent's definition.memory.
+	MemoryStore string `json:"memoryStore,omitempty"`
 	// hosted
 	Image    string            `json:"image,omitempty"`
 	Endpoint string            `json:"endpoint,omitempty"`
 	CPU      string            `json:"cpu,omitempty"`
 	Memory   string            `json:"memory,omitempty"`
 	Env      map[string]string `json:"env,omitempty"`
+}
+
+// DesiredMemoryStore is a memory store a tenant's reconciler should provision and
+// make available to agents (control plane → reconciler). Config is the Foundry
+// memory definition, forwarded verbatim.
+type DesiredMemoryStore struct {
+	ID     string          `json:"id"`
+	Name   string          `json:"name"`
+	Config json.RawMessage `json:"config,omitempty"`
 }
 
 // DesiredAgent is one agent a tenant wants running (control plane → reconciler).
@@ -50,6 +65,9 @@ type DesiredAgent struct {
 type DesiredState struct {
 	TenantID string         `json:"tenantId"`
 	Agents   []DesiredAgent `json:"agents"`
+	// MemoryStores are the stores referenced by the desired agents, with their
+	// configs, so the reconciler can bind each agent to its store's memory.
+	MemoryStores []DesiredMemoryStore `json:"memoryStores,omitempty"`
 }
 
 // AgentStatus is the actual state of one agent (reconciler → control plane).

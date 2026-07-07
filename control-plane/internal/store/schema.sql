@@ -82,4 +82,28 @@ ALTER TABLE tenants DROP COLUMN IF EXISTS health;
 ALTER TABLE catalog_agents   ADD COLUMN IF NOT EXISTS type text NOT NULL DEFAULT 'prompt';
 ALTER TABLE catalog_versions ADD COLUMN IF NOT EXISTS definition jsonb NOT NULL DEFAULT '{}';
 
+-- ── Memory stores (platform-authored + tenant-created) ─────────────────────
+-- A memory store is a reusable Foundry memory configuration that agents connect
+-- to. Platform-authored stores (owner_tenant = '') are granted to tenants via
+-- entitlements; tenant-created stores (owner_tenant = <slug>) are private to
+-- their tenant.
+CREATE TABLE IF NOT EXISTS memory_stores (
+  id           text PRIMARY KEY,               -- slug
+  name         text NOT NULL,
+  description  text NOT NULL DEFAULT '',
+  owner_tenant text NOT NULL DEFAULT '',        -- '' = platform-authored; else tenant slug
+  config       jsonb NOT NULL DEFAULT '{}',      -- Foundry memory definition (forwarded verbatim)
+  created_by   text NOT NULL DEFAULT '',
+  created_at   timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS memory_stores_owner_idx ON memory_stores(owner_tenant);
+
+-- Which platform memory stores a tenant is entitled to. Auto-extended when a
+-- tenant is entitled to (or enables) an agent that references a store.
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS entitled_stores text[] NOT NULL DEFAULT '{}';
+
+-- Per-tenant override: an enabled agent may connect to a store the tenant owns
+-- or is entitled to ('' = inherit the catalog definition's memoryStore).
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS memory_store text NOT NULL DEFAULT '';
+
 
