@@ -1,48 +1,70 @@
-// Cortex — in-tenant reconciler (Azure Container App).
+// Cortex — in-tenant reconciler + its Microsoft Foundry project (self-contained).
 //
-// Packaged as an Azure Marketplace Managed Application: the customer installs it
-// into their own subscription. It deploys a user-assigned managed identity, a
-// Container Apps environment (with Log Analytics), and the reconciler container,
-// which polls the Cortex control plane and heartbeats real tenant/install state.
+// Installed into the customer's own subscription — as an Azure Marketplace
+// Managed Application, or directly via Bicep (see DEPLOYMENT.md). It deploys:
+//   • a user-assigned managed identity (the reconciler's Entra identity),
+//   • a Microsoft Foundry account + project + a model deployment,
+//   • a role assignment granting the identity the Foundry agents data plane,
+//   • a Container Apps environment (with Log Analytics) + the reconciler.
 //
-// Auth is identity-based: the reconciler presents its user-assigned managed
-// identity's Entra token for the Cortex API — no shared key, no enrollment
-// secret. Container Apps injects IDENTITY_ENDPOINT/IDENTITY_HEADER; the
-// reconciler requests a token for CORTEX_API_SCOPE using AZURE_CLIENT_ID, and
-// the control plane maps the token's tenant id (tid) to this tenant.
+// The reconciler polls the Cortex control plane and converges the tenant's
+// entitled agents into the Foundry project, then heartbeats real install state.
 //
-// tenantId, subscriptionId and region are resolved automatically from the
-// deployment — the customer only supplies the control-plane URL and org name.
+// Auth is identity-based end to end — no shared key, no enrollment secret:
+//   • to the control plane, it presents its managed identity's Entra token for
+//     CORTEX_API_SCOPE, and the control plane maps the token's tid to the tenant;
+//   • to Foundry, it presents that same identity's token, authorized by the
+//     "Cognitive Services OpenAI User" role assigned below.
+//
+// Almost everything is inferred: region (resource group), tenantId/subscriptionId
+// (deployment context), the Foundry account name (unique per resource group), and
+// the project endpoint (derived from that name). The only required input is the
+// organization display name; everything else has a sensible default.
 
 targetScope = 'resourceGroup'
 
-@description('Azure region for the reconciler resources.')
+@description('Azure region for all resources.')
 param location string = resourceGroup().location
-
-@description('Cortex control-plane base URL (the SaaS control plane).')
-param controlPlaneUrl string
-
-@description('Entra scope/resource for the Cortex control-plane API (e.g. api://<cortex-app-id>).')
-param cortexApiScope string
 
 @description('Your organization display name (shown in the Cortex fleet).')
 param tenantName string
+
+@description('Cortex control-plane API base URL.')
+param controlPlaneUrl string = 'https://api.catalyst.sincs.dev'
+
+@description('Entra scope/resource for the Cortex control-plane API.')
+param cortexApiScope string = 'api://33e1686e-d227-454a-9974-4978c567720b'
 
 @description('Plan tier.')
 @allowed([ 'team', 'enterprise', 'sovereign' ])
 param plan string = 'enterprise'
 
-@description('The Microsoft Foundry project the reconciler converges agents into (e.g. <project>/agents-prod).')
-param foundryProject string
+@description('Foundry account (AI Services) name — must be globally unique. Defaults to a stable per-resource-group name.')
+param foundryAccountName string = 'cortex-ai-${uniqueString(resourceGroup().id)}'
 
-@description('The Foundry Agent Service project endpoint the reconciler drives (https://<resource>.services.ai.azure.com/api/projects/<project>).')
-param foundryProjectEndpoint string
+@description('Foundry project name the reconciler converges agents into.')
+param foundryProjectName string = 'agents-prod'
 
-@description('Reconciler container image (published by Cortex).')
+@description('Model deployment name agents reference as their model.')
+param modelDeploymentName string = 'gpt-4o'
+
+@description('Model to deploy for agents.')
+param modelName string = 'gpt-4o'
+
+@description('Model version.')
+param modelVersion string = '2024-11-20'
+
+@description('Model deployment SKU (throughput type).')
+param modelSkuName string = 'GlobalStandard'
+
+@description('Model capacity, in thousands of tokens-per-minute. Foundry recommends >= 30 for agents/tools.')
+param modelCapacity int = 30
+
+@description('Reconciler container image (published by Cortex, or your own registry).')
 param reconcilerImage string = 'ghcr.io/inception42/cortex-reconciler:latest'
 
 @description('Reconciler build/release version reported to the control plane (match the image tag).')
-param reconcilerVersion string
+param reconcilerVersion string = '0.1.0'
 
 @description('Reconcile + heartbeat interval, in seconds.')
 @minValue(10)
@@ -52,6 +74,17 @@ param pollIntervalSeconds int = 30
 var prefix = 'cortex'
 var tenantId = tenant().tenantId
 var subscriptionId = subscription().subscriptionId
+
+// The reconciler drives this endpoint's /assistants API. Derived from the
+// account name (its custom subdomain), matching the documented Foundry project
+// endpoint format: https://<account>.services.ai.azure.com/api/projects/<project>.
+var foundryProjectEndpoint = 'https://${foundryAccountName}.services.ai.azure.com/api/projects/${foundryProjectName}'
+var foundryProjectDisplay = '${foundryAccountName}/${foundryProjectName}'
+
+// Cognitive Services OpenAI User — grants the OpenAI/assistants/* data plane the
+// Foundry Agent Service authorizes agent CRUD against. A GA role present in every
+// tenant (unlike the newer, still-rolling-out "Azure AI User").
+var openAiUserRoleId = '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd'
 
 resource logs 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   name: '${prefix}-recon-logs'
@@ -66,6 +99,69 @@ resource reconIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01
   name: '${prefix}-recon'
   location: location
 }
+
+// --- Microsoft Foundry: account + project + model -----------------------------
+
+resource foundryAccount 'Microsoft.CognitiveServices/accounts@2026-05-01' = {
+  name: foundryAccountName
+  location: location
+  kind: 'AIServices'
+  sku: { name: 'S0' }
+  identity: { type: 'SystemAssigned' }
+  properties: {
+    // customSubDomainName == account name is what makes the derived
+    // services.ai.azure.com endpoint above resolve.
+    customSubDomainName: foundryAccountName
+    // Turns this AI Services account into a Foundry account that hosts projects.
+    allowProjectManagement: true
+    publicNetworkAccess: 'Enabled'
+    // Entra-only: no API keys. The reconciler authenticates with its identity.
+    disableLocalAuth: true
+  }
+}
+
+resource foundryProject 'Microsoft.CognitiveServices/accounts/projects@2026-05-01' = {
+  parent: foundryAccount
+  name: foundryProjectName
+  location: location
+  identity: { type: 'SystemAssigned' }
+  properties: {
+    displayName: foundryProjectName
+    description: 'Cortex-managed agents for ${tenantName}'
+  }
+}
+
+// A model for agents to run on. Deployed on the account; serialized after the
+// project to avoid concurrent writes to the same account.
+resource modelDeployment 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' = {
+  parent: foundryAccount
+  name: modelDeploymentName
+  sku: {
+    name: modelSkuName
+    capacity: modelCapacity
+  }
+  properties: {
+    model: {
+      format: 'OpenAI'
+      name: modelName
+      version: modelVersion
+    }
+  }
+  dependsOn: [ foundryProject ]
+}
+
+// Grant the reconciler identity the agents data plane on the Foundry account.
+resource foundryRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(foundryAccount.id, reconIdentity.id, openAiUserRoleId)
+  scope: foundryAccount
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', openAiUserRoleId)
+    principalId: reconIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// --- Reconciler runtime -------------------------------------------------------
 
 resource env 'Microsoft.App/managedEnvironments@2024-03-01' = {
   name: '${prefix}-recon-env'
@@ -114,12 +210,7 @@ resource reconciler 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'TENANT_NAME', value: tenantName }
             { name: 'AZURE_REGION', value: location }
             { name: 'AZURE_SUBSCRIPTION_ID', value: subscriptionId }
-            { name: 'FOUNDRY_PROJECT', value: foundryProject }
-            // The reconciler drives this project's agents via the Foundry Agent
-            // Service. Its managed identity (reconIdentity) must hold the
-            // "Foundry User" role on the project so it can create/update/delete
-            // agents — assign it out of band, as the project lives outside this
-            // deployment's scope.
+            { name: 'FOUNDRY_PROJECT', value: foundryProjectDisplay }
             { name: 'FOUNDRY_PROJECT_ENDPOINT', value: foundryProjectEndpoint }
             { name: 'RECONCILER_IDENTITY', value: reconIdentity.name }
             { name: 'RECONCILER_VERSION', value: reconcilerVersion }
@@ -134,6 +225,9 @@ resource reconciler 'Microsoft.App/containerApps@2024-03-01' = {
       }
     }
   }
+  // The container isn't linked to Foundry by symbolic reference (the endpoint is
+  // a derived string), so make the ordering + RBAC propagation explicit.
+  dependsOn: [ foundryRoleAssignment, modelDeployment ]
 }
 
 output reconcilerPrincipalId string = reconIdentity.properties.principalId
@@ -141,3 +235,6 @@ output reconcilerClientId string = reconIdentity.properties.clientId
 output reconcilerIdentity string = reconIdentity.name
 output tenantId string = tenantId
 output subscriptionId string = subscriptionId
+output foundryAccountName string = foundryAccountName
+output foundryProjectName string = foundryProjectName
+output foundryProjectEndpoint string = foundryProjectEndpoint

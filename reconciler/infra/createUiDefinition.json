@@ -51,17 +51,6 @@
         }
       },
       {
-        "name": "foundryProjectEndpoint",
-        "type": "Microsoft.Common.TextBox",
-        "label": "Foundry project endpoint",
-        "toolTip": "Your Microsoft Foundry project endpoint — https://<resource>.services.ai.azure.com/api/projects/<project>. The reconciler creates and updates your prompt agents in this project.",
-        "constraints": {
-          "required": true,
-          "regex": "^https://.+\\.services\\.ai\\.azure\\.com/api/projects/.+",
-          "validationMessage": "Enter your Foundry project endpoint (https://<resource>.services.ai.azure.com/api/projects/<project>)."
-        }
-      },
-      {
         "name": "plan",
         "type": "Microsoft.Common.DropDown",
         "label": "Plan",
@@ -84,8 +73,6 @@
       "cortexApiScope": "[basics('cortexApiScope')]",
       "tenantName": "[basics('tenantName')]",
       "plan": "[basics('plan')]",
-      "foundryProject": "cortex-foundry/agents-prod",
-      "foundryProjectEndpoint": "[basics('foundryProjectEndpoint')]",
       "reconcilerVersion": "0.1.0"
     }
   }
