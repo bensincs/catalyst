@@ -1,0 +1,26 @@
+# Keep Docker build contexts lean and deterministic. Both images build from the
+# repo root; this excludes local/generated cruft from the context and from any
+# COPY of a whole directory.
+
+**/node_modules
+**/.next
+**/out
+**/dist
+**/build
+bin/
+
+.git
+.github
+.gitignore
+
+# secrets / local env (never bake into an image)
+**/.env
+**/.env.*
+!**/.env.example
+
+# local tooling / editor / os
+.opencode
+.impeccable
+**/.DS_Store
+**/*.log
+**/*.tsbuildinfo

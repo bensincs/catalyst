@@ -6,6 +6,11 @@ import { ToastProvider } from "@/components/providers/toast-provider";
 import { AppShell } from "@/components/shell/app-shell";
 import type { Environment, TenantContextInfo, TenantSummary } from "@/lib/types";
 
+// Every authed page reads the signed-in session and the control-plane API per
+// request — there is nothing to prerender. Force dynamic so `next build` never
+// tries to render (and fetch the API from) these routes with no session.
+export const dynamic = "force-dynamic";
+
 function initialsFrom(name: string, email: string): string {
   const src = (name || email || "?").trim();
   const parts = src.split(/[\s@.]+/).filter(Boolean);

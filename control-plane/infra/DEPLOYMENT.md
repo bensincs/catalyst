@@ -137,55 +137,13 @@ echo "$ACR"
 
 ## 4. Build & push the images
 
-Both images build **from the repo root** (the Go module and `shared/` must be in
-context). Save these two Dockerfiles, then let ACR build them in the cloud.
+The repo ships both Dockerfiles: **`control-plane/Dockerfile`** (Go API, distroless)
+and **`web/Dockerfile`** (Next.js standalone — `output: "standalone"` is already set
+in `web/next.config.mjs`, and the authed routes are `force-dynamic` so the build
+never needs the API). Both build **from the repo root** (the Go API needs the shared
+module + root `go.mod`); a root `.dockerignore` keeps the context lean.
 
-**`control-plane/Dockerfile`**
-
-```dockerfile
-# Build from the REPO ROOT:  az acr build -f control-plane/Dockerfile .
-FROM golang:1.26 AS build
-WORKDIR /src
-COPY go.mod go.sum ./
-RUN go mod download
-COPY shared ./shared
-COPY control-plane ./control-plane
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" \
-    -o /out/api ./control-plane/cmd/api
-
-FROM gcr.io/distroless/static-debian12:nonroot
-COPY --from=build /out/api /api
-USER nonroot:nonroot
-EXPOSE 8080
-ENTRYPOINT ["/api"]
-```
-
-**`web/Dockerfile`** — requires `output: 'standalone'` in `web/next.config.*`:
-
-```dockerfile
-FROM node:20-alpine AS deps
-WORKDIR /app
-COPY web/package.json web/package-lock.json ./
-RUN npm ci
-
-FROM node:20-alpine AS build
-WORKDIR /app
-COPY --from=deps /app/node_modules ./node_modules
-COPY web/ ./
-RUN npm run build
-
-FROM node:20-alpine AS run
-WORKDIR /app
-ENV NODE_ENV=production
-ENV PORT=3000
-COPY --from=build /app/.next/standalone ./
-COPY --from=build /app/.next/static ./.next/static
-COPY --from=build /app/public ./public
-EXPOSE 3000
-CMD ["node", "server.js"]
-```
-
-Build both in ACR (run from the repo root):
+Build both in ACR, from the repo root:
 
 ```bash
 az acr build -r "$ACR" -t cortex-api:latest     -f control-plane/Dockerfile .
