@@ -39,6 +39,7 @@ export interface AgentDefinition {
   tools?: string[];
   knowledge?: string[];
   temperature?: number;
+  topP?: number;
   // hosted
   image?: string;
   endpoint?: string;

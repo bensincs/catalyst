@@ -24,6 +24,7 @@ type AgentDefinition struct {
 	Tools        []string `json:"tools,omitempty"`
 	Knowledge    []string `json:"knowledge,omitempty"`
 	Temperature  *float64 `json:"temperature,omitempty"`
+	TopP         *float64 `json:"topP,omitempty"`
 	// hosted
 	Image    string            `json:"image,omitempty"`
 	Endpoint string            `json:"endpoint,omitempty"`

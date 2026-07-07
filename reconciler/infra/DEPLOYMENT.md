@@ -196,8 +196,8 @@ Parameters (`main.bicep`) — all optional except `tenantName`:
 
 Env injected into the container maps 1:1 to `reconciler/internal/config/config.go`
 (`CONTROL_PLANE_URL`, `CORTEX_API_SCOPE`, `TENANT_ID`, `FOUNDRY_PROJECT_ENDPOINT`,
-`AZURE_CLIENT_ID`, …). `FOUNDRY_API_VERSION` (`2025-05-01`) and `FOUNDRY_SCOPE`
-(`https://ai.azure.com/.default`) fall back to safe GA defaults in code.
+`AZURE_CLIENT_ID`, …). `FOUNDRY_API_VERSION` (`v1`, the Foundry Agents API) and
+`FOUNDRY_SCOPE` (`https://ai.azure.com/.default`) fall back to safe defaults in code.
 
 ---
 

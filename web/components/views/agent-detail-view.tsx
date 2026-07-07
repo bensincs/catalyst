@@ -151,6 +151,13 @@ export function AgentDetailView({
                 <span className={styles.defNone}>None</span>
               )}
             </div>
+            <div className={styles.defBlock}>
+              <span className={styles.defLabel}>Sampling</span>
+              <dl className={styles.facts}>
+                <Fact label="Temperature" value={agent.definition.temperature != null ? String(agent.definition.temperature) : "Model default"} />
+                <Fact label="Top P" value={agent.definition.topP != null ? String(agent.definition.topP) : "Model default"} />
+              </dl>
+            </div>
           </>
         )}
       </section>

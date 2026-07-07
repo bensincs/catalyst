@@ -78,18 +78,18 @@ var prefix = 'cortex'
 var tenantId = tenant().tenantId
 var subscriptionId = subscription().subscriptionId
 
-// The reconciler drives this endpoint's /assistants API. Derived from the
-// account name (its custom subdomain), matching the documented Foundry project
-// endpoint format: https://<account>.services.ai.azure.com/api/projects/<project>.
+// The reconciler drives this endpoint's Foundry Agents API (/agents). Derived
+// from the account name (its custom subdomain), matching the documented Foundry
+// project endpoint format: https://<account>.services.ai.azure.com/api/projects/<project>.
 var foundryProjectEndpoint = 'https://${foundryAccountName}.services.ai.azure.com/api/projects/${foundryProjectName}'
 var foundryProjectDisplay = '${foundryAccountName}/${foundryProjectName}'
 
 // Foundry User (formerly "Azure AI User") — grants the agents data plane the
-// Foundry Agent Service authorizes agent CRUD against: the /assistants endpoint
-// checks Microsoft.CognitiveServices/accounts/AIServices/agents/*, which this
-// role's Microsoft.CognitiveServices/* data actions cover. (Cognitive Services
-// OpenAI User's OpenAI/assistants/* does NOT cover it — the GA Agent Service
-// moved off the OpenAI data-action namespace.)
+// Foundry Agents API authorizes agent CRUD against: the /agents endpoint checks
+// Microsoft.CognitiveServices/accounts/AIServices/agents/*, which this role's
+// Microsoft.CognitiveServices/* data actions cover. (Cognitive Services OpenAI
+// User's OpenAI/assistants/* does NOT cover it — the new Agents API is off the
+// OpenAI data-action namespace.)
 var foundryUserRoleId = '53ca6127-db72-4b80-b1b0-d745d6d5456d'
 
 resource logs 'Microsoft.OperationalInsights/workspaces@2023-09-01' = if (deployReconcilerApp) {

@@ -18,30 +18,26 @@ type staticToken struct{}
 
 func (staticToken) Token(context.Context) (string, error) { return "test-token", nil }
 
-// fakeFoundry is an in-memory stand-in for the subset of the Foundry Agent
-// Service (Assistants-compatible) API the reconciler drives.
-type fakeFoundry struct {
-	mu                        sync.Mutex
-	seq                       int
-	items                     map[string]assistant
-	creates, updates, deletes int
-	failList                  bool
-}
-
-func newFake() *fakeFoundry { return &fakeFoundry{items: map[string]assistant{}} }
-
-func (s *fakeFoundry) store(id string, spec assistantSpec) assistant {
-	a := assistant{
-		ID: id, Model: spec.Model, Name: spec.Name, Instructions: spec.Instructions,
-		Tools: spec.Tools, Temperature: spec.Temperature, Metadata: spec.Metadata,
-	}
-	s.items[id] = a
+func mkAgent(name string, v agentVersion) agent {
+	a := agent{ID: name, Name: name, State: "enabled"}
+	a.Versions.Latest = v
 	return a
 }
 
+// fakeFoundry is an in-memory stand-in for the subset of the Foundry Agents API
+// the reconciler drives: list, create, publish-version, delete.
+type fakeFoundry struct {
+	mu                         sync.Mutex
+	items                      map[string]agent
+	creates, versions, deletes int
+	failList                   bool
+}
+
+func newFake() *fakeFoundry { return &fakeFoundry{items: map[string]agent{}} }
+
 func (s *fakeFoundry) handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/assistants", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/agents", func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		switch r.Method {
@@ -50,35 +46,48 @@ func (s *fakeFoundry) handler() http.Handler {
 				http.Error(w, "boom", http.StatusInternalServerError)
 				return
 			}
-			data := make([]assistant, 0, len(s.items))
+			data := make([]agent, 0, len(s.items))
 			for _, a := range s.items {
 				data = append(data, a)
 			}
-			_ = json.NewEncoder(w).Encode(assistantList{Data: data, HasMore: false})
+			_ = json.NewEncoder(w).Encode(agentList{Data: data})
 		case http.MethodPost: // create
-			var spec assistantSpec
-			_ = json.NewDecoder(r.Body).Decode(&spec)
-			s.seq++
+			var b createBody
+			_ = json.NewDecoder(r.Body).Decode(&b)
+			if _, ok := s.items[b.Name]; ok {
+				http.Error(w, `{"error":{"code":"conflict"}}`, http.StatusConflict)
+				return
+			}
+			s.items[b.Name] = mkAgent(b.Name, agentVersion{Version: "1", Description: b.Description, Metadata: b.Metadata, Definition: b.Definition})
 			s.creates++
-			_ = json.NewEncoder(w).Encode(s.store("asst_"+strconv.Itoa(s.seq), spec))
+			_ = json.NewEncoder(w).Encode(s.items[b.Name])
 		default:
 			w.WriteHeader(http.StatusMethodNotAllowed)
 		}
 	})
-	mux.HandleFunc("/assistants/", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/agents/", func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		id := strings.TrimPrefix(r.URL.Path, "/assistants/")
-		switch r.Method {
-		case http.MethodPost: // update
-			var spec assistantSpec
-			_ = json.NewDecoder(r.Body).Decode(&spec)
-			s.updates++
-			_ = json.NewEncoder(w).Encode(s.store(id, spec))
-		case http.MethodDelete:
-			delete(s.items, id)
+		rest := strings.TrimPrefix(r.URL.Path, "/agents/")
+		switch {
+		case strings.HasSuffix(rest, "/versions") && r.Method == http.MethodPost:
+			name := strings.TrimSuffix(rest, "/versions")
+			a, ok := s.items[name]
+			if !ok {
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+			var b versionBody
+			_ = json.NewDecoder(r.Body).Decode(&b)
+			n, _ := strconv.Atoi(a.Versions.Latest.Version)
+			a.Versions.Latest = agentVersion{Version: strconv.Itoa(n + 1), Description: b.Description, Metadata: b.Metadata, Definition: b.Definition}
+			s.items[name] = a
+			s.versions++
+			_ = json.NewEncoder(w).Encode(a)
+		case r.Method == http.MethodDelete:
+			delete(s.items, rest)
 			s.deletes++
-			_ = json.NewEncoder(w).Encode(map[string]any{"id": id, "deleted": true})
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": rest, "deleted": true})
 		default:
 			w.WriteHeader(http.StatusMethodNotAllowed)
 		}
@@ -89,7 +98,7 @@ func (s *fakeFoundry) handler() http.Handler {
 func newClient(endpoint string) *Foundry {
 	return New(config.Config{
 		FoundryEndpoint:   endpoint,
-		FoundryAPIVersion: "2025-05-01",
+		FoundryAPIVersion: "v1",
 		FoundryProject:    "test",
 	}, staticToken{})
 }
@@ -105,8 +114,8 @@ func promptAgent() shared.DesiredAgent {
 }
 
 // The core convergence contract: create when missing, no-op when unchanged,
-// update on a version/spec change, prune when de-provisioned.
-func TestReconcile_CreateNoopUpdatePrune(t *testing.T) {
+// publish a new version on a change, prune when de-provisioned.
+func TestReconcile_CreateNoopVersionPrune(t *testing.T) {
 	fake := newFake()
 	srv := httptest.NewServer(fake.handler())
 	defer srv.Close()
@@ -118,15 +127,15 @@ func TestReconcile_CreateNoopUpdatePrune(t *testing.T) {
 	if len(st) != 1 || st[0].Health != healthHealthy || st[0].Version != "v1" {
 		t.Fatalf("create: got %+v", st)
 	}
-	if fake.creates != 1 || fake.updates != 0 || fake.deletes != 0 {
-		t.Fatalf("create counts: c=%d u=%d d=%d", fake.creates, fake.updates, fake.deletes)
+	if fake.creates != 1 || fake.versions != 0 || fake.deletes != 0 {
+		t.Fatalf("create counts: c=%d v=%d d=%d", fake.creates, fake.versions, fake.deletes)
 	}
 
 	if st := f.Reconcile(ctx, []shared.DesiredAgent{a}); st[0].Health != healthHealthy {
 		t.Fatalf("noop health: %+v", st)
 	}
-	if fake.creates != 1 || fake.updates != 0 {
-		t.Fatalf("noop must not write: c=%d u=%d", fake.creates, fake.updates)
+	if fake.creates != 1 || fake.versions != 0 {
+		t.Fatalf("noop must not write: c=%d v=%d", fake.creates, fake.versions)
 	}
 
 	a2 := a
@@ -134,10 +143,10 @@ func TestReconcile_CreateNoopUpdatePrune(t *testing.T) {
 	a2.Definition.Instructions = "help more"
 	st = f.Reconcile(ctx, []shared.DesiredAgent{a2})
 	if st[0].Health != healthHealthy || st[0].Version != "v2" {
-		t.Fatalf("update status: %+v", st)
+		t.Fatalf("version status: %+v", st)
 	}
-	if fake.updates != 1 {
-		t.Fatalf("expected 1 update, got %d", fake.updates)
+	if fake.versions != 1 {
+		t.Fatalf("expected 1 new version, got %d", fake.versions)
 	}
 
 	if st := f.Reconcile(ctx, nil); len(st) != 0 {
@@ -182,8 +191,8 @@ func TestReconcile_ListFailureBlocksWithoutMutating(t *testing.T) {
 	if len(st) != 1 || st[0].Health != healthBlocked {
 		t.Fatalf("expected blocked on list failure, got %+v", st)
 	}
-	if fake.creates != 0 || fake.updates != 0 || fake.deletes != 0 {
-		t.Fatalf("must not mutate when list fails: c=%d u=%d d=%d", fake.creates, fake.updates, fake.deletes)
+	if fake.creates != 0 || fake.versions != 0 || fake.deletes != 0 {
+		t.Fatalf("must not mutate when list fails: c=%d v=%d d=%d", fake.creates, fake.versions, fake.deletes)
 	}
 }
 
@@ -191,7 +200,11 @@ func TestReconcile_ListFailureBlocksWithoutMutating(t *testing.T) {
 // project must survive a prune.
 func TestReconcile_LeavesUnmanagedAgentsAlone(t *testing.T) {
 	fake := newFake()
-	fake.items["asst_ext"] = assistant{ID: "asst_ext", Model: "gpt-4o", Metadata: map[string]string{"owner": "someone-else"}}
+	fake.items["ext"] = mkAgent("ext", agentVersion{
+		Version:    "1",
+		Metadata:   map[string]string{"owner": "someone-else"},
+		Definition: definition{Kind: promptKind, Model: "gpt-4o"},
+	})
 	srv := httptest.NewServer(fake.handler())
 	defer srv.Close()
 	f := newClient(srv.URL)
@@ -200,7 +213,43 @@ func TestReconcile_LeavesUnmanagedAgentsAlone(t *testing.T) {
 	if fake.deletes != 0 {
 		t.Fatalf("must not delete unmanaged agents, got %d", fake.deletes)
 	}
-	if _, ok := fake.items["asst_ext"]; !ok {
+	if _, ok := fake.items["ext"]; !ok {
 		t.Fatalf("unmanaged agent was removed")
+	}
+}
+
+func TestAgentNameSanitizes(t *testing.T) {
+	cases := map[string]string{
+		"sdfsd":            "sdfsd",
+		"a1":               "a1",
+		"my agent:v2":      "my-agent-v2",
+		"weird/id.ok_yes-": "weird-id-ok-yes",
+	}
+	for in, want := range cases {
+		if got := agentName(in); got != want {
+			t.Errorf("agentName(%q)=%q want %q", in, got, want)
+		}
+	}
+}
+
+// Tools that need configuration the contract doesn't carry (file_search,
+// function, connection-based) are skipped; bare-type tools are kept in order.
+func TestDefinitionFor_SkipsUnconfigurableTools(t *testing.T) {
+	f := newClient("http://x")
+	d := shared.DesiredAgent{
+		AgentID: "a1", Model: "gpt-4o",
+		Definition: shared.AgentDefinition{Tools: []string{"code_interpreter", "file_search", "web", "function"}},
+	}
+	def, skipped := f.definitionFor(d)
+
+	var kept []string
+	for _, td := range def.Tools {
+		kept = append(kept, td.Type)
+	}
+	if len(kept) != 2 || kept[0] != "code_interpreter" || kept[1] != "web" {
+		t.Fatalf("kept tools = %v, want [code_interpreter web]", kept)
+	}
+	if len(skipped) != 2 || skipped[0] != "file_search" || skipped[1] != "function" {
+		t.Fatalf("skipped = %v, want [file_search function]", skipped)
 	}
 }

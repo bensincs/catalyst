@@ -322,6 +322,34 @@ function DefinitionFields({
           ))}
         </div>
       </Field>
+      <div className={styles.formRow}>
+        <Field label="Temperature" htmlFor="def-temp" hint="0–2. Blank uses the model default.">
+          <TextInput
+            id="def-temp"
+            type="number"
+            min={0}
+            max={2}
+            step={0.1}
+            inputMode="decimal"
+            value={value.temperature ?? ""}
+            onChange={(e) => set({ temperature: e.target.value.trim() === "" ? undefined : Number(e.target.value) })}
+            placeholder="default"
+          />
+        </Field>
+        <Field label="Top P" htmlFor="def-topp" hint="0–1. Blank uses the model default.">
+          <TextInput
+            id="def-topp"
+            type="number"
+            min={0}
+            max={1}
+            step={0.05}
+            inputMode="decimal"
+            value={value.topP ?? ""}
+            onChange={(e) => set({ topP: e.target.value.trim() === "" ? undefined : Number(e.target.value) })}
+            placeholder="default"
+          />
+        </Field>
+      </div>
     </>
   );
 }

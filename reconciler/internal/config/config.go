@@ -12,7 +12,7 @@ import (
 // reported values — they're safe GA defaults for the API surface — so defaulting
 // them doesn't violate the "report nothing you weren't told" rule below.
 const (
-	defaultFoundryAPIVersion = "2025-05-01"                    // GA (preview: 2025-05-15-preview)
+	defaultFoundryAPIVersion = "v1"                            // Foundry Agents API (new /agents surface)
 	defaultFoundryScope      = "https://ai.azure.com/.default" // Entra resource for Foundry
 )
 
