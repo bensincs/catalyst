@@ -14,7 +14,7 @@
 //   • to the control plane, it presents its managed identity's Entra token for
 //     CORTEX_API_SCOPE, and the control plane maps the token's tid to the tenant;
 //   • to Foundry, it presents that same identity's token, authorized by the
-//     "Cognitive Services OpenAI User" role assigned below.
+//     "Foundry User" role assigned below.
 //
 // Almost everything is inferred: region (resource group), tenantId/subscriptionId
 // (deployment context), the Foundry account name (unique per resource group), and
@@ -71,6 +71,9 @@ param reconcilerVersion string = '0.1.0'
 @maxValue(300)
 param pollIntervalSeconds int = 30
 
+@description('Deploy the in-Azure reconciler container app. Set false to deploy only the Foundry backing (account/project/model + identity + RBAC) and run the reconciler elsewhere — e.g. locally.')
+param deployReconcilerApp bool = true
+
 var prefix = 'cortex'
 var tenantId = tenant().tenantId
 var subscriptionId = subscription().subscriptionId
@@ -81,12 +84,15 @@ var subscriptionId = subscription().subscriptionId
 var foundryProjectEndpoint = 'https://${foundryAccountName}.services.ai.azure.com/api/projects/${foundryProjectName}'
 var foundryProjectDisplay = '${foundryAccountName}/${foundryProjectName}'
 
-// Cognitive Services OpenAI User — grants the OpenAI/assistants/* data plane the
-// Foundry Agent Service authorizes agent CRUD against. A GA role present in every
-// tenant (unlike the newer, still-rolling-out "Azure AI User").
-var openAiUserRoleId = '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd'
+// Foundry User (formerly "Azure AI User") — grants the agents data plane the
+// Foundry Agent Service authorizes agent CRUD against: the /assistants endpoint
+// checks Microsoft.CognitiveServices/accounts/AIServices/agents/*, which this
+// role's Microsoft.CognitiveServices/* data actions cover. (Cognitive Services
+// OpenAI User's OpenAI/assistants/* does NOT cover it — the GA Agent Service
+// moved off the OpenAI data-action namespace.)
+var foundryUserRoleId = '53ca6127-db72-4b80-b1b0-d745d6d5456d'
 
-resource logs 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
+resource logs 'Microsoft.OperationalInsights/workspaces@2023-09-01' = if (deployReconcilerApp) {
   name: '${prefix}-recon-logs'
   location: location
   properties: {
@@ -152,10 +158,10 @@ resource modelDeployment 'Microsoft.CognitiveServices/accounts/deployments@2024-
 
 // Grant the reconciler identity the agents data plane on the Foundry account.
 resource foundryRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(foundryAccount.id, reconIdentity.id, openAiUserRoleId)
+  name: guid(foundryAccount.id, reconIdentity.id, foundryUserRoleId)
   scope: foundryAccount
   properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', openAiUserRoleId)
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', foundryUserRoleId)
     principalId: reconIdentity.properties.principalId
     principalType: 'ServicePrincipal'
   }
@@ -163,21 +169,21 @@ resource foundryRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-
 
 // --- Reconciler runtime -------------------------------------------------------
 
-resource env 'Microsoft.App/managedEnvironments@2024-03-01' = {
+resource env 'Microsoft.App/managedEnvironments@2024-03-01' = if (deployReconcilerApp) {
   name: '${prefix}-recon-env'
   location: location
   properties: {
     appLogsConfiguration: {
       destination: 'log-analytics'
       logAnalyticsConfiguration: {
-        customerId: logs.properties.customerId
-        sharedKey: logs.listKeys().primarySharedKey
+        customerId: logs!.properties.customerId
+        sharedKey: logs!.listKeys().primarySharedKey
       }
     }
   }
 }
 
-resource reconciler 'Microsoft.App/containerApps@2024-03-01' = {
+resource reconciler 'Microsoft.App/containerApps@2024-03-01' = if (deployReconcilerApp) {
   name: '${prefix}-reconciler'
   location: location
   identity: {

@@ -12,7 +12,7 @@ installs, or bootstrapping a tenant before the offer is published.
  customer subscription (one per tenant)
  ┌───────────────────────────────────────────────────────────────┐
  │  cortex-reconciler  (Container App, no ingress)                │
- │        │  identity token (Cognitive Services OpenAI User)      │
+ │        │  identity token (Foundry User)                         │
  │        ▼                                                        │
  │  cortex-ai-<hash>  (Foundry account) / agents-prod  (project)  │
  │        └─ gpt-4o   (model deployment)                          │
@@ -34,7 +34,7 @@ derived from that name.
 | Foundry account (AI Services) | `cortex-ai-<hash>` | `kind: AIServices`, `allowProjectManagement`, Entra-only (`disableLocalAuth`) |
 | Foundry project | `agents-prod` | where agents are converged |
 | Model deployment | `gpt-4o` | what agents run on |
-| Role assignment | — | identity → **Cognitive Services OpenAI User** on the account (the `OpenAI/assistants/*` data plane) |
+| Role assignment | — | identity → **Foundry User** on the account (the `AIServices/agents/*` data plane) |
 | Managed environment | `cortex-recon-env` | Container Apps env |
 | Container app | `cortex-reconciler` | outbound-only worker, 1 replica |
 
@@ -113,6 +113,20 @@ Common overrides:
 The template assigns a role, so it can take a minute for the identity's principal
 to replicate before the assignment succeeds; a re-run is idempotent if it races.
 
+> **Backing-only / run the reconciler elsewhere.** Add `-p deployReconcilerApp=false`
+> to deploy just the Foundry account/project/model + identity + RBAC and skip the
+> in-Azure container app (and its image). Then run the reconciler wherever you like —
+> e.g. locally with `FOUNDRY_PROJECT_ENDPOINT` set to the `foundryProjectEndpoint`
+> output. Grant *your* principal **Foundry User** on the account too (the template
+> only grants the managed identity):
+>
+> ```bash
+> az role assignment create --assignee "$(az ad signed-in-user show --query id -o tsv)" \
+>   --role "Foundry User" \
+>   --scope "$(az deployment group show -g "$RG" -n main --query properties.outputs.foundryAccountName.value -o tsv | xargs -I{} az cognitiveservices account show -g "$RG" -n {} --query id -o tsv)"
+> ```
+> Data-plane RBAC can take several minutes to propagate before the API returns 200.
+
 ---
 
 ## 4. Verify
@@ -151,11 +165,12 @@ The reconciler presents its **user-assigned managed identity** everywhere:
   against Entra's JWKS and maps the token's `tid` to the tenant. There is no
   enrollment key.
 - **To Foundry** — a token for `https://ai.azure.com/.default`, authorized by the
-  **Cognitive Services OpenAI User** role this template grants on the account. That
-  role carries `Microsoft.CognitiveServices/accounts/OpenAI/assistants/*`, which is
-  what the Agent Service checks for agent create/update/delete. (The newer, least-
-  privilege **Azure AI User** role is preferable once it's available in your tenant;
-  swap `openAiUserRoleId` in the template if so.)
+  **Foundry User** role this template grants on the account (the GA rename of "Azure
+  AI User"). The Agent Service checks the
+  `Microsoft.CognitiveServices/accounts/AIServices/agents/*` data action for agent
+  create/update/delete, which this role's `Microsoft.CognitiveServices/*` covers.
+  Note the OpenAI-family roles (Cognitive Services OpenAI User's
+  `OpenAI/assistants/*`) do **not** — the GA Agent Service left that namespace.
 
 ---
 
@@ -177,6 +192,7 @@ Parameters (`main.bicep`) — all optional except `tenantName`:
 | `reconcilerImage` | `ghcr.io/inception42/cortex-reconciler:latest` | container image |
 | `reconcilerVersion` | `0.1.0` | version reported to the control plane |
 | `pollIntervalSeconds` | `30` | reconcile + heartbeat interval |
+| `deployReconcilerApp` | `true` | set `false` to deploy only the Foundry backing (account/project/model + identity + RBAC) and run the reconciler elsewhere — e.g. locally |
 
 Env injected into the container maps 1:1 to `reconciler/internal/config/config.go`
 (`CONTROL_PLANE_URL`, `CORTEX_API_SCOPE`, `TENANT_ID`, `FOUNDRY_PROJECT_ENDPOINT`,
@@ -206,8 +222,11 @@ The template optimizes for a clean first deployment. For production:
 - **Private registry** — instead of anonymous pull, grant `cortex-recon` the
   `AcrPull` role on the registry and add a `registries` block to the container app
   referencing the identity.
-- **Least-privilege role** — use **Azure AI User** (agents-only data plane) instead
-  of Cognitive Services OpenAI User once it's rolled out in your tenant.
+- **Least-privilege role** — the template uses **Foundry User**, whose broad
+  `Microsoft.CognitiveServices/*` data actions include the agents plane. For tighter
+  scope, define a custom role granting only
+  `Microsoft.CognitiveServices/accounts/AIServices/agents/*` and swap
+  `foundryUserRoleId`.
 - **Private networking** — VNet-inject the managed environment and give the Foundry
   account a private endpoint (drop `publicNetworkAccess`).
 - **Pin the image** to an immutable tag (`:<git-sha>`) for auditable rollouts.
