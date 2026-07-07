@@ -8,6 +8,14 @@ import (
 	"time"
 )
 
+// Protocol constants for the Foundry Agent Service data plane. These are not
+// reported values — they're safe GA defaults for the API surface — so defaulting
+// them doesn't violate the "report nothing you weren't told" rule below.
+const (
+	defaultFoundryAPIVersion = "2025-05-01"                    // GA (preview: 2025-05-15-preview)
+	defaultFoundryScope      = "https://ai.azure.com/.default" // Entra resource for Foundry
+)
+
 type Config struct {
 	ControlPlaneURL    string
 	CortexAPIScope     string // Entra scope/resource for the control-plane API
@@ -16,7 +24,10 @@ type Config struct {
 	Region             string
 	SubscriptionID     string
 	Plan               string
-	FoundryProject     string
+	FoundryProject     string // display name reported in the heartbeat
+	FoundryEndpoint    string // Foundry project endpoint the reconciler drives
+	FoundryAPIVersion  string // Foundry data-plane api-version
+	FoundryScope       string // Entra scope for the Foundry token
 	ReconcilerIdentity string
 	ReconcilerVersion  string
 	PollInterval       time.Duration
@@ -31,6 +42,14 @@ func Load() Config {
 	if v, err := strconv.Atoi(env("POLL_INTERVAL_SECONDS")); err == nil {
 		poll = v
 	}
+	foundryAPIVersion := strings.TrimSpace(env("FOUNDRY_API_VERSION"))
+	if foundryAPIVersion == "" {
+		foundryAPIVersion = defaultFoundryAPIVersion
+	}
+	foundryScope := strings.TrimSpace(env("FOUNDRY_SCOPE"))
+	if foundryScope == "" {
+		foundryScope = defaultFoundryScope
+	}
 	return Config{
 		ControlPlaneURL:    strings.TrimRight(env("CONTROL_PLANE_URL"), "/"),
 		CortexAPIScope:     env("CORTEX_API_SCOPE"),
@@ -40,6 +59,9 @@ func Load() Config {
 		SubscriptionID:     env("AZURE_SUBSCRIPTION_ID"),
 		Plan:               env("PLAN"),
 		FoundryProject:     env("FOUNDRY_PROJECT"),
+		FoundryEndpoint:    strings.TrimRight(strings.TrimSpace(env("FOUNDRY_PROJECT_ENDPOINT")), "/"),
+		FoundryAPIVersion:  foundryAPIVersion,
+		FoundryScope:       foundryScope,
 		ReconcilerIdentity: env("RECONCILER_IDENTITY"),
 		ReconcilerVersion:  env("RECONCILER_VERSION"),
 		PollInterval:       time.Duration(poll) * time.Second,
@@ -58,6 +80,7 @@ func (c Config) Missing() []string {
 		{"AZURE_SUBSCRIPTION_ID", c.SubscriptionID},
 		{"PLAN", c.Plan},
 		{"FOUNDRY_PROJECT", c.FoundryProject},
+		{"FOUNDRY_PROJECT_ENDPOINT", c.FoundryEndpoint},
 		{"RECONCILER_IDENTITY", c.ReconcilerIdentity},
 		{"RECONCILER_VERSION", c.ReconcilerVersion},
 	}

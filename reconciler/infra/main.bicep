@@ -35,6 +35,9 @@ param plan string = 'enterprise'
 @description('The Microsoft Foundry project the reconciler converges agents into (e.g. <project>/agents-prod).')
 param foundryProject string
 
+@description('The Foundry Agent Service project endpoint the reconciler drives (https://<resource>.services.ai.azure.com/api/projects/<project>).')
+param foundryProjectEndpoint string
+
 @description('Reconciler container image (published by Cortex).')
 param reconcilerImage string = 'ghcr.io/inception42/cortex-reconciler:latest'
 
@@ -112,6 +115,12 @@ resource reconciler 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'AZURE_REGION', value: location }
             { name: 'AZURE_SUBSCRIPTION_ID', value: subscriptionId }
             { name: 'FOUNDRY_PROJECT', value: foundryProject }
+            // The reconciler drives this project's agents via the Foundry Agent
+            // Service. Its managed identity (reconIdentity) must hold the
+            // "Foundry User" role on the project so it can create/update/delete
+            // agents — assign it out of band, as the project lives outside this
+            // deployment's scope.
+            { name: 'FOUNDRY_PROJECT_ENDPOINT', value: foundryProjectEndpoint }
             { name: 'RECONCILER_IDENTITY', value: reconIdentity.name }
             { name: 'RECONCILER_VERSION', value: reconcilerVersion }
             { name: 'PLAN', value: plan }

@@ -22,11 +22,15 @@ func main() {
 		os.Exit(1)
 	}
 
-	src, err := tokens.NewSource(cfg.CortexAPIScope)
+	cred, err := tokens.NewCredential()
 	if err != nil {
 		slog.Error("azure credential setup failed", "err", err)
 		os.Exit(1)
 	}
+	// One credential, two scopes: the Cortex control-plane API and the in-tenant
+	// Foundry Agent Service.
+	apiSrc := tokens.SourceFor(cred, cfg.CortexAPIScope)
+	foundrySrc := tokens.SourceFor(cred, cfg.FoundryScope)
 
 	slog.Info("cortex reconciler starting",
 		"controlPlane", cfg.ControlPlaneURL,
@@ -34,6 +38,8 @@ func main() {
 		"tenantName", cfg.TenantName,
 		"region", cfg.Region,
 		"foundryProject", cfg.FoundryProject,
+		"foundryEndpoint", cfg.FoundryEndpoint,
+		"foundryApiVersion", cfg.FoundryAPIVersion,
 		"reconcilerIdentity", cfg.ReconcilerIdentity,
 		"reconcilerVersion", cfg.ReconcilerVersion,
 		"authScope", cfg.CortexAPIScope,
@@ -43,6 +49,6 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	loop.New(cfg, src).Run(ctx)
+	loop.New(cfg, apiSrc, foundrySrc).Run(ctx)
 	slog.Info("cortex reconciler stopped")
 }

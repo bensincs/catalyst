@@ -22,11 +22,11 @@ type Reconciler struct {
 	foundry *foundry.Foundry
 }
 
-func New(cfg config.Config, src tokens.Source) *Reconciler {
+func New(cfg config.Config, apiSrc tokens.Source, foundrySrc tokens.Source) *Reconciler {
 	return &Reconciler{
 		cfg:     cfg,
-		cp:      controlplane.New(cfg.ControlPlaneURL, src),
-		foundry: foundry.New(),
+		cp:      controlplane.New(cfg.ControlPlaneURL, apiSrc),
+		foundry: foundry.New(cfg, foundrySrc),
 	}
 }
 
@@ -53,7 +53,7 @@ func (r *Reconciler) once(ctx context.Context) {
 		slog.Warn("sync failed; will retry", "err", err)
 		return
 	}
-	statuses := r.foundry.Reconcile(desired.Agents)
+	statuses := r.foundry.Reconcile(ctx, desired.Agents)
 	hb := r.heartbeat(statuses)
 	if err := r.cp.Heartbeat(ctx, hb); err != nil {
 		slog.Warn("heartbeat failed", "err", err)
