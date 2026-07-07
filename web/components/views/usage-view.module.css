@@ -102,11 +102,11 @@
   inset: 0 auto 0 0;
   height: 100%;
   border-radius: var(--radius-full);
-  background: var(--accent);
-  transition: width var(--dur-slow) var(--ease-out-expo);
-}
-.barFill[data-series="model"] {
+  /* Volume bars are a data series, not a status — violet (the chart hue), never
+     lime. Lime stays reserved for live/healthy/action; each row's status lives
+     in its dot. Calls-by-agent and calls-by-model now read as one system. */
   background: var(--info);
+  transition: width var(--dur-slow) var(--ease-out-expo);
 }
 
 .rowFigs {
