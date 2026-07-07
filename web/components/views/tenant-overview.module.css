@@ -332,9 +332,14 @@
   display: flex;
   align-items: center;
   gap: 7px;
+  flex-wrap: wrap;
   margin-top: 2px;
   font-size: var(--text-caption);
   color: var(--text-muted);
+}
+/* Version + model are identifiers — never let them break mid-token. */
+.agentMeta .mono {
+  white-space: nowrap;
 }
 .metaSep {
   color: var(--border-strong);
@@ -398,5 +403,14 @@
   }
   .agentStatus {
     width: auto;
+  }
+  /* Give the reconcile note its own line instead of crushing it beside the
+     version/model in a narrow column. */
+  .agentMeta .metaSep[data-note] {
+    display: none;
+  }
+  .agentNote {
+    flex-basis: 100%;
+    margin-top: 1px;
   }
 }

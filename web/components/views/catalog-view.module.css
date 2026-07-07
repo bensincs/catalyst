@@ -100,6 +100,20 @@
   flex: none;
 }
 
+/* Mobile: the desktop [icon][content][action] row squeezes the description into
+   a sliver. Below 640px keep icon + content on the first line and drop the
+   action to its own full-width line (a comfortable thumb target). */
+@media (max-width: 640px) {
+  .row {
+    flex-wrap: wrap;
+  }
+  .row > :last-child {
+    flex-basis: 100%;
+    margin-top: 12px;
+    justify-content: center;
+  }
+}
+
 /* Modal form bits */
 .formRow {
   display: grid;

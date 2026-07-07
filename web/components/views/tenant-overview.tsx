@@ -268,7 +268,7 @@ function AgentRow({ agent, onConfigure }: { agent: EnabledAgent; onConfigure: ()
             <span className="mono">{agent.model}</span>
             {agent.note && (
               <>
-                <span className={styles.metaSep} aria-hidden>·</span>
+                <span className={styles.metaSep} data-note aria-hidden>·</span>
                 <span className={styles.agentNote}>{agent.note}</span>
               </>
             )}

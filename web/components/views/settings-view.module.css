@@ -219,7 +219,14 @@
   .govItem {
     flex-wrap: wrap;
   }
+  .govText {
+    /* Fill the first line so the action can't sit beside it and shrink it to a
+       sliver — it wraps to its own line instead. */
+    flex-basis: calc(100% - 48px);
+  }
   .govLink {
-    margin-left: 48px;
+    flex-basis: 100%;
+    margin-top: 12px;
+    justify-content: center;
   }
 }

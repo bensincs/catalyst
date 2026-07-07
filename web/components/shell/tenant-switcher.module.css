@@ -5,6 +5,7 @@
   height: 40px;
   padding: 0 10px 0 8px;
   max-width: 280px;
+  min-width: 0;
   border-radius: var(--radius-md);
   border: 1px solid transparent;
   transition: background-color var(--dur-fast) var(--ease-out-quart),
@@ -71,6 +72,21 @@
 .chevron {
   color: var(--text-muted);
   flex: none;
+}
+
+/* Mobile topbar: the switcher shares a tight bar with search + the PROD env
+   badge (which must stay legible) + account. Collapse it to an icon-only
+   context chip — the tenant name is on every page header, and the full identity
+   (plan, region, IDs) is one tap away in the menu. */
+@media (max-width: 560px) {
+  .trigger {
+    max-width: none;
+    gap: 4px;
+    padding: 0 6px;
+  }
+  .text {
+    display: none;
+  }
 }
 
 /* Tenant identity panel */
