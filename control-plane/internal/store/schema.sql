@@ -153,4 +153,19 @@ CREATE INDEX IF NOT EXISTS tenant_stores_tenant_idx ON tenant_stores(tenant_slug
 -- agents, memory stores, and tenants all speak the same words.
 UPDATE agents SET health = 'live' WHERE health = 'healthy';
 
+-- Backfill: enable (as auto rows) every store already bound by an enabled agent,
+-- so moving to explicit store enablement doesn't strand existing agent memory.
+-- Idempotent + also enforces the invariant "a referenced store is enabled".
+INSERT INTO tenant_stores (tenant_slug, store_id, health, auto)
+SELECT DISTINCT a.tenant_slug, sid.store_id, 'reconciling', true
+FROM agents a
+CROSS JOIN LATERAL (
+  SELECT coalesce(nullif(a.memory_store, ''),
+                  (SELECT v.definition->>'memoryStore' FROM catalog_versions v
+                   WHERE v.agent_id = a.agent_id ORDER BY v.created_at DESC LIMIT 1)) AS store_id
+) sid
+WHERE sid.store_id IS NOT NULL AND sid.store_id <> ''
+  AND EXISTS (SELECT 1 FROM memory_stores m WHERE m.id = sid.store_id)
+ON CONFLICT (tenant_slug, store_id) DO NOTHING;
+
 
