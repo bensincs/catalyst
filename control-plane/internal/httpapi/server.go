@@ -348,9 +348,9 @@ func (s *Server) handleMemoryStores(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleCreateMemoryStore(w http.ResponseWriter, r *http.Request) {
 	id, _ := auth.IdentityFrom(r.Context())
 	var body struct {
-		Name        string          `json:"name"`
-		Description string          `json:"description"`
-		Config      json.RawMessage `json:"config"`
+		Name        string                       `json:"name"`
+		Description string                       `json:"description"`
+		Definition  shared.MemoryStoreDefinition `json:"definition"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
@@ -359,6 +359,15 @@ func (s *Server) handleCreateMemoryStore(w http.ResponseWriter, r *http.Request)
 	if slug == "" {
 		writeErr(w, http.StatusBadRequest, "name is required")
 		return
+	}
+	def := body.Definition
+	// The models are required by Foundry; default to the standard project
+	// deployments so a store is always provisionable.
+	if strings.TrimSpace(def.ChatModel) == "" {
+		def.ChatModel = "gpt-4o"
+	}
+	if strings.TrimSpace(def.EmbeddingModel) == "" {
+		def.EmbeddingModel = "text-embedding-3-small"
 	}
 	owner := "" // platform-authored by default
 	if id.Role == model.RoleTenant {
@@ -370,7 +379,7 @@ func (s *Server) handleCreateMemoryStore(w http.ResponseWriter, r *http.Request)
 		slug = t.ID + "-" + slug // namespace tenant stores to avoid platform-slug collisions
 	}
 	if err := s.store.CreateMemoryStore(r.Context(), slug, strings.TrimSpace(body.Name),
-		strings.TrimSpace(body.Description), owner, body.Config, id.OID); err != nil {
+		strings.TrimSpace(body.Description), owner, def, id.OID); err != nil {
 		if isDup(err) {
 			writeErr(w, http.StatusConflict, "a memory store with that name already exists")
 			return
@@ -415,9 +424,8 @@ func (s *Server) handleUpdateMemoryStore(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var body struct {
-		Name        string          `json:"name"`
-		Description string          `json:"description"`
-		Config      json.RawMessage `json:"config"`
+		Name        string `json:"name"`
+		Description string `json:"description"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
@@ -427,7 +435,7 @@ func (s *Server) handleUpdateMemoryStore(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if err := s.store.UpdateMemoryStore(r.Context(), storeID, strings.TrimSpace(body.Name),
-		strings.TrimSpace(body.Description), body.Config); err != nil {
+		strings.TrimSpace(body.Description)); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			writeErr(w, http.StatusNotFound, "memory store not found")
 			return

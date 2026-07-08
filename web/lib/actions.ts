@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { apiSend, ApiError } from "@/lib/api";
-import type { AgentDefinition, AgentType } from "@/lib/types";
+import type { AgentDefinition, AgentType, MemoryStoreDefinition } from "@/lib/types";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
 
@@ -74,14 +74,16 @@ export async function disableAgent(agentId: string): Promise<ActionResult> {
 export async function createMemoryStore(input: {
   name: string;
   description: string;
-  config: unknown;
+  definition: MemoryStoreDefinition;
 }): Promise<ActionResult> {
   return run(() => apiSend("POST", "/api/memory-stores", input), ["/memory-stores"]);
 }
 
+// A store's definition is immutable (the Foundry resource has no update surface),
+// so only its name + description can be edited.
 export async function updateMemoryStore(
   id: string,
-  input: { name: string; description: string; config: unknown },
+  input: { name: string; description: string },
 ): Promise<ActionResult> {
   return run(
     () => apiSend("PATCH", `/api/memory-stores/${encodeURIComponent(id)}`, input),

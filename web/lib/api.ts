@@ -9,6 +9,7 @@ import type {
   EnabledAgent,
   FleetStats,
   MemoryStore,
+  MemoryStoreDefinition,
   Plan,
   EnrollmentStatus,
   Health,
@@ -327,12 +328,26 @@ interface ApiMemoryStore {
   name: string;
   description: string;
   owner: string;
-  config: unknown;
+  definition?: Partial<MemoryStoreDefinition> | null;
   createdAt: string;
   ownerName?: string;
   platform?: boolean;
   owned?: boolean;
   entitled?: boolean;
+}
+
+/** Fill in a complete definition from a possibly-partial API payload, so the UI
+ * always has concrete values (matching the server + Foundry defaults). */
+function normalizeStoreDefinition(d?: Partial<MemoryStoreDefinition> | null): MemoryStoreDefinition {
+  return {
+    chatModel: d?.chatModel || "gpt-4o",
+    embeddingModel: d?.embeddingModel || "text-embedding-3-small",
+    userProfileEnabled: d?.userProfileEnabled ?? true,
+    userProfileDetails: d?.userProfileDetails ?? "",
+    chatSummaryEnabled: d?.chatSummaryEnabled ?? true,
+    proceduralMemoryEnabled: d?.proceduralMemoryEnabled ?? true,
+    ttlSeconds: d?.ttlSeconds ?? 0,
+  };
 }
 
 export const getMemoryStores = cache(async (): Promise<MemoryStore[]> => {
@@ -342,7 +357,7 @@ export const getMemoryStores = cache(async (): Promise<MemoryStore[]> => {
     name: s.name,
     description: s.description,
     owner: s.owner ?? "",
-    config: s.config ?? {},
+    definition: normalizeStoreDefinition(s.definition),
     createdAt: s.createdAt,
     ownerName: s.ownerName,
     platform: s.platform ?? s.owner === "",

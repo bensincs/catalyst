@@ -6,7 +6,7 @@ import { Database, Pencil, Plus, Trash2 } from "lucide-react";
 import { PageHeader } from "@/components/ui/page-header";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
-import { Field, TextInput, Textarea } from "@/components/ui/form";
+import { Field, TextInput, Textarea, Checkbox } from "@/components/ui/form";
 import { EmptyState } from "@/components/ui/empty-state";
 import { StatusBadge } from "@/components/ui/status";
 import { useToast } from "@/components/providers/toast-provider";
@@ -16,10 +16,20 @@ import {
   updateMemoryStore,
   type ActionResult,
 } from "@/lib/actions";
-import type { MemoryStore, Role } from "@/lib/types";
+import type { MemoryStore, MemoryStoreDefinition, Role } from "@/lib/types";
 import styles from "./memory-stores-view.module.css";
 
 type Modal2 = { mode: "new" } | { mode: "edit"; store: MemoryStore } | null;
+
+const DEFAULT_DEFINITION: MemoryStoreDefinition = {
+  chatModel: "gpt-4o",
+  embeddingModel: "text-embedding-3-small",
+  userProfileEnabled: true,
+  userProfileDetails: "",
+  chatSummaryEnabled: true,
+  proceduralMemoryEnabled: true,
+  ttlSeconds: 0,
+};
 
 export function MemoryStoresView({ role, stores }: { role: Role; stores: MemoryStore[] }) {
   const router = useRouter();
@@ -100,10 +110,7 @@ export function MemoryStoresView({ role, stores }: { role: Role; stores: MemoryS
                     )}
                   </div>
                   {s.description && <p className={styles.rowDesc}>{s.description}</p>}
-                  <div className={styles.rowMeta}>
-                    <span className={styles.metaKey}>config</span>
-                    <span className="mono">{configPreview(s.config)}</span>
-                  </div>
+                  <DefinitionChips def={s.definition} />
                 </div>
                 {manageable(s) && (
                   <div className={styles.rowActions}>
@@ -135,8 +142,21 @@ export function MemoryStoresView({ role, stores }: { role: Role; stores: MemoryS
           onClose={() => setModal(null)}
           onSubmit={(input) =>
             modal.mode === "edit"
-              ? runAction(() => updateMemoryStore(modal.store.id, input), `Updated ${input.name}`, () => setModal(null))
-              : runAction(() => createMemoryStore(input), `Created ${input.name}`, () => setModal(null))
+              ? runAction(
+                  () => updateMemoryStore(modal.store.id, { name: input.name, description: input.description }),
+                  `Updated ${input.name}`,
+                  () => setModal(null),
+                )
+              : runAction(
+                  () =>
+                    createMemoryStore({
+                      name: input.name,
+                      description: input.description,
+                      definition: input.definition,
+                    }),
+                  `Created ${input.name}`,
+                  () => setModal(null),
+                )
           }
         />
       )}
@@ -144,14 +164,40 @@ export function MemoryStoresView({ role, stores }: { role: Role; stores: MemoryS
   );
 }
 
-function configPreview(config: unknown): string {
-  try {
-    const s = JSON.stringify(config);
-    if (!s || s === "{}") return "—";
-    return s.length > 60 ? s.slice(0, 60) + "…" : s;
-  } catch {
-    return "—";
+function formatTTL(seconds: number): string {
+  if (seconds <= 0) return "never";
+  const units: [number, string][] = [
+    [86400, "d"],
+    [3600, "h"],
+    [60, "m"],
+  ];
+  for (const [size, suffix] of units) {
+    if (seconds % size === 0 || seconds >= size) return `${Math.round(seconds / size)}${suffix}`;
   }
+  return `${seconds}s`;
+}
+
+function DefinitionChips({ def }: { def: MemoryStoreDefinition }) {
+  return (
+    <div className={styles.chips}>
+      <span className={styles.chip} title="Chat model deployment">
+        <span className="mono">{def.chatModel}</span>
+      </span>
+      <span className={styles.chip} title="Embedding model deployment">
+        <span className="mono">{def.embeddingModel}</span>
+      </span>
+      <span className={styles.chip} data-off={!def.userProfileEnabled}>
+        Profile
+      </span>
+      <span className={styles.chip} data-off={!def.chatSummaryEnabled}>
+        Summary
+      </span>
+      <span className={styles.chip} data-off={!def.proceduralMemoryEnabled}>
+        Procedural
+      </span>
+      {def.ttlSeconds > 0 && <span className={styles.chip}>TTL {formatTTL(def.ttlSeconds)}</span>}
+    </div>
+  );
 }
 
 function StoreModal({
@@ -163,67 +209,179 @@ function StoreModal({
   store: MemoryStore | null;
   pending: boolean;
   onClose: () => void;
-  onSubmit: (input: { name: string; description: string; config: unknown }) => void;
+  onSubmit: (input: { name: string; description: string; definition: MemoryStoreDefinition }) => void;
 }) {
+  const editing = store !== null;
   const [name, setName] = useState(store?.name ?? "");
   const [description, setDescription] = useState(store?.description ?? "");
-  const [configText, setConfigText] = useState(
-    store && store.config && JSON.stringify(store.config) !== "{}"
-      ? JSON.stringify(store.config, null, 2)
-      : "",
-  );
-  const [err, setErr] = useState<string | null>(null);
+  const [def, setDef] = useState<MemoryStoreDefinition>(store?.definition ?? DEFAULT_DEFINITION);
 
-  const submit = () => {
-    let config: unknown = {};
-    if (configText.trim() !== "") {
-      try {
-        config = JSON.parse(configText);
-      } catch (e) {
-        setErr((e as Error).message);
-        return;
-      }
-    }
-    onSubmit({ name: name.trim(), description: description.trim(), config });
-  };
+  const patch = (p: Partial<MemoryStoreDefinition>) => setDef((d) => ({ ...d, ...p }));
+
+  const submit = () => onSubmit({ name: name.trim(), description: description.trim(), definition: def });
 
   return (
     <Modal
       open
       onClose={onClose}
-      title={store ? "Edit memory store" : "New memory store"}
-      description="A memory store is a Foundry memory configuration agents share. Author its config as JSON; the reconciler forwards it to each connected agent's memory."
+      title={editing ? "Edit memory store" : "New memory store"}
+      description={
+        editing
+          ? "Rename or redescribe this store. Its models and memory settings are fixed once created."
+          : "A memory store is a Foundry memory resource agents connect to. Pick the models that process memory and which kinds it captures."
+      }
       footer={
         <>
           <Button onClick={onClose}>Cancel</Button>
           <Button variant="primary" loading={pending} disabled={name.trim().length < 2} onClick={submit}>
-            {store ? "Save" : "Create store"}
+            {editing ? "Save" : "Create store"}
           </Button>
         </>
       }
     >
       <Field label="Name" htmlFor="ms-name" hint="A short, human name — e.g. Support Memory.">
-        <TextInput id="ms-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Support Memory" autoFocus />
-      </Field>
-      <Field label="Description" htmlFor="ms-desc">
-        <Textarea id="ms-desc" value={description} onChange={(e) => setDescription(e.target.value)} placeholder="What this memory captures, for which agents." />
-      </Field>
-      <Field
-        label="Config (JSON)"
-        htmlFor="ms-config"
-        hint={err ? `Invalid JSON: ${err}` : "The Foundry memory definition, forwarded verbatim. Blank = empty config."}
-      >
-        <Textarea
-          id="ms-config"
-          value={configText}
-          spellCheck={false}
-          onChange={(e) => {
-            setConfigText(e.target.value);
-            setErr(null);
-          }}
-          placeholder='{ "scope": "user" }'
+        <TextInput
+          id="ms-name"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="Support Memory"
+          autoFocus
         />
       </Field>
+      <Field label="Description" htmlFor="ms-desc">
+        <Textarea
+          id="ms-desc"
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          placeholder="What this memory captures, for which agents."
+        />
+      </Field>
+
+      {editing ? (
+        <ReadonlyDefinition def={def} />
+      ) : (
+        <>
+          <datalist id="ms-chat-models">
+            <option value="gpt-4o" />
+            <option value="gpt-4o-mini" />
+            <option value="gpt-4.1" />
+            <option value="gpt-4.1-mini" />
+          </datalist>
+          <datalist id="ms-embed-models">
+            <option value="text-embedding-3-small" />
+            <option value="text-embedding-3-large" />
+            <option value="text-embedding-ada-002" />
+          </datalist>
+          <div className={styles.grid2}>
+            <Field label="Chat model" htmlFor="ms-chat" hint="Foundry chat deployment.">
+              <TextInput
+                id="ms-chat"
+                list="ms-chat-models"
+                value={def.chatModel}
+                onChange={(e) => patch({ chatModel: e.target.value })}
+                placeholder="gpt-4o"
+                spellCheck={false}
+              />
+            </Field>
+            <Field label="Embedding model" htmlFor="ms-embed" hint="Foundry embedding deployment.">
+              <TextInput
+                id="ms-embed"
+                list="ms-embed-models"
+                value={def.embeddingModel}
+                onChange={(e) => patch({ embeddingModel: e.target.value })}
+                placeholder="text-embedding-3-small"
+                spellCheck={false}
+              />
+            </Field>
+          </div>
+
+          <p className={styles.groupLabel}>What this store remembers</p>
+          <Checkbox
+            checked={def.userProfileEnabled}
+            onChange={(v) => patch({ userProfileEnabled: v })}
+            label="User profile"
+            description="Durable facts about the user — preferences, context, identity."
+          />
+          {def.userProfileEnabled && (
+            <Field
+              label="Profile details"
+              htmlFor="ms-profile"
+              hint="Optional — narrow which categories to extract."
+            >
+              <TextInput
+                id="ms-profile"
+                value={def.userProfileDetails ?? ""}
+                onChange={(e) => patch({ userProfileDetails: e.target.value })}
+                placeholder="preferences, timezone, communication style"
+              />
+            </Field>
+          )}
+          <Checkbox
+            checked={def.chatSummaryEnabled}
+            onChange={(v) => patch({ chatSummaryEnabled: v })}
+            label="Chat summary"
+            description="Rolling summaries of the conversation."
+          />
+          <Checkbox
+            checked={def.proceduralMemoryEnabled}
+            onChange={(v) => patch({ proceduralMemoryEnabled: v })}
+            label="Procedural memory"
+            description="Learned procedures and how-to preferences."
+          />
+
+          <Field
+            label="Retention (seconds)"
+            htmlFor="ms-ttl"
+            hint={
+              def.ttlSeconds > 0
+                ? `Memories expire after ${formatTTL(def.ttlSeconds)}.`
+                : "0 = memories never expire."
+            }
+          >
+            <TextInput
+              id="ms-ttl"
+              type="number"
+              min={0}
+              value={String(def.ttlSeconds)}
+              onChange={(e) => patch({ ttlSeconds: Math.max(0, Number(e.target.value) || 0) })}
+            />
+          </Field>
+        </>
+      )}
     </Modal>
+  );
+}
+
+function ReadonlyDefinition({ def }: { def: MemoryStoreDefinition }) {
+  const kinds = [
+    def.userProfileEnabled && "Profile",
+    def.chatSummaryEnabled && "Summary",
+    def.proceduralMemoryEnabled && "Procedural",
+  ].filter(Boolean) as string[];
+  return (
+    <Field label="Definition">
+      <div className={styles.readonlyDef}>
+        <div className={styles.defFact}>
+          <span className={styles.defFactKey}>Chat model</span>
+          <span className={`${styles.defFactVal} mono`}>{def.chatModel}</span>
+        </div>
+        <div className={styles.defFact}>
+          <span className={styles.defFactKey}>Embedding model</span>
+          <span className={`${styles.defFactVal} mono`}>{def.embeddingModel}</span>
+        </div>
+        <div className={styles.defFact}>
+          <span className={styles.defFactKey}>Remembers</span>
+          <span className={styles.defFactVal}>{kinds.length ? kinds.join(" · ") : "nothing"}</span>
+        </div>
+        <div className={styles.defFact}>
+          <span className={styles.defFactKey}>Retention</span>
+          <span className={styles.defFactVal}>{formatTTL(def.ttlSeconds)}</span>
+        </div>
+      </div>
+      <p className={styles.readonlyNote}>
+        Models and memory settings are fixed once created — the Foundry memory store has no update path. To
+        change them, create a new store.
+      </p>
+    </Field>
   );
 }

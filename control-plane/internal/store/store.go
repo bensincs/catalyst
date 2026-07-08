@@ -415,20 +415,24 @@ func (s *Store) PublishVersion(ctx context.Context, agentID, version, channel, n
 
 /* ── Memory stores ──────────────────────────────────────────────────────── */
 
-const memoryStoreCols = `id, name, description, owner_tenant, config, created_by, created_at`
+const memoryStoreCols = `m.id, m.name, m.description, m.owner_tenant,
+	m.chat_model, m.embedding_model, m.user_profile_enabled, m.user_profile_details,
+	m.chat_summary_enabled, m.procedural_memory_enabled, m.ttl_seconds,
+	m.created_by, m.created_at`
 
-func configToText(c json.RawMessage) string {
-	if len(c) == 0 {
-		return "{}"
-	}
-	return string(c)
+// memStoreScanDest is the ordered scan target for memoryStoreCols, so every read
+// path decodes the typed definition columns identically.
+func memStoreScanDest(m *model.MemoryStore) []any {
+	d := &m.Definition
+	return []any{&m.ID, &m.Name, &m.Description, &m.Owner,
+		&d.ChatModel, &d.EmbeddingModel, &d.UserProfileEnabled, &d.UserProfileDetails,
+		&d.ChatSummaryEnabled, &d.ProceduralMemoryEnabled, &d.TTLSeconds,
+		&m.CreatedBy, &m.CreatedAt}
 }
 
 func scanMemoryStore(row pgx.Row) (model.MemoryStore, error) {
 	var m model.MemoryStore
-	var cfg []byte
-	err := row.Scan(&m.ID, &m.Name, &m.Description, &m.Owner, &cfg, &m.CreatedBy, &m.CreatedAt)
-	m.Config = json.RawMessage(cfg)
+	err := row.Scan(memStoreScanDest(&m)...)
 	m.Platform = m.Owner == ""
 	return m, err
 }
@@ -436,7 +440,7 @@ func scanMemoryStore(row pgx.Row) (model.MemoryStore, error) {
 // MemoryStoreList returns every memory store (platform view), with owner names.
 func (s *Store) MemoryStoreList(ctx context.Context) ([]model.MemoryStore, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT m.id, m.name, m.description, m.owner_tenant, m.config, m.created_by, m.created_at, coalesce(t.name,'')
+		`SELECT `+memoryStoreCols+`, coalesce(t.name,'')
 		 FROM memory_stores m LEFT JOIN tenants t ON t.id = m.owner_tenant
 		 ORDER BY m.created_at DESC`)
 	if err != nil {
@@ -446,11 +450,9 @@ func (s *Store) MemoryStoreList(ctx context.Context) ([]model.MemoryStore, error
 	out := []model.MemoryStore{}
 	for rows.Next() {
 		var m model.MemoryStore
-		var cfg []byte
-		if err := rows.Scan(&m.ID, &m.Name, &m.Description, &m.Owner, &cfg, &m.CreatedBy, &m.CreatedAt, &m.OwnerName); err != nil {
+		if err := rows.Scan(append(memStoreScanDest(&m), &m.OwnerName)...); err != nil {
 			return nil, err
 		}
-		m.Config = json.RawMessage(cfg)
 		m.Platform = m.Owner == ""
 		out = append(out, m)
 	}
@@ -472,9 +474,9 @@ func (s *Store) MemoryStoresForTenant(ctx context.Context, slug string) ([]model
 		entitledSet[id] = true
 	}
 	rows, err := s.pool.Query(ctx,
-		`SELECT `+memoryStoreCols+` FROM memory_stores
-		 WHERE owner_tenant = $1 OR (owner_tenant = '' AND id = ANY($2))
-		 ORDER BY created_at DESC`, slug, entitled)
+		`SELECT `+memoryStoreCols+` FROM memory_stores m
+		 WHERE m.owner_tenant = $1 OR (m.owner_tenant = '' AND m.id = ANY($2))
+		 ORDER BY m.created_at DESC`, slug, entitled)
 	if err != nil {
 		return nil, err
 	}
@@ -493,24 +495,34 @@ func (s *Store) MemoryStoresForTenant(ctx context.Context, slug string) ([]model
 }
 
 func (s *Store) MemoryStoreByID(ctx context.Context, id string) (model.MemoryStore, error) {
-	m, err := scanMemoryStore(s.pool.QueryRow(ctx, `SELECT `+memoryStoreCols+` FROM memory_stores WHERE id = $1`, id))
+	m, err := scanMemoryStore(s.pool.QueryRow(ctx, `SELECT `+memoryStoreCols+` FROM memory_stores m WHERE m.id = $1`, id))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return m, ErrNotFound
 	}
 	return m, err
 }
 
-func (s *Store) CreateMemoryStore(ctx context.Context, id, name, description, owner string, config json.RawMessage, createdBy string) error {
+func (s *Store) CreateMemoryStore(ctx context.Context, id, name, description, owner string, def shared.MemoryStoreDefinition, createdBy string) error {
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO memory_stores (id, name, description, owner_tenant, config, created_by) VALUES ($1,$2,$3,$4,$5,$6)`,
-		id, name, description, owner, configToText(config), createdBy)
+		`INSERT INTO memory_stores
+		   (id, name, description, owner_tenant,
+		    chat_model, embedding_model, user_profile_enabled, user_profile_details,
+		    chat_summary_enabled, procedural_memory_enabled, ttl_seconds, created_by)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+		id, name, description, owner,
+		def.ChatModel, def.EmbeddingModel, def.UserProfileEnabled, def.UserProfileDetails,
+		def.ChatSummaryEnabled, def.ProceduralMemoryEnabled, def.TTLSeconds, createdBy)
 	return err
 }
 
-func (s *Store) UpdateMemoryStore(ctx context.Context, id, name, description string, config json.RawMessage) error {
+// UpdateMemoryStore updates only the store's name + description. The definition
+// (models + memory kinds) is immutable: the Foundry memory_store resource has no
+// update surface (create/delete only), so Cortex mirrors that and never lets a
+// definition edit silently diverge from what's provisioned.
+func (s *Store) UpdateMemoryStore(ctx context.Context, id, name, description string) error {
 	tag, err := s.pool.Exec(ctx,
-		`UPDATE memory_stores SET name = $2, description = $3, config = $4 WHERE id = $1`,
-		id, name, description, configToText(config))
+		`UPDATE memory_stores SET name = $2, description = $3 WHERE id = $1`,
+		id, name, description)
 	if err != nil {
 		return err
 	}
@@ -791,25 +803,29 @@ func (s *Store) SyncDesired(ctx context.Context, tid string) (shared.DesiredStat
 	if err := rows.Err(); err != nil {
 		return out, err
 	}
-	// Attach the config of every memory store the desired agents reference, so
-	// the reconciler can bind each agent to its store's memory.
+	// Attach the typed definition of every memory store the desired agents
+	// reference, so the reconciler can provision each store and bind agents to it.
 	if len(storeIDs) > 0 {
 		ids := make([]string, 0, len(storeIDs))
 		for id := range storeIDs {
 			ids = append(ids, id)
 		}
-		srows, err := s.pool.Query(ctx, `SELECT id, name, config FROM memory_stores WHERE id = ANY($1)`, ids)
+		srows, err := s.pool.Query(ctx,
+			`SELECT id, name, chat_model, embedding_model, user_profile_enabled,
+			        user_profile_details, chat_summary_enabled, procedural_memory_enabled, ttl_seconds
+			 FROM memory_stores WHERE id = ANY($1)`, ids)
 		if err != nil {
 			return out, err
 		}
 		defer srows.Close()
 		for srows.Next() {
 			var ms shared.DesiredMemoryStore
-			var cfg []byte
-			if err := srows.Scan(&ms.ID, &ms.Name, &cfg); err != nil {
+			d := &ms.Definition
+			if err := srows.Scan(&ms.ID, &ms.Name, &d.ChatModel, &d.EmbeddingModel,
+				&d.UserProfileEnabled, &d.UserProfileDetails, &d.ChatSummaryEnabled,
+				&d.ProceduralMemoryEnabled, &d.TTLSeconds); err != nil {
 				return out, err
 			}
-			ms.Config = json.RawMessage(cfg)
 			out.MemoryStores = append(out.MemoryStores, ms)
 		}
 		if err := srows.Err(); err != nil {

@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"testing"
 
@@ -138,7 +137,8 @@ func TestMemoryStoreLifecycle(t *testing.T) {
 	defer cleanup()
 
 	// 1. Platform authors a memory store; a catalog agent references it.
-	if err := st.CreateMemoryStore(ctx, storeID, "ZZ Store", "platform memory", "", json.RawMessage(`{"scope":"user"}`), "oid-test"); err != nil {
+	if err := st.CreateMemoryStore(ctx, storeID, "ZZ Store", "platform memory", "",
+		shared.MemoryStoreDefinition{ChatModel: "gpt-4o", EmbeddingModel: "text-embedding-3-small", UserProfileEnabled: true, ChatSummaryEnabled: true}, "oid-test"); err != nil {
 		t.Fatalf("create store: %v", err)
 	}
 	if err := st.CreateCatalogAgent(ctx, agentID, "ZZ MS Agent", "d", "prompt", "gpt-4o", "oid-test",
@@ -168,7 +168,7 @@ func TestMemoryStoreLifecycle(t *testing.T) {
 		t.Fatalf("expected store auto-entitled after entitling its agent; got %+v", stores)
 	}
 
-	// 3. Enable the agent; SyncDesired carries the effective store + its config.
+	// 3. Enable the agent; SyncDesired carries the effective store + its definition.
 	if err := st.EnableAgent(ctx, slug, agentID, nil); err != nil {
 		t.Fatalf("enable: %v", err)
 	}
@@ -179,13 +179,15 @@ func TestMemoryStoreLifecycle(t *testing.T) {
 	if ds.Agents[0].Definition.MemoryStore != storeID {
 		t.Fatalf("desired agent store = %q, want %q", ds.Agents[0].Definition.MemoryStore, storeID)
 	}
-	if len(ds.MemoryStores) != 1 || ds.MemoryStores[0].ID != storeID || len(ds.MemoryStores[0].Config) == 0 {
+	if len(ds.MemoryStores) != 1 || ds.MemoryStores[0].ID != storeID ||
+		ds.MemoryStores[0].Definition.ChatModel != "gpt-4o" || ds.MemoryStores[0].Definition.EmbeddingModel != "text-embedding-3-small" {
 		t.Fatalf("desired memory stores wrong: %+v", ds.MemoryStores)
 	}
 
 	// 4. Tenant creates their own store and connects the agent to it (override).
 	tenantStore := slug + "-notes"
-	if err := st.CreateMemoryStore(ctx, tenantStore, "Notes", "tenant memory", slug, json.RawMessage(`{"scope":"tenant"}`), "oid-tenant"); err != nil {
+	if err := st.CreateMemoryStore(ctx, tenantStore, "Notes", "tenant memory", slug,
+		shared.MemoryStoreDefinition{ChatModel: "gpt-4o", EmbeddingModel: "text-embedding-3-small", UserProfileEnabled: true}, "oid-tenant"); err != nil {
 		t.Fatalf("create tenant store: %v", err)
 	}
 	if err := st.ConnectAgentStore(ctx, slug, agentID, tenantStore); err != nil {

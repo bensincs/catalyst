@@ -9,6 +9,14 @@
 // Cortex stamps identifying metadata on every version it writes, so it only ever
 // mutates or prunes agents it owns, never anything else in the project.
 //
+// Memory stores are first-class Foundry resources too (POST /memory_stores,
+// api-version "2025-11-15-preview", also keyed by name and stamped with Cortex
+// metadata). The reconciler provisions each referenced store, then binds an agent
+// to it by adding a memory_search_preview tool that names the store. A store's
+// definition (its models + memory kinds) is immutable — the resource has no
+// update surface — so on drift the reconciler warns rather than destroy the
+// store's accumulated memories.
+//
 // Hosted (bring-your-own-container) agents are realized by a separate
 // compute-deploy path, not the Agents API, so they are reported honestly as
 // unprovisioned here rather than given fabricated health.
@@ -23,7 +31,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -39,18 +46,30 @@ const (
 	healthBlocked = "blocked"
 )
 
-// Metadata keys stamped on every Cortex-managed agent version, so the reconciler
-// recognizes the agents it owns and detects a version change without a brittle
-// field-by-field diff. Foundry persists this metadata per version, so
-// convergence survives a reconciler restart.
+// Metadata keys stamped on every Cortex-managed agent version and memory store,
+// so the reconciler recognizes the resources it owns and detects a version
+// change without a brittle field-by-field diff. Foundry persists this metadata,
+// so convergence survives a reconciler restart.
 const (
 	metaManaged = "cortex_managed"  // "true"
 	metaAgentID = "cortex_agent_id" // control-plane agent id
 	metaVersion = "cortex_version"  // desired version last converged
+	metaStoreID = "cortex_store_id" // control-plane memory-store id
 )
 
 // promptKind is the definition discriminator for a declarative prompt agent.
 const promptKind = "prompt"
+
+// Memory-store constants. Memory stores live on a preview api-version distinct
+// from the agents surface. An agent binds to a store via a memory_search_preview
+// tool that names the store and scopes it — by default to the signed-in user, so
+// memories are isolated per end user ({{$userId}} is a Foundry template var).
+const (
+	memStoreAPIVersion = "2025-11-15-preview"
+	memStoreKind       = "default"
+	memoryToolType     = "memory_search_preview"
+	defaultMemoryScope = "{{$userId}}"
+)
 
 // Foundry is a client for one tenant's Foundry project (one reconciler drives
 // one project). It is used sequentially by the reconcile loop.
@@ -82,11 +101,11 @@ func New(cfg config.Config, ts tokens.Source) *Foundry {
 func (f *Foundry) Reconcile(ctx context.Context, desired []shared.DesiredAgent, stores []shared.DesiredMemoryStore) []shared.AgentStatus {
 	out := make([]shared.AgentStatus, 0, len(desired))
 
-	// Memory-store id → config, so each agent can be bound to its store's memory.
-	storeConfigs := make(map[string]json.RawMessage, len(stores))
-	for _, ms := range stores {
-		storeConfigs[ms.ID] = ms.Config
-	}
+	// Provision the memory stores referenced by desired agents as first-class
+	// Foundry resources. The returned map (control-plane store id → Foundry store
+	// name) covers only stores that are actually provisioned, so an agent is bound
+	// only to a store that exists — never to a dangling name.
+	storeNames := f.reconcileStores(ctx, stores)
 
 	// The agents Cortex already manages in this project, keyed by control-plane
 	// agent id. If we can't read the project we can't assert anything true about
@@ -109,7 +128,7 @@ func (f *Foundry) Reconcile(ctx context.Context, desired []shared.DesiredAgent, 
 			out = append(out, blocked(d.AgentID, ""))
 			continue
 		}
-		out = append(out, f.converge(ctx, d, managed[d.AgentID], storeConfigs))
+		out = append(out, f.converge(ctx, d, managed[d.AgentID], storeNames))
 	}
 
 	// Prune managed prompt agents that are no longer desired (de-provisioned).
@@ -134,8 +153,8 @@ func (f *Foundry) Reconcile(ctx context.Context, desired []shared.DesiredAgent, 
 // converge creates the agent backing one prompt agent, or publishes a new
 // version when it has drifted, and returns its actual status. existing is the
 // currently-managed agent for this control-plane id, or nil if none exists yet.
-func (f *Foundry) converge(ctx context.Context, d shared.DesiredAgent, existing *agent, storeConfigs map[string]json.RawMessage) shared.AgentStatus {
-	def, skipped := f.definitionFor(d, storeConfigs)
+func (f *Foundry) converge(ctx context.Context, d shared.DesiredAgent, existing *agent, storeNames map[string]string) shared.AgentStatus {
+	def, skipped := f.definitionFor(d, storeNames)
 	meta := metadataFor(d)
 
 	if existing == nil {
@@ -178,10 +197,11 @@ var bareTools = map[string]bool{
 
 // definitionFor derives the desired kind:"prompt" definition from a prompt agent,
 // returning the names of any tools skipped because they need unmodeled config.
-// storeConfigs maps memory-store id → config; the agent's connected store's
-// config is injected as the Foundry definition.memory.
-func (f *Foundry) definitionFor(d shared.DesiredAgent, storeConfigs map[string]json.RawMessage) (definition, []string) {
-	tools := make([]toolDef, 0, len(d.Definition.Tools))
+// storeNames maps memory-store id → provisioned Foundry store name; when the
+// agent connects a store, a memory_search_preview tool binding it (by name,
+// scoped per user) is added to the definition's tools.
+func (f *Foundry) definitionFor(d shared.DesiredAgent, storeNames map[string]string) (definition, []string) {
+	tools := make([]toolDef, 0, len(d.Definition.Tools)+1)
 	var skipped []string
 	for _, t := range d.Definition.Tools {
 		t = strings.TrimSpace(t)
@@ -194,6 +214,15 @@ func (f *Foundry) definitionFor(d shared.DesiredAgent, storeConfigs map[string]j
 			skipped = append(skipped, t)
 		}
 	}
+	// Bind a connected memory store — but only if it was actually provisioned
+	// this cycle. If it wasn't (e.g. its embedding model isn't deployed), the
+	// agent is left unbound rather than pointed at a store that doesn't exist;
+	// reconcileStores has already logged why.
+	if id := d.Definition.MemoryStore; id != "" {
+		if name, ok := storeNames[id]; ok {
+			tools = append(tools, toolDef{Type: memoryToolType, MemoryStoreName: name, Scope: defaultMemoryScope})
+		}
+	}
 	def := definition{
 		Kind:         promptKind,
 		Model:        d.Model,
@@ -201,11 +230,6 @@ func (f *Foundry) definitionFor(d shared.DesiredAgent, storeConfigs map[string]j
 		Tools:        tools,
 		Temperature:  d.Definition.Temperature,
 		TopP:         d.Definition.TopP,
-	}
-	if d.Definition.MemoryStore != "" {
-		if cfg, ok := storeConfigs[d.Definition.MemoryStore]; ok && len(cfg) > 0 {
-			def.Memory = cfg
-		}
 	}
 	return def, skipped
 }
@@ -227,9 +251,9 @@ func metadataFor(d shared.DesiredAgent) map[string]string {
 
 // sameDefinition reports whether the live definition already equals the desired
 // one. Temperature/TopP are compared exactly (the Agents API stores only what
-// was sent — it injects no defaults — so nil stays nil and never loops). Memory
-// (a connected store's config) is compared structurally so key reordering by the
-// service doesn't cause a spurious republish.
+// was sent — it injects no defaults — so nil stays nil and never loops). Tools
+// are compared structurally including the memory binding (store name + scope),
+// so connecting, switching, or disconnecting a memory store republishes.
 func sameDefinition(have, want definition) bool {
 	if have.Model != want.Model || have.Instructions != want.Instructions {
 		return false
@@ -237,25 +261,7 @@ func sameDefinition(have, want definition) bool {
 	if !sameFloat(have.Temperature, want.Temperature) || !sameFloat(have.TopP, want.TopP) {
 		return false
 	}
-	if !sameJSON(have.Memory, want.Memory) {
-		return false
-	}
-	return sameToolTypes(have.Tools, want.Tools)
-}
-
-// sameJSON compares two raw JSON values structurally (order-insensitive).
-func sameJSON(a, b json.RawMessage) bool {
-	if len(a) == 0 && len(b) == 0 {
-		return true
-	}
-	var x, y any
-	if err := json.Unmarshal(a, &x); err != nil {
-		return bytes.Equal(a, b)
-	}
-	if err := json.Unmarshal(b, &y); err != nil {
-		return bytes.Equal(a, b)
-	}
-	return reflect.DeepEqual(x, y)
+	return sameTools(have.Tools, want.Tools)
 }
 
 func sameFloat(a, b *float64) bool {
@@ -265,16 +271,24 @@ func sameFloat(a, b *float64) bool {
 	return *a == *b
 }
 
-func sameToolTypes(a, b []toolDef) bool {
+// toolKey is a tool's identity for drift comparison: its type plus, for a memory
+// tool, the store it names and its scope. Service-injected fields the reconciler
+// doesn't set (e.g. update_delay) aren't part of toolDef and so don't cause a
+// spurious republish.
+func toolKey(t toolDef) string {
+	return t.Type + "|" + t.MemoryStoreName + "|" + t.Scope
+}
+
+func sameTools(a, b []toolDef) bool {
 	if len(a) != len(b) {
 		return false
 	}
 	as, bs := make([]string, len(a)), make([]string, len(b))
 	for i := range a {
-		as[i] = a[i].Type
+		as[i] = toolKey(a[i])
 	}
 	for i := range b {
-		bs[i] = b[i].Type
+		bs[i] = toolKey(b[i])
 	}
 	sort.Strings(as)
 	sort.Strings(bs)
@@ -300,11 +314,12 @@ func blocked(agentID, version string) shared.AgentStatus {
 	return shared.AgentStatus{AgentID: agentID, Version: version, Health: healthBlocked, Calls30d: 0}
 }
 
-// agentName maps a control-plane agent id to a valid Foundry agent name (which
-// is also the agent's id). Foundry names must start and end with an alphanumeric
-// and use only hyphens in between (no '_', '.', ':' — max 63 chars), so any run
-// of other characters collapses to a single hyphen. The true control-plane id is
-// always carried in metadata, so lookups never rely on this.
+// agentName maps a control-plane id to a valid Foundry resource name (which, for
+// agents and memory stores alike, is also the resource's id). Foundry names must
+// start and end with an alphanumeric and use only hyphens in between (no '_',
+// '.', ':' — max 63 chars), so any run of other characters collapses to a single
+// hyphen. The true control-plane id is always carried in metadata, so lookups
+// never rely on this.
 func agentName(agentID string) string {
 	var b strings.Builder
 	prevHyphen := false
@@ -331,17 +346,20 @@ func agentName(agentID string) string {
 
 type toolDef struct {
 	Type string `json:"type"`
+	// Memory binding (type == memory_search_preview): the store to search, by
+	// name, and the scope that isolates its memories (e.g. per signed-in user).
+	MemoryStoreName string `json:"memory_store_name,omitempty"`
+	Scope           string `json:"scope,omitempty"`
 }
 
 // definition is a kind:"prompt" agent definition.
 type definition struct {
-	Kind         string          `json:"kind"`
-	Model        string          `json:"model"`
-	Instructions string          `json:"instructions,omitempty"`
-	Tools        []toolDef       `json:"tools"`
-	Temperature  *float64        `json:"temperature,omitempty"`
-	TopP         *float64        `json:"top_p,omitempty"`
-	Memory       json.RawMessage `json:"memory,omitempty"`
+	Kind         string    `json:"kind"`
+	Model        string    `json:"model"`
+	Instructions string    `json:"instructions,omitempty"`
+	Tools        []toolDef `json:"tools"`
+	Temperature  *float64  `json:"temperature,omitempty"`
+	TopP         *float64  `json:"top_p,omitempty"`
 }
 
 // agentVersion is one version of an agent (agents.versions.latest).
@@ -434,6 +452,157 @@ func (f *Foundry) deleteAgent(ctx context.Context, name string) error {
 	return f.do(ctx, http.MethodDelete, u, nil, nil)
 }
 
+// --- Memory stores ----------------------------------------------------------
+
+// memStoreOptions mirrors Foundry's MemoryStoreDefaultOptions: which memory
+// kinds are extracted, and how long they live.
+type memStoreOptions struct {
+	UserProfileEnabled      bool   `json:"user_profile_enabled"`
+	UserProfileDetails      string `json:"user_profile_details,omitempty"`
+	ChatSummaryEnabled      bool   `json:"chat_summary_enabled"`
+	ProceduralMemoryEnabled bool   `json:"procedural_memory_enabled"`
+	DefaultTTLSeconds       int    `json:"default_ttl_seconds"`
+}
+
+// memStoreDefinition mirrors Foundry's MemoryStoreDefaultDefinition (kind
+// "default"): the models that process memory plus the extraction options.
+type memStoreDefinition struct {
+	Kind           string          `json:"kind"`
+	ChatModel      string          `json:"chat_model"`
+	EmbeddingModel string          `json:"embedding_model"`
+	Options        memStoreOptions `json:"options"`
+}
+
+type memStore struct {
+	ID         string             `json:"id"`
+	Name       string             `json:"name"`
+	Metadata   map[string]string  `json:"metadata"`
+	Definition memStoreDefinition `json:"definition"`
+}
+
+type memStoreList struct {
+	Data    []memStore `json:"data"`
+	HasMore bool       `json:"has_more"`
+	LastID  string     `json:"last_id"`
+}
+
+type memStoreCreateBody struct {
+	Name        string             `json:"name"`
+	Description string             `json:"description,omitempty"`
+	Metadata    map[string]string  `json:"metadata"`
+	Definition  memStoreDefinition `json:"definition"`
+}
+
+// storeDefinitionFor maps the control-plane store definition onto the Foundry
+// memory_store definition (kind "default", snake_case wire form).
+func storeDefinitionFor(d shared.MemoryStoreDefinition) memStoreDefinition {
+	return memStoreDefinition{
+		Kind:           memStoreKind,
+		ChatModel:      d.ChatModel,
+		EmbeddingModel: d.EmbeddingModel,
+		Options: memStoreOptions{
+			UserProfileEnabled:      d.UserProfileEnabled,
+			UserProfileDetails:      d.UserProfileDetails,
+			ChatSummaryEnabled:      d.ChatSummaryEnabled,
+			ProceduralMemoryEnabled: d.ProceduralMemoryEnabled,
+			DefaultTTLSeconds:       d.TTLSeconds,
+		},
+	}
+}
+
+func storeMetadata(storeID string) map[string]string {
+	return map[string]string{metaManaged: "true", metaStoreID: storeID}
+}
+
+// sameStoreDefinition reports whether a live store already matches the desired
+// definition. memStoreOptions is all value types, so it compares by value.
+func sameStoreDefinition(have, want memStoreDefinition) bool {
+	return have.ChatModel == want.ChatModel &&
+		have.EmbeddingModel == want.EmbeddingModel &&
+		have.Options == want.Options
+}
+
+// reconcileStores provisions every referenced memory store as a first-class
+// Foundry resource and returns the store id → Foundry name map for those that
+// exist, so agents can be bound by name. It creates missing stores; a store it
+// can't create (e.g. its embedding model isn't deployed) is logged and left out
+// of the map, so agents referencing it are simply left unbound this cycle.
+//
+// Unlike agents, managed stores are never pruned: a store holds a user's
+// accumulated memories, and its definition is immutable (the resource has no
+// update surface), so the reconciler will not destroy and recreate one. Drift is
+// reported, not "converged" by deletion.
+func (f *Foundry) reconcileStores(ctx context.Context, desired []shared.DesiredMemoryStore) map[string]string {
+	ready := make(map[string]string, len(desired))
+	if len(desired) == 0 {
+		return ready
+	}
+	managed, err := f.listManagedStores(ctx)
+	if err != nil {
+		// Can't assert the stores exist — skip binding rather than point agents
+		// at names we haven't confirmed.
+		slog.Warn("foundry: list memory stores failed; agents referencing a store are left unbound this cycle", "project", f.project, "err", err)
+		return ready
+	}
+	for _, ds := range desired {
+		if existing, ok := managed[ds.ID]; ok {
+			if !sameStoreDefinition(existing.Definition, storeDefinitionFor(ds.Definition)) {
+				slog.Warn("foundry: memory store definition drift; the store is immutable (no update surface), keeping the existing store and its memories",
+					"storeId", ds.ID, "store", existing.Name)
+			}
+			ready[ds.ID] = existing.Name
+			continue
+		}
+		name := agentName(ds.ID)
+		if err := f.createStore(ctx, name, ds.Name, storeMetadata(ds.ID), storeDefinitionFor(ds.Definition)); err != nil {
+			slog.Warn("foundry: create memory store failed; agents referencing it are left unbound (is its embedding model deployed?)",
+				"storeId", ds.ID, "store", name, "err", err)
+			continue
+		}
+		slog.Info("foundry: created memory store", "storeId", ds.ID, "store", name)
+		ready[ds.ID] = name
+	}
+	return ready
+}
+
+// listManagedStores pages through the project's memory stores and returns those
+// Cortex owns, keyed by control-plane store id (read from metadata).
+func (f *Foundry) listManagedStores(ctx context.Context) (map[string]*memStore, error) {
+	managed := map[string]*memStore{}
+	after := ""
+	for {
+		u := fmt.Sprintf("%s/memory_stores?api-version=%s&limit=100", f.endpoint, url.QueryEscape(memStoreAPIVersion))
+		if after != "" {
+			u += "&after=" + url.QueryEscape(after)
+		}
+		var page memStoreList
+		if err := f.do(ctx, http.MethodGet, u, nil, &page); err != nil {
+			return nil, err
+		}
+		for i := range page.Data {
+			ms := page.Data[i]
+			if ms.Metadata[metaManaged] != "true" {
+				continue // not ours — leave it untouched
+			}
+			id := ms.Metadata[metaStoreID]
+			if id == "" {
+				id = ms.Name
+			}
+			managed[id] = &ms
+		}
+		if !page.HasMore || page.LastID == "" {
+			return managed, nil
+		}
+		after = page.LastID
+	}
+}
+
+func (f *Foundry) createStore(ctx context.Context, name, description string, meta map[string]string, def memStoreDefinition) error {
+	u := fmt.Sprintf("%s/memory_stores?api-version=%s", f.endpoint, url.QueryEscape(memStoreAPIVersion))
+	body := memStoreCreateBody{Name: name, Description: description, Metadata: meta, Definition: def}
+	return f.do(ctx, http.MethodPost, u, body, nil)
+}
+
 // do issues one authenticated JSON request, decoding the response into out when
 // non-nil. A non-2xx status is returned as an error including the response body.
 func (f *Foundry) do(ctx context.Context, method, u string, body, out any) error {
@@ -464,7 +633,7 @@ func (f *Foundry) do(ctx context.Context, method, u string, body, out any) error
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return fmt.Errorf("%s %s/agents: %d %s", method, f.endpoint, resp.StatusCode, bytes.TrimSpace(b))
+		return fmt.Errorf("foundry %s %s: %d %s", method, u, resp.StatusCode, bytes.TrimSpace(b))
 	}
 	if out != nil {
 		return json.NewDecoder(resp.Body).Decode(out)

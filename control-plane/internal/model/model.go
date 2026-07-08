@@ -2,7 +2,6 @@
 package model
 
 import (
-	"encoding/json"
 	"time"
 
 	"github.com/inception42/cortex/shared"
@@ -132,13 +131,13 @@ type TenantRegistryRow struct {
 // entitlements; tenant-created stores (Owner == <tenant slug>) are private to
 // their tenant.
 type MemoryStore struct {
-	ID          string          `json:"id"`
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	Owner       string          `json:"owner"` // "" = platform-authored; else tenant slug
-	Config      json.RawMessage `json:"config"`
-	CreatedBy   string          `json:"createdBy,omitempty"`
-	CreatedAt   time.Time       `json:"createdAt"`
+	ID          string                       `json:"id"`
+	Name        string                       `json:"name"`
+	Description string                       `json:"description"`
+	Owner       string                       `json:"owner"` // "" = platform-authored; else tenant slug
+	Definition  shared.MemoryStoreDefinition `json:"definition"`
+	CreatedBy   string                       `json:"createdBy,omitempty"`
+	CreatedAt   time.Time                    `json:"createdAt"`
 
 	// Populated in the tenant view:
 	Platform bool `json:"platform"` // platform-authored (vs tenant-owned)

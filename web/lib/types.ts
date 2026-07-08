@@ -146,15 +146,28 @@ export interface TenantRegistryRow {
   lifecycle: Lifecycle;
 }
 
-/** A reusable Foundry memory configuration that agents connect to. Platform
- * stores (owner === "") are granted via entitlements; tenant stores (owner ===
- * the tenant slug) are private to their tenant. */
+/** The typed Foundry memory-store definition (kind "default"): the models that
+ * process memory plus which memory kinds are extracted. Immutable once created —
+ * the Foundry resource has no update surface. */
+export interface MemoryStoreDefinition {
+  chatModel: string; // Foundry chat deployment
+  embeddingModel: string; // Foundry embedding deployment
+  userProfileEnabled: boolean;
+  userProfileDetails?: string;
+  chatSummaryEnabled: boolean;
+  proceduralMemoryEnabled: boolean;
+  ttlSeconds: number; // 0 = never expire
+}
+
+/** A reusable Foundry memory store that agents connect to. Platform stores
+ * (owner === "") are granted via entitlements; tenant stores (owner === the
+ * tenant slug) are private to their tenant. */
 export interface MemoryStore {
   id: string;
   name: string;
   description: string;
   owner: string; // "" = platform-authored; else tenant slug
-  config: unknown; // the Foundry memory definition (forwarded verbatim)
+  definition: MemoryStoreDefinition;
   createdAt: string;
   // platform view
   ownerName?: string;

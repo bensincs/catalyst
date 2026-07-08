@@ -4,8 +4,6 @@
 // shared auth header is part of the contract.
 package shared
 
-import "encoding/json"
-
 // AgentType is how an agent is realized in Foundry (see AGENT-MODEL.md).
 type AgentType string
 
@@ -28,8 +26,8 @@ type AgentDefinition struct {
 	Temperature  *float64 `json:"temperature,omitempty"`
 	TopP         *float64 `json:"topP,omitempty"`
 	// MemoryStore is the id of a memory store this agent connects to (see the
-	// memory-store catalog). The reconciler resolves it to the store's config and
-	// injects it into the Foundry agent's definition.memory.
+	// memory-store catalog). The reconciler resolves it to the store's Foundry
+	// name and binds the agent by adding a memory_search_preview tool.
 	MemoryStore string `json:"memoryStore,omitempty"`
 	// hosted
 	Image    string            `json:"image,omitempty"`
@@ -39,13 +37,37 @@ type AgentDefinition struct {
 	Env      map[string]string `json:"env,omitempty"`
 }
 
-// DesiredMemoryStore is a memory store a tenant's reconciler should provision and
-// make available to agents (control plane → reconciler). Config is the Foundry
-// memory definition, forwarded verbatim.
+// MemoryStoreDefinition is the typed, real Foundry memory-store definition
+// (kind "default"): the models that process memory plus which memory kinds are
+// extracted. It mirrors the Azure AI Projects MemoryStoreDefaultDefinition /
+// MemoryStoreDefaultOptions schema. The reconciler maps these fields onto the
+// Foundry POST /memory_stores body (snake_case), so the store is modeled — never
+// forwarded as an opaque JSON blob.
+type MemoryStoreDefinition struct {
+	// ChatModel is the chat-completion model deployment used to process memory.
+	ChatModel string `json:"chatModel"`
+	// EmbeddingModel is the embedding model deployment used to index memory.
+	EmbeddingModel string `json:"embeddingModel"`
+	// UserProfileEnabled extracts and stores durable facts about the user.
+	UserProfileEnabled bool `json:"userProfileEnabled"`
+	// UserProfileDetails optionally narrows which categories of user-profile
+	// information to extract (free text, e.g. "preferences, timezone").
+	UserProfileDetails string `json:"userProfileDetails,omitempty"`
+	// ChatSummaryEnabled extracts and stores rolling conversation summaries.
+	ChatSummaryEnabled bool `json:"chatSummaryEnabled"`
+	// ProceduralMemoryEnabled extracts and stores learned procedures/preferences.
+	ProceduralMemoryEnabled bool `json:"proceduralMemoryEnabled"`
+	// TTLSeconds is how long memories live before expiring; 0 = never expire.
+	TTLSeconds int `json:"ttlSeconds"`
+}
+
+// DesiredMemoryStore is a memory store a tenant's reconciler should provision as
+// a first-class Foundry memory_store resource (control plane → reconciler), and
+// bind referencing agents to. Definition is the typed store definition.
 type DesiredMemoryStore struct {
-	ID     string          `json:"id"`
-	Name   string          `json:"name"`
-	Config json.RawMessage `json:"config,omitempty"`
+	ID         string                `json:"id"`
+	Name       string                `json:"name"`
+	Definition MemoryStoreDefinition `json:"definition"`
 }
 
 // DesiredAgent is one agent a tenant wants running (control plane → reconciler).
