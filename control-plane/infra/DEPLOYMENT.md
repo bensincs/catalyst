@@ -2,18 +2,18 @@
 
 Infrastructure-as-code for the Cortex control plane on **Azure Container Apps**,
 backed by **Azure Database for PostgreSQL Flexible Server**, fronted by custom
-domains on `sincs.dev`.
+domains on `msft.ae`.
 
 ```
- browser ──▶ https://catalyst.sincs.dev        console  (Next.js BFF, external ingress)
+ browser ──▶ https://catalyst.msft.ae        console  (Next.js BFF, external ingress)
                      │ server-side
                      ▼
-             https://api.catalyst.sincs.dev     control-plane API (Go, external ingress)
+             https://api.catalyst.msft.ae     control-plane API (Go, external ingress)
                      │
                      ▼
              cortex-cp-pg-*.postgres.database.azure.com   PostgreSQL (database: cortex)
 
- in-tenant reconcilers (reconciler/infra) ──▶ https://api.catalyst.sincs.dev  (/recon/*)
+ in-tenant reconcilers (reconciler/infra) ──▶ https://api.catalyst.msft.ae  (/recon/*)
 ```
 
 The API is public because the in-tenant reconcilers (shipped by `reconciler/infra/`)
@@ -30,8 +30,8 @@ Everything is in [`main.bicep`](./main.bicep) with defaults in
 | Container Registry | `cortexcpacr<hash>` | holds the two images |
 | PostgreSQL Flexible Server | `cortex-cp-pg-<hash>` | database `cortex`, SSL required |
 | Managed environment | `cortex-cp-env` | Container Apps env |
-| Container app — API | `cortex-cp-api` | `api.catalyst.sincs.dev`, port 8080 |
-| Container app — console | `cortex-cp-console` | `catalyst.sincs.dev`, port 3000 |
+| Container app — API | `cortex-cp-api` | `api.catalyst.msft.ae`, port 8080 |
+| Container app — console | `cortex-cp-console` | `catalyst.msft.ae`, port 3000 |
 
 ---
 
@@ -56,7 +56,8 @@ be created — an ordering a single template pass can't express.
 - **Azure CLI** with Bicep: `az upgrade && az bicep upgrade`
 - An Azure subscription; rights to create resources **and role assignments**
   (Owner, or Contributor + User Access Administrator)
-- **DNS control of `sincs.dev`** (to add `catalyst` records)
+- **DNS control of `msft.ae`** — an Azure DNS zone (resource group `dns`) in the
+  same subscription, so `catalyst`/`api.catalyst` records are added with the CLI (Step 6)
 - An **Entra app registration** for Cortex (see [Step 1](#1-entra-app-registration))
 - No Docker needed locally — images build in the cloud with `az acr build`
 
@@ -87,7 +88,7 @@ you only need to add the production redirect URI in Step 8.
 4. **Certificates & secrets** → New client secret → copy the value → `CORTEX_ENTRA_CLIENT_SECRET`.
 5. **Redirect URIs** (Web): add both so local dev and prod work —
    - `http://localhost:4200/api/auth/callback/microsoft-entra-id`
-   - `https://catalyst.sincs.dev/api/auth/callback/microsoft-entra-id`
+   - `https://catalyst.msft.ae/api/auth/callback/microsoft-entra-id`
 
 ---
 
@@ -185,26 +186,29 @@ curl -s "https://$API_FQDN/healthz"    # -> ok
 
 ---
 
-## 6. DNS — `catalyst.sincs.dev`
+## 6. DNS — `catalyst.msft.ae`
 
-At your `sincs.dev` DNS provider, add four records (values from Step 5).
-`catalyst` and `api.catalyst` are subdomains, so both use **CNAME** (no apex A
-record needed):
-
-| Type | Name | Value |
-| --- | --- | --- |
-| CNAME | `catalyst` | `$CONSOLE_FQDN` |
-| TXT | `asuid.catalyst` | `$ASUID` |
-| CNAME | `api.catalyst` | `$API_FQDN` |
-| TXT | `asuid.api.catalyst` | `$ASUID` |
-
-Wait for propagation before binding:
+`msft.ae` is an **Azure DNS zone** (resource group `dns` in this subscription), so
+add the records with the CLI. `catalyst` and `api.catalyst` are subdomains, so
+both use **CNAME** (no apex A record needed); the `asuid` TXT records prove domain
+ownership to Container Apps (value from Step 5):
 
 ```bash
-dig +short catalyst.sincs.dev
-dig +short TXT asuid.catalyst.sincs.dev
-dig +short api.catalyst.sincs.dev
-dig +short TXT asuid.api.catalyst.sincs.dev
+DNS_RG=dns; ZONE=msft.ae
+
+az network dns record-set cname set-record -g "$DNS_RG" -z "$ZONE" -n catalyst          -c "$CONSOLE_FQDN"
+az network dns record-set txt   add-record -g "$DNS_RG" -z "$ZONE" -n asuid.catalyst     -v "$ASUID"
+az network dns record-set cname set-record -g "$DNS_RG" -z "$ZONE" -n api.catalyst       -c "$API_FQDN"
+az network dns record-set txt   add-record -g "$DNS_RG" -z "$ZONE" -n asuid.api.catalyst -v "$ASUID"
+```
+
+Verify resolution before binding (the zone is authoritative, so this is quick):
+
+```bash
+dig +short catalyst.msft.ae
+dig +short TXT asuid.catalyst.msft.ae
+dig +short api.catalyst.msft.ae
+dig +short TXT asuid.api.catalyst.msft.ae
 ```
 
 ---
@@ -219,14 +223,14 @@ won't create a managed cert for a hostname that hasn't been added first.
 ENV=cortex-cp-env
 
 # 1) add the hostnames
-az containerapp hostname add -g "$RG" -n cortex-cp-console --hostname catalyst.sincs.dev
-az containerapp hostname add -g "$RG" -n cortex-cp-api     --hostname api.catalyst.sincs.dev
+az containerapp hostname add -g "$RG" -n cortex-cp-console --hostname catalyst.msft.ae
+az containerapp hostname add -g "$RG" -n cortex-cp-api     --hostname api.catalyst.msft.ae
 
 # 2) issue + SNI-bind a managed cert for each (a few minutes each)
 az containerapp hostname bind -g "$RG" -n cortex-cp-console \
-  --hostname catalyst.sincs.dev --environment "$ENV" --validation-method CNAME
+  --hostname catalyst.msft.ae --environment "$ENV" --validation-method CNAME
 az containerapp hostname bind -g "$RG" -n cortex-cp-api \
-  --hostname api.catalyst.sincs.dev --environment "$ENV" --validation-method CNAME
+  --hostname api.catalyst.msft.ae --environment "$ENV" --validation-method CNAME
 ```
 
 If a cert issues but the hostname stays `bindingType: Disabled`, attach the
@@ -234,27 +238,27 @@ existing cert by name:
 
 ```bash
 CERT=$(az containerapp env certificate list -g "$RG" -n "$ENV" --managed-certificates-only \
-  --query "[?properties.subjectName=='api.catalyst.sincs.dev'].name" -o tsv)
+  --query "[?properties.subjectName=='api.catalyst.msft.ae'].name" -o tsv)
 az containerapp hostname bind -g "$RG" -n cortex-cp-api \
-  --hostname api.catalyst.sincs.dev --certificate "$CERT" --environment "$ENV"
+  --hostname api.catalyst.msft.ae --certificate "$CERT" --environment "$ENV"
 ```
 
 Verify:
 
 ```bash
-curl -s https://api.catalyst.sincs.dev/healthz    # -> {"status":"ok"}
-open https://catalyst.sincs.dev                    # sign in with Entra
+curl -s https://api.catalyst.msft.ae/healthz    # -> {"status":"ok"}
+open https://catalyst.msft.ae                    # sign in with Entra
 ```
 
 ---
 
 ## 8. Post-deploy wiring
 
-- **Entra redirect URI** — confirm `https://catalyst.sincs.dev/api/auth/callback/microsoft-entra-id`
+- **Entra redirect URI** — confirm `https://catalyst.msft.ae/api/auth/callback/microsoft-entra-id`
   is present on the app registration (Step 1.5).
 - **Point reconcilers at production** — when installing the reconciler managed app
   (`reconciler/infra/`), set
-  `controlPlaneUrl=https://api.catalyst.sincs.dev` and
+  `controlPlaneUrl=https://api.catalyst.msft.ae` and
   `cortexApiScope=api://<client-id>/.default`.
 - **First sign-in** — the API auto-migrates its schema on boot (`SEED_DEMO=false`,
   so no demo data). Sign in from your `CORTEX_PLATFORM_TENANT_ID` to land as a
@@ -276,21 +280,21 @@ Injected by `main.bicep`; app defaults come from
 | `ENTRA_CLIENT_ID` | `entraClientId` |
 | `ENTRA_API_AUDIENCE` | `api://<client-id>` |
 | `PLATFORM_TENANT_ID` | `platformTenantId` |
-| `CORS_ORIGIN` | `https://catalyst.sincs.dev` |
+| `CORS_ORIGIN` | `https://catalyst.msft.ae` |
 | `SEED_DEMO` | `false` |
 
 **Console (`cortex-cp-console`)**
 
 | Env | Value |
 | --- | --- |
-| `AUTH_URL` | `https://catalyst.sincs.dev` |
+| `AUTH_URL` | `https://catalyst.msft.ae` |
 | `AUTH_TRUST_HOST` | `true` |
 | `AUTH_SECRET` | secret |
 | `AUTH_MICROSOFT_ENTRA_ID_ID` | `entraClientId` |
 | `AUTH_MICROSOFT_ENTRA_ID_SECRET` | secret |
 | `AUTH_MICROSOFT_ENTRA_ID_ISSUER` | `https://login.microsoftonline.com/common/v2.0` |
 | `PLATFORM_TENANT_ID` | `platformTenantId` |
-| `CORTEX_API_URL` | `https://api.catalyst.sincs.dev` |
+| `CORTEX_API_URL` | `https://api.catalyst.msft.ae` |
 | `NEXT_PUBLIC_CORTEX_ENV` | `prod` |
 
 ---
@@ -331,4 +335,11 @@ This template optimizes for a clean first deployment. For production, layer on:
 az group delete -n "$RG" --yes --no-wait
 ```
 
-Then remove the four `catalyst` DNS records from `sincs.dev`.
+Then remove the four `catalyst` records from the `msft.ae` Azure DNS zone:
+
+```bash
+for r in catalyst asuid.catalyst api.catalyst asuid.api.catalyst; do
+  az network dns record-set cname delete -g dns -z msft.ae -n "$r" --yes 2>/dev/null
+  az network dns record-set txt   delete -g dns -z msft.ae -n "$r" --yes 2>/dev/null
+done
+```

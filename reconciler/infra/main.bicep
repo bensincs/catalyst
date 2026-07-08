@@ -30,7 +30,7 @@ param location string = resourceGroup().location
 param tenantName string
 
 @description('Cortex control-plane API base URL.')
-param controlPlaneUrl string = 'https://api.catalyst.sincs.dev'
+param controlPlaneUrl string = 'https://api.catalyst.msft.ae'
 
 @description('Entra scope/resource for the Cortex control-plane API.')
 param cortexApiScope string = 'api://33e1686e-d227-454a-9974-4978c567720b'

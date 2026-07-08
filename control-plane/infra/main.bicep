@@ -6,8 +6,8 @@
 // (Log Analytics + managed environment + container apps, a user-assigned
 // identity used to pull images from the registry).
 //
-//   console  ->  https://catalyst.sincs.dev        (external ingress)
-//   api      ->  https://api.catalyst.sincs.dev    (external ingress; in-tenant reconcilers call this)
+//   console  ->  https://catalyst.msft.ae        (external ingress)
+//   api      ->  https://api.catalyst.msft.ae    (external ingress; in-tenant reconcilers call this)
 //   postgres ->  Azure Database for PostgreSQL Flexible Server (database: cortex)
 //
 // Images must exist in the registry before the apps can start, so this template
@@ -33,10 +33,10 @@ param location string = resourceGroup().location
 param namePrefix string = 'cortex'
 
 @description('Public hostname for the console (BFF).')
-param consoleDomain string = 'catalyst.sincs.dev'
+param consoleDomain string = 'catalyst.msft.ae'
 
 @description('Public hostname for the control-plane API (reconcilers call this).')
-param apiDomain string = 'api.catalyst.sincs.dev'
+param apiDomain string = 'api.catalyst.msft.ae'
 
 @description('Create the container apps. False for the first (registry-only) pass; push images; then true.')
 param deployApps bool = false
@@ -231,7 +231,7 @@ resource api 'Microsoft.App/containerApps@2024-03-01' = if (deployApps) {
         targetPort: 8080
         transport: 'auto'
         allowInsecure: false
-        // api.catalyst.sincs.dev is bound out-of-band via the CLI (see DEPLOYMENT.md).
+        // api.catalyst.msft.ae is bound out-of-band via the CLI (see DEPLOYMENT.md).
       }
       registries: [
         {
@@ -298,7 +298,7 @@ resource console 'Microsoft.App/containerApps@2024-03-01' = if (deployApps) {
         targetPort: 3000
         transport: 'auto'
         allowInsecure: false
-        // catalyst.sincs.dev is bound out-of-band via the CLI (see DEPLOYMENT.md).
+        // catalyst.msft.ae is bound out-of-band via the CLI (see DEPLOYMENT.md).
       }
       registries: [
         {

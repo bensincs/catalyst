@@ -11,8 +11,8 @@
 
 using './main.bicep'
 
-param consoleDomain = 'catalyst.sincs.dev'
-param apiDomain = 'api.catalyst.sincs.dev'
+param consoleDomain = 'catalyst.msft.ae'
+param apiDomain = 'api.catalyst.msft.ae'
 
 // Pass 1 default; set deployApps=true on the CLI for pass 2.
 param deployApps = false

@@ -20,7 +20,7 @@ installs, or bootstrapping a tenant before the offer is published.
  └───────────────────────────────────────────────────────────────┘
           │  identity token (CORTEX_API_SCOPE), tid → tenant
           ▼
-   https://api.catalyst.sincs.dev   (Cortex control plane, /recon/*)
+   https://api.catalyst.msft.ae   (Cortex control plane, /recon/*)
 ```
 
 Everything is **inferred or defaulted** except your organization name: region comes
@@ -110,7 +110,7 @@ az deployment group create \
 Common overrides:
 
 ```bash
-  -p controlPlaneUrl="https://api.catalyst.sincs.dev" \   # default
+  -p controlPlaneUrl="https://api.catalyst.msft.ae" \   # default
   -p cortexApiScope="api://33e1686e-d227-454a-9974-4978c567720b" \   # default
   -p foundryProjectName="agents-prod" \
   -p modelName="gpt-4o" -p modelVersion="2024-11-20" -p modelCapacity=30
@@ -150,7 +150,7 @@ az containerapp logs show -g "$RG" -n cortex-reconciler --follow --tail 50
 What healthy looks like:
 
 - The log lines `reconciled desired=<n> healthy=<n>` each poll interval.
-- The tenant appears in the Cortex **Fleet** (`https://catalyst.sincs.dev`) on the
+- The tenant appears in the Cortex **Fleet** (`https://catalyst.msft.ae`) on the
   first heartbeat — no pre-registration needed; the heartbeat enrolls it.
 - Any **prompt** agents entitled to this tenant show up as agents in the Foundry
   project (portal → your `cortex-ai-<hash>` account → `agents-prod`). Agents must
@@ -188,7 +188,7 @@ Parameters (`main.bicep`) — all optional except `tenantName`:
 | --- | --- | --- |
 | `tenantName` | — (required) | org display name in the Fleet |
 | `location` | resource group's | region for all resources |
-| `controlPlaneUrl` | `https://api.catalyst.sincs.dev` | Cortex API base |
+| `controlPlaneUrl` | `https://api.catalyst.msft.ae` | Cortex API base |
 | `cortexApiScope` | `api://33e1686e-…` | Entra scope for the Cortex API |
 | `plan` | `enterprise` | plan tier reported |
 | `foundryAccountName` | `cortex-ai-<hash>` | Foundry account (globally unique) |
