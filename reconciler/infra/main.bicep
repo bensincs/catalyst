@@ -206,6 +206,21 @@ resource foundryRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-
   }
 }
 
+// The project's OWN system-assigned identity also needs Foundry User on the
+// project — without it the Foundry portal shows "Setup incomplete: this
+// project's managed identity needs the Foundry User role on this project", and
+// project-scoped operations (agents, connections, capability hosts) can't use
+// the project identity. This is distinct from the reconciler identity above.
+resource projectFoundryRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(foundryProject.id, foundryUserRoleId, 'project-mi')
+  scope: foundryProject
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', foundryUserRoleId)
+    principalId: foundryProject.identity.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
 // --- Reconciler runtime -------------------------------------------------------
 
 resource env 'Microsoft.App/managedEnvironments@2024-03-01' = if (deployReconcilerApp) {

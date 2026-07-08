@@ -36,7 +36,8 @@ derived from that name.
 | Foundry project | `agents-prod` | where agents are converged |
 | Model deployment | `gpt-4o` | what agents run on |
 | Embedding deployment | `text-embedding-3-small` | required by memory stores to index memories |
-| Role assignment | — | identity → **Foundry User** on the account (the `AIServices/agents/*` data plane) |
+| Role assignment | — | reconciler identity → **Foundry User** on the account (the `AIServices/agents/*` data plane) |
+| Role assignment | — | project's own system-assigned identity → **Foundry User** on the project (clears Foundry's "Setup incomplete" prompt) |
 | Managed environment | `cortex-recon-env` | Container Apps env |
 | Container app | `cortex-reconciler` | outbound-only worker, 1 replica |
 
