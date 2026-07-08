@@ -294,7 +294,7 @@ function AgentRow({ agent, onConfigure }: { agent: EnabledAgent; onConfigure: ()
       </div>
 
       <div className={styles.agentStatus}>
-        <StatusBadge tone={h.tone} label={h.label} pulse={agent.health === "reconciling"} variant={agent.health === "healthy" ? "plain" : "soft"} />
+        <StatusBadge tone={h.tone} label={h.label} pulse={agent.health === "reconciling"} variant={agent.health === "live" ? "plain" : "soft"} />
       </div>
 
       <Button size="sm" variant="ghost" icon={Settings2} iconOnly aria-label={`Configure ${agent.name}`} onClick={onConfigure} className={styles.agentConfig} />

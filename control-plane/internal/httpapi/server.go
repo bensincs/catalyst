@@ -64,6 +64,8 @@ func (s *Server) Router() http.Handler {
 		r.Post("/tenant/agents", s.handleEnableAgent)
 		r.Delete("/tenant/agents/{agentId}", s.handleDisableAgent)
 		r.Post("/tenant/agents/{agentId}/store", s.handleConnectAgentStore)
+		r.Post("/tenant/stores/{storeId}", s.handleEnableStore)
+		r.Delete("/tenant/stores/{storeId}", s.handleDisableStore)
 	})
 
 	// Reconciler-facing endpoints. The in-tenant reconciler authenticates with
@@ -201,9 +203,6 @@ func (s *Server) handleCatalog(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleCreateCatalogAgent(w http.ResponseWriter, r *http.Request) {
 	id, _ := auth.IdentityFrom(r.Context())
-	if !s.requirePlatform(w, id) {
-		return
-	}
 	var body struct {
 		Name        string                 `json:"name"`
 		Description string                 `json:"description"`
@@ -227,8 +226,17 @@ func (s *Server) handleCreateCatalogAgent(w http.ResponseWriter, r *http.Request
 	if agentModel == "" {
 		agentModel = "gpt-4o"
 	}
+	owner := "" // platform-authored by default
+	if id.Role == model.RoleTenant {
+		t, ok := s.callerTenant(w, r)
+		if !ok {
+			return
+		}
+		owner = t.ID
+		slug = t.ID + "-" + slug // namespace tenant agents to avoid platform-slug collisions
+	}
 	if err := s.store.CreateCatalogAgent(r.Context(), slug, strings.TrimSpace(body.Name),
-		strings.TrimSpace(body.Description), agentType, agentModel, id.OID, body.Definition); err != nil {
+		strings.TrimSpace(body.Description), agentType, agentModel, owner, id.OID, body.Definition); err != nil {
 		if isDup(err) {
 			writeErr(w, http.StatusConflict, "an agent with that name already exists")
 			return
@@ -239,12 +247,39 @@ func (s *Server) handleCreateCatalogAgent(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusCreated, map[string]string{"id": slug})
 }
 
+// catalogWriteAllowed loads an agent and checks the caller may modify it: platform
+// admins may version any agent; a tenant only its own.
+func (s *Server) catalogWriteAllowed(w http.ResponseWriter, r *http.Request, id model.Identity, agentID string) bool {
+	owner, err := s.store.CatalogAgentOwner(r.Context(), agentID)
+	if errors.Is(err, store.ErrNotFound) {
+		writeErr(w, http.StatusNotFound, "agent not found")
+		return false
+	}
+	if err != nil {
+		s.fail(w, r, err)
+		return false
+	}
+	if id.Role == model.RolePlatform {
+		return true
+	}
+	t, err := s.store.EnsureTenantForTID(r.Context(), id.TID, orgNameFromEmail(id.Email))
+	if err != nil {
+		s.fail(w, r, err)
+		return false
+	}
+	if owner != t.ID {
+		writeErr(w, http.StatusForbidden, "not your agent")
+		return false
+	}
+	return true
+}
+
 func (s *Server) handlePublishVersion(w http.ResponseWriter, r *http.Request) {
 	id, _ := auth.IdentityFrom(r.Context())
-	if !s.requirePlatform(w, id) {
+	agentID := chi.URLParam(r, "id")
+	if !s.catalogWriteAllowed(w, r, id, agentID) {
 		return
 	}
-	agentID := chi.URLParam(r, "id")
 	var body struct {
 		Version        string                 `json:"version"`
 		Channel        string                 `json:"channel"`
@@ -552,6 +587,40 @@ func (s *Server) handleConnectAgentStore(w http.ResponseWriter, r *http.Request)
 		s.fail(w, r, err)
 	default:
 		writeJSON(w, http.StatusOK, map[string]string{"status": "connected"})
+	}
+}
+
+// handleEnableStore activates a memory store (owned or entitled) in the caller's
+// tenant, mirroring enabling an agent — the reconciler then provisions it.
+func (s *Server) handleEnableStore(w http.ResponseWriter, r *http.Request) {
+	t, ok := s.callerTenant(w, r)
+	if !ok {
+		return
+	}
+	switch err := s.store.EnableStore(r.Context(), t.ID, chi.URLParam(r, "storeId")); {
+	case errors.Is(err, store.ErrStoreNotAccessible):
+		writeErr(w, http.StatusForbidden, "that memory store isn't available to your tenant")
+	case err != nil:
+		s.fail(w, r, err)
+	default:
+		writeJSON(w, http.StatusOK, map[string]string{"status": "enabled"})
+	}
+}
+
+func (s *Server) handleDisableStore(w http.ResponseWriter, r *http.Request) {
+	t, ok := s.callerTenant(w, r)
+	if !ok {
+		return
+	}
+	switch err := s.store.DisableStore(r.Context(), t.ID, chi.URLParam(r, "storeId")); {
+	case errors.Is(err, store.ErrStoreInUse):
+		writeErr(w, http.StatusConflict, "that store is in use by an enabled agent — disconnect it first")
+	case errors.Is(err, store.ErrNotFound):
+		writeErr(w, http.StatusNotFound, "store not enabled")
+	case err != nil:
+		s.fail(w, r, err)
+	default:
+		writeJSON(w, http.StatusOK, map[string]string{"status": "disabled"})
 	}
 }
 

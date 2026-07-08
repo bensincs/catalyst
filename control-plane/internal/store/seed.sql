@@ -48,9 +48,9 @@ ON CONFLICT (id) DO NOTHING;
 -- Enabled agents for Mubadala Health (used by the tenant-overview drill-in).
 INSERT INTO agents (id, tenant_slug, agent_id, name, version, channel, model, health, publish_to, calls_30d, note, sort_order)
 VALUES
-  ('mubadala-health:clinical-coding','mubadala-health','clinical-coding','Clinical Coding Assistant','2.3.1','stable','gpt-4o','healthy','{api,teams}',412800,'',1),
-  ('mubadala-health:prior-auth','mubadala-health','prior-auth','Prior Authorization Reviewer','1.8.0','stable','gpt-4o','healthy','{api}',268120,'',2),
+  ('mubadala-health:clinical-coding','mubadala-health','clinical-coding','Clinical Coding Assistant','2.3.1','stable','gpt-4o','live','{api,teams}',412800,'',1),
+  ('mubadala-health:prior-auth','mubadala-health','prior-auth','Prior Authorization Reviewer','1.8.0','stable','gpt-4o','live','{api}',268120,'',2),
   ('mubadala-health:patient-intake','mubadala-health','patient-intake','Patient Intake Triage','1.2.0','beta','gpt-4o-mini','reconciling','{api,teams}',96540,'Applying config change',3),
-  ('mubadala-health:policy-qa','mubadala-health','policy-qa','Policy & Compliance Q&A','3.0.2','stable','jais-30b','healthy','{api,m365}',154300,'',4),
+  ('mubadala-health:policy-qa','mubadala-health','policy-qa','Policy & Compliance Q&A','3.0.2','stable','jais-30b','live','{api,m365}',154300,'',4),
   ('mubadala-health:radiology-report','mubadala-health','radiology-report','Radiology Report Drafting','0.9.4','beta','gpt-4o','drift','{api}',38900,'Grounding index out of date',5)
 ON CONFLICT (id) DO NOTHING;

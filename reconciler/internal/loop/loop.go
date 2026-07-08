@@ -53,16 +53,18 @@ func (r *Reconciler) once(ctx context.Context) {
 		slog.Warn("sync failed; will retry", "err", err)
 		return
 	}
-	statuses := r.foundry.Reconcile(ctx, desired.Agents, desired.MemoryStores)
-	hb := r.heartbeat(statuses)
+	statuses, storeStatuses := r.foundry.Reconcile(ctx, desired.Agents, desired.MemoryStores)
+	hb := r.heartbeat(statuses, storeStatuses)
 	if err := r.cp.Heartbeat(ctx, hb); err != nil {
 		slog.Warn("heartbeat failed", "err", err)
 		return
 	}
-	slog.Info("reconciled", "desired", len(desired.Agents), "healthy", countHealthy(statuses))
+	slog.Info("reconciled",
+		"agents", len(desired.Agents), "agentsLive", countLive(statuses),
+		"stores", len(desired.MemoryStores), "storesLive", countStoresLive(storeStatuses))
 }
 
-func (r *Reconciler) heartbeat(statuses []shared.AgentStatus) shared.Heartbeat {
+func (r *Reconciler) heartbeat(statuses []shared.AgentStatus, storeStatuses []shared.MemoryStoreStatus) shared.Heartbeat {
 	return shared.Heartbeat{
 		TenantID:           r.cfg.TenantID,
 		TenantName:         r.cfg.TenantName,
@@ -73,13 +75,24 @@ func (r *Reconciler) heartbeat(statuses []shared.AgentStatus) shared.Heartbeat {
 		FoundryProject:     r.cfg.FoundryProject,
 		ReconcilerVersion:  r.cfg.ReconcilerVersion,
 		Agents:             statuses,
+		MemoryStores:       storeStatuses,
 	}
 }
 
-func countHealthy(s []shared.AgentStatus) int {
+func countLive(s []shared.AgentStatus) int {
 	n := 0
 	for _, a := range s {
-		if a.Health == "healthy" {
+		if a.Health == shared.StatusLive {
+			n++
+		}
+	}
+	return n
+}
+
+func countStoresLive(s []shared.MemoryStoreStatus) int {
+	n := 0
+	for _, ms := range s {
+		if ms.Health == shared.StatusLive {
 			n++
 		}
 	}

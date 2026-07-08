@@ -125,4 +125,32 @@ ALTER TABLE tenants ADD COLUMN IF NOT EXISTS entitled_stores text[] NOT NULL DEF
 -- or is entitled to ('' = inherit the catalog definition's memoryStore).
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS memory_store text NOT NULL DEFAULT '';
 
+-- ── Unified ownership + lifecycle (agents ⇔ memory stores) ─────────────────
+-- Agents, like memory stores, can be authored by the platform (owner_tenant = '')
+-- or by a tenant (owner_tenant = <slug>, private to that tenant). Platform-owned
+-- catalog agents are shared with tenants via entitlements; tenant-owned ones are
+-- private to their owner.
+ALTER TABLE catalog_agents ADD COLUMN IF NOT EXISTS owner_tenant text NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS catalog_agents_owner_idx ON catalog_agents(owner_tenant);
+
+-- A tenant explicitly ENABLES a memory store (one it owns or is entitled to),
+-- mirroring how it enables an agent. The row is the store's per-tenant instance:
+-- the reconciler provisions the store into the tenant's Foundry project and
+-- reports its lifecycle back (reconciling → live → blocked), so a store has the
+-- same reconcile status an agent does. Enabling an agent that references a store
+-- auto-enables that store here.
+CREATE TABLE IF NOT EXISTS tenant_stores (
+  tenant_slug text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  store_id    text NOT NULL,
+  health      text NOT NULL DEFAULT 'reconciling',   -- reconciling | live | blocked
+  auto        boolean NOT NULL DEFAULT false,          -- true = auto-enabled via an agent reference
+  sort_order  int  NOT NULL DEFAULT 0,
+  PRIMARY KEY (tenant_slug, store_id)
+);
+CREATE INDEX IF NOT EXISTS tenant_stores_tenant_idx ON tenant_stores(tenant_slug);
+
+-- Standardize the per-agent lifecycle vocabulary on 'live' (was 'healthy'), so
+-- agents, memory stores, and tenants all speak the same words.
+UPDATE agents SET health = 'live' WHERE health = 'healthy';
+
 

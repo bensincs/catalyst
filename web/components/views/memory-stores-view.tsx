@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Database, Pencil, Plus, Trash2 } from "lucide-react";
+import { Database, Pencil, Plus, Power, Trash2 } from "lucide-react";
 import { PageHeader } from "@/components/ui/page-header";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
@@ -14,9 +14,11 @@ import {
   createMemoryStore,
   deleteMemoryStore,
   updateMemoryStore,
+  enableStore,
+  disableStore,
   type ActionResult,
 } from "@/lib/actions";
-import type { MemoryStore, MemoryStoreDefinition, Role } from "@/lib/types";
+import { HEALTH_META, type MemoryStore, type MemoryStoreDefinition, type Role } from "@/lib/types";
 import styles from "./memory-stores-view.module.css";
 
 type Modal2 = { mode: "new" } | { mode: "edit"; store: MemoryStore } | null;
@@ -66,7 +68,7 @@ export function MemoryStoresView({ role, stores }: { role: Role; stores: MemoryS
         description={
           platform
             ? "Author shared memory stores, entitle tenants to them from a tenant's page, and reference them from catalog agents."
-            : "Create memory stores for your tenant and connect your agents to them. Platform stores you're entitled to appear here too."
+            : "Create your own memory stores or enable ones you're entitled to — enabling reconciles a store into your project. Connect agents to them from the Agents tab."
         }
         actions={
           <Button variant="primary" icon={Plus} onClick={() => setModal({ mode: "new" })}>
@@ -105,6 +107,14 @@ export function MemoryStoresView({ role, stores }: { role: Role; stores: MemoryS
                   <div className={styles.rowTop}>
                     <span className={styles.rowName}>{s.name}</span>
                     <StatusBadge tone={sc.tone} label={sc.label} variant="soft" />
+                    {!platform && s.enabled && s.health && (
+                      <StatusBadge
+                        tone={HEALTH_META[s.health].tone}
+                        label={HEALTH_META[s.health].label}
+                        variant="soft"
+                        pulse={s.health === "reconciling"}
+                      />
+                    )}
                     {platform && s.owner !== "" && s.ownerName && (
                       <span className={styles.count}>owned by {s.ownerName}</span>
                     )}
@@ -112,20 +122,46 @@ export function MemoryStoresView({ role, stores }: { role: Role; stores: MemoryS
                   {s.description && <p className={styles.rowDesc}>{s.description}</p>}
                   <DefinitionChips def={s.definition} />
                 </div>
-                {manageable(s) && (
+                {(manageable(s) || (!platform && (s.owned || s.entitled))) && (
                   <div className={styles.rowActions}>
-                    <Button size="sm" icon={Pencil} onClick={() => setModal({ mode: "edit", store: s })}>
-                      Edit
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="danger"
-                      icon={Trash2}
-                      loading={pending}
-                      onClick={() => runAction(() => deleteMemoryStore(s.id), `Deleted ${s.name}`)}
-                    >
-                      Delete
-                    </Button>
+                    {!platform &&
+                      (s.owned || s.entitled) &&
+                      (s.enabled ? (
+                        <Button
+                          size="sm"
+                          icon={Power}
+                          loading={pending}
+                          onClick={() => runAction(() => disableStore(s.id), `Disabled ${s.name}`)}
+                        >
+                          Disable
+                        </Button>
+                      ) : (
+                        <Button
+                          size="sm"
+                          variant="primary"
+                          icon={Power}
+                          loading={pending}
+                          onClick={() => runAction(() => enableStore(s.id), `Enabling ${s.name}`)}
+                        >
+                          Enable
+                        </Button>
+                      ))}
+                    {manageable(s) && (
+                      <>
+                        <Button size="sm" icon={Pencil} onClick={() => setModal({ mode: "edit", store: s })}>
+                          Edit
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="danger"
+                          icon={Trash2}
+                          loading={pending}
+                          onClick={() => runAction(() => deleteMemoryStore(s.id), `Deleted ${s.name}`)}
+                        >
+                          Delete
+                        </Button>
+                      </>
+                    )}
                   </div>
                 )}
               </li>

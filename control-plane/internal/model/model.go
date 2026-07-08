@@ -102,20 +102,27 @@ type CatalogVersion struct {
 	CreatedAt      time.Time              `json:"createdAt"`
 }
 
-// CatalogAgent is a publisher-authored agent definition (+ its versions).
+// CatalogAgent is an agent definition (+ its versions), authored by the platform
+// (Owner == "") or by a tenant (Owner == <tenant slug>, private to it). Platform
+// agents are granted to tenants via entitlements; tenant agents are private.
 type CatalogAgent struct {
 	ID            string           `json:"id"`
 	Name          string           `json:"name"`
 	Description   string           `json:"description"`
 	Type          string           `json:"type"` // prompt | hosted (immutable)
 	Model         string           `json:"model"`
+	Owner         string           `json:"owner"` // "" = platform-authored; else tenant slug
 	LatestVersion string           `json:"latestVersion"`
 	Versions      []CatalogVersion `json:"versions"`
 	CreatedAt     time.Time        `json:"createdAt"`
 
 	// Populated in the tenant view:
+	Platform bool `json:"platform"` // platform-authored (vs tenant-owned)
+	Owned    bool `json:"owned"`    // owned by the viewing tenant
 	Entitled bool `json:"entitled"`
 	Enabled  bool `json:"enabled"`
+	// Populated in the platform view:
+	OwnerName string `json:"ownerName,omitempty"` // owning tenant's display name
 }
 
 // TenantRegistryRow is a fleet tenant plus its entitlements (platform view).
@@ -140,9 +147,11 @@ type MemoryStore struct {
 	CreatedAt   time.Time                    `json:"createdAt"`
 
 	// Populated in the tenant view:
-	Platform bool `json:"platform"` // platform-authored (vs tenant-owned)
-	Owned    bool `json:"owned"`    // owned by the viewing tenant
-	Entitled bool `json:"entitled"` // entitled to the viewing tenant
+	Platform bool   `json:"platform"` // platform-authored (vs tenant-owned)
+	Owned    bool   `json:"owned"`    // owned by the viewing tenant
+	Entitled bool   `json:"entitled"` // entitled to the viewing tenant
+	Enabled  bool   `json:"enabled"`  // explicitly enabled (reconciled) in the viewing tenant
+	Health   string `json:"health,omitempty"`  // per-tenant lifecycle: reconciling | live | blocked
 	// Populated in the platform view:
 	OwnerName string `json:"ownerName,omitempty"` // owning tenant's display name
 }

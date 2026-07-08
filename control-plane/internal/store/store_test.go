@@ -42,7 +42,7 @@ func TestCatalogEntitleEnableLoop(t *testing.T) {
 	defer cleanup()
 
 	// 1. Author a catalog agent (creates v1.0.0), then publish v1.1.0.
-	if err := st.CreateCatalogAgent(ctx, agentID, "ZZ Test Agent", "desc", "prompt", "gpt-4o", "oid-test", shared.AgentDefinition{Instructions: "v1"}); err != nil {
+	if err := st.CreateCatalogAgent(ctx, agentID, "ZZ Test Agent", "desc", "prompt", "gpt-4o", "", "oid-test", shared.AgentDefinition{Instructions: "v1"}); err != nil {
 		t.Fatalf("create catalog agent: %v", err)
 	}
 	if err := st.PublishVersion(ctx, agentID, "1.1.0", "stable", "notes", 25, shared.AgentDefinition{Instructions: "v1.1"}); err != nil {
@@ -141,7 +141,7 @@ func TestMemoryStoreLifecycle(t *testing.T) {
 		shared.MemoryStoreDefinition{ChatModel: "gpt-4o", EmbeddingModel: "text-embedding-3-small", UserProfileEnabled: true, ChatSummaryEnabled: true}, "oid-test"); err != nil {
 		t.Fatalf("create store: %v", err)
 	}
-	if err := st.CreateCatalogAgent(ctx, agentID, "ZZ MS Agent", "d", "prompt", "gpt-4o", "oid-test",
+	if err := st.CreateCatalogAgent(ctx, agentID, "ZZ MS Agent", "d", "prompt", "gpt-4o", "", "oid-test",
 		shared.AgentDefinition{Instructions: "v1", MemoryStore: storeID}); err != nil {
 		t.Fatalf("create agent: %v", err)
 	}
@@ -204,5 +204,128 @@ func TestMemoryStoreLifecycle(t *testing.T) {
 	// 5. Connecting to an inaccessible store is rejected.
 	if err := st.ConnectAgentStore(ctx, slug, agentID, "nonexistent-store"); err != ErrStoreNotAccessible {
 		t.Fatalf("expected ErrStoreNotAccessible, got %v", err)
+	}
+}
+
+// A store gets a per-tenant lifecycle: explicitly enabled → in desired state +
+// tenant view (reconciling), heartbeat moves it to live, disable removes it.
+func TestStoreEnablementLifecycle(t *testing.T) {
+	st, ctx := testStore(t)
+	defer st.Close()
+
+	const (
+		storeID = "zz-en-store"
+		slug    = "zz-en-tenant"
+		tid     = "zz-en-tid-0002"
+	)
+	cleanup := func() {
+		st.pool.Exec(ctx, `DELETE FROM tenant_stores WHERE tenant_slug = $1`, slug)
+		st.pool.Exec(ctx, `DELETE FROM memory_stores WHERE id = $1`, storeID)
+		st.pool.Exec(ctx, `DELETE FROM tenants WHERE id = $1`, slug)
+	}
+	cleanup()
+	defer cleanup()
+
+	if err := st.CreateMemoryStore(ctx, storeID, "EN Store", "", "",
+		shared.MemoryStoreDefinition{ChatModel: "gpt-4o", EmbeddingModel: "text-embedding-3-small"}, "oid"); err != nil {
+		t.Fatalf("create store: %v", err)
+	}
+	if _, err := st.pool.Exec(ctx,
+		`INSERT INTO tenants (id, name, tenant_id, enrollment, entitled_stores) VALUES ($1,'EN Tenant',$2,'bound',ARRAY[$3])`,
+		slug, tid, storeID); err != nil {
+		t.Fatalf("insert tenant: %v", err)
+	}
+
+	// Not enabled yet → not desired.
+	if ds, _ := st.SyncDesired(ctx, tid); len(ds.MemoryStores) != 0 {
+		t.Fatalf("store should not be desired before enable: %+v", ds.MemoryStores)
+	}
+
+	// Enable → desired + tenant view shows enabled/reconciling.
+	if err := st.EnableStore(ctx, slug, storeID); err != nil {
+		t.Fatalf("enable store: %v", err)
+	}
+	if ds, _ := st.SyncDesired(ctx, tid); len(ds.MemoryStores) != 1 || ds.MemoryStores[0].ID != storeID {
+		t.Fatalf("enabled store not desired: %+v", ds.MemoryStores)
+	}
+	stores, _ := st.MemoryStoresForTenant(ctx, slug)
+	if len(stores) != 1 || !stores[0].Enabled || stores[0].Health != "reconciling" {
+		t.Fatalf("tenant store view wrong: %+v", stores)
+	}
+
+	// Heartbeat reports it live → tenant view reflects it.
+	if err := st.ApplyHeartbeat(ctx, shared.Heartbeat{TenantID: tid, TenantName: "EN Tenant",
+		MemoryStores: []shared.MemoryStoreStatus{{StoreID: storeID, Health: "live"}}}); err != nil {
+		t.Fatalf("heartbeat: %v", err)
+	}
+	if stores, _ := st.MemoryStoresForTenant(ctx, slug); stores[0].Health != "live" {
+		t.Fatalf("store health after heartbeat = %q, want live", stores[0].Health)
+	}
+
+	// Enabling a store the tenant can't access is rejected.
+	if err := st.EnableStore(ctx, slug, "no-such-store"); err != ErrStoreNotAccessible {
+		t.Fatalf("expected ErrStoreNotAccessible, got %v", err)
+	}
+
+	// Disable → gone from desired.
+	if err := st.DisableStore(ctx, slug, storeID); err != nil {
+		t.Fatalf("disable store: %v", err)
+	}
+	if ds, _ := st.SyncDesired(ctx, tid); len(ds.MemoryStores) != 0 {
+		t.Fatalf("disabled store still desired: %+v", ds.MemoryStores)
+	}
+}
+
+// A tenant-owned agent is private to its tenant and needs no entitlement;
+// platform agents the tenant isn't entitled to don't appear.
+func TestTenantOwnedAgentVisibility(t *testing.T) {
+	st, ctx := testStore(t)
+	defer st.Close()
+
+	const (
+		slug      = "zz-own-tenant"
+		tid       = "zz-own-tid-0003"
+		ownAgent  = "zz-own-tenant-myagent"
+		platAgent = "zz-own-plat-agent"
+	)
+	cleanup := func() {
+		st.pool.Exec(ctx, `DELETE FROM catalog_agents WHERE id = ANY($1)`, []string{ownAgent, platAgent})
+		st.pool.Exec(ctx, `DELETE FROM tenants WHERE id = $1`, slug)
+	}
+	cleanup()
+	defer cleanup()
+
+	if _, err := st.pool.Exec(ctx,
+		`INSERT INTO tenants (id, name, tenant_id, enrollment) VALUES ($1,'Own Tenant',$2,'bound')`, slug, tid); err != nil {
+		t.Fatalf("insert tenant: %v", err)
+	}
+	if err := st.CreateCatalogAgent(ctx, ownAgent, "My Agent", "", "prompt", "gpt-4o", slug, "oid", shared.AgentDefinition{Instructions: "x"}); err != nil {
+		t.Fatalf("create owned agent: %v", err)
+	}
+	if err := st.CreateCatalogAgent(ctx, platAgent, "Plat Agent", "", "prompt", "gpt-4o", "", "oid", shared.AgentDefinition{Instructions: "x"}); err != nil {
+		t.Fatalf("create platform agent: %v", err)
+	}
+
+	list, err := st.CatalogForTenant(ctx, slug)
+	if err != nil {
+		t.Fatalf("catalog for tenant: %v", err)
+	}
+	var sawOwn, sawPlat bool
+	for _, a := range list {
+		switch a.ID {
+		case ownAgent:
+			sawOwn = true
+			if !a.Owned || a.Platform || a.Entitled {
+				t.Fatalf("owned agent flags wrong: %+v", a)
+			}
+		case platAgent:
+			sawPlat = true
+		}
+	}
+	if !sawOwn {
+		t.Fatalf("tenant did not see its own agent")
+	}
+	if sawPlat {
+		t.Fatalf("tenant saw a platform agent it isn't entitled to")
 	}
 }

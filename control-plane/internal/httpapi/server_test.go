@@ -9,14 +9,14 @@ import (
 func TestGateAgentHealth(t *testing.T) {
 	agents := func() []model.Agent {
 		return []model.Agent{
-			{ID: "a", Health: "healthy"},
+			{ID: "a", Health: "live"},
 			{ID: "b", Health: "blocked"},
 		}
 	}
 
 	t.Run("live tenant: reconciler-reported health passes through", func(t *testing.T) {
 		out := gateAgentHealth(model.Tenant{Lifecycle: "live"}, agents())
-		if out[0].Health != "healthy" || out[1].Health != "blocked" {
+		if out[0].Health != "live" || out[1].Health != "blocked" {
 			t.Fatalf("expected reported health preserved, got %+v", out)
 		}
 	})

@@ -62,7 +62,7 @@ export function CatalogView({ role, agents, memoryStores }: { role: Role; agents
   return role === "platform" ? (
     <PlatformCatalog agents={agents} pending={pending} runAction={runAction} memoryStores={memoryStores} />
   ) : (
-    <TenantCatalog agents={agents} pending={pending} runAction={runAction} />
+    <TenantCatalog agents={agents} pending={pending} runAction={runAction} memoryStores={memoryStores} />
   );
 }
 
@@ -166,32 +166,55 @@ function PlatformCatalog({
   );
 }
 
-/* ── Tenant: browse entitled + enable ─────────────────────────────────────── */
+/* ── Tenant: author own + browse entitled + enable ────────────────────────── */
+
+function OwnershipTag({ agent }: { agent: CatalogAgent }) {
+  const label = agent.owned ? "Yours" : "Platform";
+  return (
+    <span className={styles.typeTag} data-type={agent.owned ? "prompt" : "hosted"}>
+      {label}
+    </span>
+  );
+}
 
 function TenantCatalog({
   agents,
   pending,
   runAction,
+  memoryStores,
 }: {
   agents: CatalogAgent[];
   pending: boolean;
   runAction: RunAction;
+  memoryStores: MemoryStore[];
 }) {
   const [enableFor, setEnableFor] = useState<CatalogAgent | null>(null);
+  const [newOpen, setNewOpen] = useState(false);
+  const [publishFor, setPublishFor] = useState<CatalogAgent | null>(null);
 
   return (
     <div>
       <PageHeader
         title="Catalog"
-        description="The agents your platform team has entitled you to. Enable one and the reconciler provisions it in your own Foundry project."
+        description="Agents your platform team entitled you to, plus the ones you author yourself. Enable one and the reconciler provisions it in your own Foundry project."
+        actions={
+          <Button variant="primary" icon={Plus} onClick={() => setNewOpen(true)}>
+            New agent
+          </Button>
+        }
       />
 
       {agents.length === 0 ? (
         <div className={styles.panelEmpty}>
           <EmptyState
             icon={Boxes}
-            title="No agents entitled yet"
-            description="Your platform team hasn't entitled your tenant to any agents. Once they do, they'll appear here ready to enable."
+            title="No agents yet"
+            description="Author your own agent, or ask your platform team to entitle your tenant to one. Enabled agents are provisioned into your own Foundry project."
+            action={
+              <Button variant="primary" icon={Plus} onClick={() => setNewOpen(true)}>
+                New agent
+              </Button>
+            }
           />
         </div>
       ) : (
@@ -205,6 +228,7 @@ function TenantCatalog({
                 <div className={styles.rowTop}>
                   <span className={styles.rowName}>{a.name}</span>
                   <TypeTag type={a.type} />
+                  <OwnershipTag agent={a} />
                   <span className={styles.versionTag + " mono"}>v{a.latestVersion}</span>
                 </div>
                 {a.description && <p className={styles.rowDesc}>{a.description}</p>}
@@ -213,27 +237,57 @@ function TenantCatalog({
                   <span className="mono">{a.model}</span>
                 </div>
               </div>
-              {a.enabled ? (
-                <div className={styles.enabledRow}>
-                  <StatusBadge tone="success" label="Enabled" variant="plain" />
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => runAction(() => disableAgent(a.id), `Disabled ${a.name}`)}
-                  >
-                    Disable
+              <div className={styles.enabledRow}>
+                {a.owned && (
+                  <Button size="sm" icon={GitBranch} onClick={() => setPublishFor(a)}>
+                    Publish version
                   </Button>
-                </div>
-              ) : (
-                <Button size="sm" variant="primary" icon={Plus} onClick={() => setEnableFor(a)}>
-                  Enable
-                </Button>
-              )}
+                )}
+                {a.enabled ? (
+                  <>
+                    <StatusBadge tone="success" label="Enabled" variant="plain" />
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => runAction(() => disableAgent(a.id), `Disabled ${a.name}`)}
+                    >
+                      Disable
+                    </Button>
+                  </>
+                ) : (
+                  <Button size="sm" variant="primary" icon={Plus} onClick={() => setEnableFor(a)}>
+                    Enable
+                  </Button>
+                )}
+              </div>
             </li>
           ))}
         </ul>
       )}
 
+      <NewAgentModal
+        open={newOpen}
+        pending={pending}
+        onClose={() => setNewOpen(false)}
+        stores={memoryStores}
+        onSubmit={(input) =>
+          runAction(() => createCatalogAgent(input), `Created ${input.name}`, () => setNewOpen(false))
+        }
+      />
+      <PublishModal
+        key={publishFor?.id ?? "none"}
+        agent={publishFor}
+        pending={pending}
+        onClose={() => setPublishFor(null)}
+        stores={memoryStores}
+        onSubmit={(agent, input) =>
+          runAction(
+            () => publishVersion(agent.id, input),
+            `Published ${agent.name} v${input.version}`,
+            () => setPublishFor(null),
+          )
+        }
+      />
       <EnableModal
         agent={enableFor}
         pending={pending}

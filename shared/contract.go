@@ -87,30 +87,51 @@ type DesiredAgent struct {
 type DesiredState struct {
 	TenantID string         `json:"tenantId"`
 	Agents   []DesiredAgent `json:"agents"`
-	// MemoryStores are the stores referenced by the desired agents, with their
-	// configs, so the reconciler can bind each agent to its store's memory.
+	// MemoryStores are the stores enabled in this tenant (explicitly, or because
+	// an enabled agent references one), with their typed definitions — so the
+	// reconciler provisions each as a Foundry memory_store and binds agents to it.
 	MemoryStores []DesiredMemoryStore `json:"memoryStores,omitempty"`
 }
+
+// Lifecycle status values shared by agents and memory stores (reconciler →
+// control plane). A resource is `reconciling` while being provisioned into the
+// tenant's Foundry project, `live` once it exists and has converged, and
+// `blocked` if the reconciler couldn't realize it.
+const (
+	StatusReconciling = "reconciling"
+	StatusLive        = "live"
+	StatusBlocked     = "blocked"
+)
 
 // AgentStatus is the actual state of one agent (reconciler → control plane).
 type AgentStatus struct {
 	AgentID  string `json:"agentId"`
 	Version  string `json:"version"`
-	Health   string `json:"health"` // healthy | reconciling | blocked
+	Health   string `json:"health"` // live | reconciling | blocked
 	Calls30d int64  `json:"calls30d"`
+}
+
+// MemoryStoreStatus is the actual state of one memory store the reconciler
+// provisions in the tenant's Foundry project (reconciler → control plane), so
+// the control plane can show the same reconciling→live lifecycle stores have as
+// agents.
+type MemoryStoreStatus struct {
+	StoreID string `json:"storeId"`
+	Health  string `json:"health"` // live | reconciling | blocked
 }
 
 // Heartbeat is the reconciler's periodic report: the in-tenant install identity
 // (subscription, region, reconciler identity, Foundry project — the authoritative
-// source for these) plus the actual state of every managed agent.
+// source for these) plus the actual state of every managed agent and memory store.
 type Heartbeat struct {
-	TenantID           string        `json:"tenantId"`
-	TenantName         string        `json:"tenantName"`
-	Region             string        `json:"region"`
-	Plan               string        `json:"plan,omitempty"`
-	SubscriptionID     string        `json:"subscriptionId"`
-	ReconcilerIdentity string        `json:"reconcilerIdentity"`
-	FoundryProject     string        `json:"foundryProject"`
-	ReconcilerVersion  string        `json:"reconcilerVersion"`
-	Agents             []AgentStatus `json:"agents"`
+	TenantID           string              `json:"tenantId"`
+	TenantName         string              `json:"tenantName"`
+	Region             string              `json:"region"`
+	Plan               string              `json:"plan,omitempty"`
+	SubscriptionID     string              `json:"subscriptionId"`
+	ReconcilerIdentity string              `json:"reconcilerIdentity"`
+	FoundryProject     string              `json:"foundryProject"`
+	ReconcilerVersion  string              `json:"reconcilerVersion"`
+	Agents             []AgentStatus       `json:"agents"`
+	MemoryStores       []MemoryStoreStatus `json:"memoryStores,omitempty"`
 }

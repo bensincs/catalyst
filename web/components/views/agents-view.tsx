@@ -92,7 +92,7 @@ export function AgentsView({ agents }: { agents: EnabledAgent[] }) {
                     })}
                   </div>
                   <div className={styles.status}>
-                    <StatusBadge tone={h.tone} label={h.label} pulse={a.health === "reconciling"} variant={a.health === "healthy" ? "plain" : "soft"} />
+                    <StatusBadge tone={h.tone} label={h.label} pulse={a.health === "reconciling"} variant={a.health === "live" ? "plain" : "soft"} />
                   </div>
                   <ChevronRight size={16} strokeWidth={2} className={styles.chevron} aria-hidden />
                 </Link>

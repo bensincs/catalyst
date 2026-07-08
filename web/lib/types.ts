@@ -6,13 +6,14 @@ export type Role = "platform" | "tenant";
 
 export type Environment = "dev" | "qa" | "uat" | "prod";
 
-/** Control-plane health vocabulary. Each maps to a status color + a second cue. */
+/** Control-plane lifecycle vocabulary, shared by agents and memory stores. Each
+ * maps to a status color + a second cue. */
 export type Health =
-  | "healthy" // synced / enabled — success (lime)
-  | "reconciling" // desired ≠ actual, converging — info (violet)
-  | "drift" // needs a human soon — warning (amber)
-  | "blocked" // not running; action required — danger (red)
-  | "disabled" // inert / offline — neutral (gray)
+  | "live" // provisioned & converged in the tenant's cluster — success (lime)
+  | "reconciling" // being provisioned into the cluster — info (violet)
+  | "drift" // newer version desired than what's live — warning (amber)
+  | "blocked" // couldn't be realized; action required — danger (red)
+  | "disabled" // inert / not enabled — neutral (gray)
   | "unknown"; // enabled but no live reconciler has confirmed — neutral (gray)
 
 export type EnrollmentStatus = "bound" | "pending" | "suspended" | "offboarding";
@@ -122,9 +123,15 @@ export interface CatalogAgent {
   description: string;
   type: AgentType;
   model: string;
+  owner: string; // "" = platform-authored; else tenant slug
   latestVersion: string;
   versions: CatalogVersion[];
   createdAt: string;
+  // platform view
+  ownerName?: string;
+  // tenant view flags
+  platform: boolean;
+  owned: boolean;
   entitled: boolean;
   enabled: boolean;
 }
@@ -175,6 +182,8 @@ export interface MemoryStore {
   platform: boolean;
   owned: boolean;
   entitled: boolean;
+  enabled?: boolean; // explicitly enabled (reconciled) in the viewing tenant
+  health?: Health; // per-tenant lifecycle when enabled: reconciling | live | blocked
 }
 
 export interface HealthMeta {
@@ -183,7 +192,7 @@ export interface HealthMeta {
 }
 
 export const HEALTH_META: Record<Health, HealthMeta> = {
-  healthy: { label: "Healthy", tone: "success" },
+  live: { label: "Live", tone: "success" },
   reconciling: { label: "Reconciling", tone: "info" },
   drift: { label: "Drift", tone: "warning" },
   blocked: { label: "Blocked", tone: "danger" },

@@ -137,6 +137,13 @@ func newClient(endpoint string) *Foundry {
 	}, staticToken{})
 }
 
+// reconcileAgents runs a full reconcile and returns just the agent statuses (the
+// subset most tests assert on); store statuses are covered separately.
+func reconcileAgents(f *Foundry, ctx context.Context, d []shared.DesiredAgent, s []shared.DesiredMemoryStore) []shared.AgentStatus {
+	agents, _ := f.Reconcile(ctx, d, s)
+	return agents
+}
+
 func promptAgent() shared.DesiredAgent {
 	temp := 0.5
 	return shared.DesiredAgent{
@@ -157,15 +164,15 @@ func TestReconcile_CreateNoopVersionPrune(t *testing.T) {
 	ctx := context.Background()
 	a := promptAgent()
 
-	st := f.Reconcile(ctx, []shared.DesiredAgent{a}, nil)
-	if len(st) != 1 || st[0].Health != healthHealthy || st[0].Version != "v1" {
+	st := reconcileAgents(f, ctx, []shared.DesiredAgent{a}, nil)
+	if len(st) != 1 || st[0].Health != healthLive || st[0].Version != "v1" {
 		t.Fatalf("create: got %+v", st)
 	}
 	if fake.creates != 1 || fake.versions != 0 || fake.deletes != 0 {
 		t.Fatalf("create counts: c=%d v=%d d=%d", fake.creates, fake.versions, fake.deletes)
 	}
 
-	if st := f.Reconcile(ctx, []shared.DesiredAgent{a}, nil); st[0].Health != healthHealthy {
+	if st := reconcileAgents(f, ctx, []shared.DesiredAgent{a}, nil); st[0].Health != healthLive {
 		t.Fatalf("noop health: %+v", st)
 	}
 	if fake.creates != 1 || fake.versions != 0 {
@@ -175,15 +182,15 @@ func TestReconcile_CreateNoopVersionPrune(t *testing.T) {
 	a2 := a
 	a2.Version = "v2"
 	a2.Definition.Instructions = "help more"
-	st = f.Reconcile(ctx, []shared.DesiredAgent{a2}, nil)
-	if st[0].Health != healthHealthy || st[0].Version != "v2" {
+	st = reconcileAgents(f, ctx, []shared.DesiredAgent{a2}, nil)
+	if st[0].Health != healthLive || st[0].Version != "v2" {
 		t.Fatalf("version status: %+v", st)
 	}
 	if fake.versions != 1 {
 		t.Fatalf("expected 1 new version, got %d", fake.versions)
 	}
 
-	if st := f.Reconcile(ctx, nil, nil); len(st) != 0 {
+	if st := reconcileAgents(f, ctx, nil, nil); len(st) != 0 {
 		t.Fatalf("expected no statuses after prune, got %+v", st)
 	}
 	if fake.deletes != 1 || len(fake.items) != 0 {
@@ -203,7 +210,7 @@ func TestReconcile_HostedReportedBlocked(t *testing.T) {
 		AgentID: "h1", Name: "Worker", Type: shared.AgentHosted, Version: "v1",
 		Definition: shared.AgentDefinition{Image: "ghcr.io/x:1"},
 	}
-	st := f.Reconcile(context.Background(), []shared.DesiredAgent{h}, nil)
+	st := reconcileAgents(f, context.Background(), []shared.DesiredAgent{h}, nil)
 	if len(st) != 1 || st[0].Health != healthBlocked || st[0].Version != "" {
 		t.Fatalf("hosted: %+v", st)
 	}
@@ -221,7 +228,7 @@ func TestReconcile_ListFailureBlocksWithoutMutating(t *testing.T) {
 	f := newClient(srv.URL)
 
 	a := promptAgent()
-	st := f.Reconcile(context.Background(), []shared.DesiredAgent{a}, nil)
+	st := reconcileAgents(f, context.Background(), []shared.DesiredAgent{a}, nil)
 	if len(st) != 1 || st[0].Health != healthBlocked {
 		t.Fatalf("expected blocked on list failure, got %+v", st)
 	}
@@ -243,7 +250,7 @@ func TestReconcile_LeavesUnmanagedAgentsAlone(t *testing.T) {
 	defer srv.Close()
 	f := newClient(srv.URL)
 
-	_ = f.Reconcile(context.Background(), nil, nil)
+	_ = reconcileAgents(f, context.Background(), nil, nil)
 	if fake.deletes != 0 {
 		t.Fatalf("must not delete unmanaged agents, got %d", fake.deletes)
 	}
@@ -320,7 +327,7 @@ func TestReconcile_MemoryStoreBinding(t *testing.T) {
 	}
 
 	// Reconcile provisions the store as a Foundry resource, then creates the agent.
-	if st := f.Reconcile(ctx, []shared.DesiredAgent{a}, stores); st[0].Health != healthHealthy {
+	if st := reconcileAgents(f, ctx, []shared.DesiredAgent{a}, stores); st[0].Health != healthLive {
 		t.Fatalf("create: %+v", st)
 	}
 	if fake.storeCreates != 1 {
@@ -338,7 +345,7 @@ func TestReconcile_MemoryStoreBinding(t *testing.T) {
 	}
 
 	// Unchanged: neither the store nor the agent is rewritten.
-	f.Reconcile(ctx, []shared.DesiredAgent{a}, stores)
+	reconcileAgents(f, ctx, []shared.DesiredAgent{a}, stores)
 	if fake.versions != 0 || fake.storeCreates != 1 {
 		t.Fatalf("unchanged must not rewrite: versions=%d storeCreates=%d", fake.versions, fake.storeCreates)
 	}
@@ -348,7 +355,7 @@ func TestReconcile_MemoryStoreBinding(t *testing.T) {
 	a2 := a
 	a2.Definition.MemoryStore = "mem-2"
 	stores2 := []shared.DesiredMemoryStore{{ID: "mem-2", Name: "Mem2", Definition: def}}
-	f.Reconcile(ctx, []shared.DesiredAgent{a2}, stores2)
+	reconcileAgents(f, ctx, []shared.DesiredAgent{a2}, stores2)
 	if fake.versions != 1 {
 		t.Fatalf("switching store must republish, got %d", fake.versions)
 	}
@@ -373,8 +380,8 @@ func TestReconcile_StoreProvisionFailureLeavesAgentUnbound(t *testing.T) {
 	}
 	stores := []shared.DesiredMemoryStore{{ID: "mem-1", Name: "Mem", Definition: shared.MemoryStoreDefinition{ChatModel: "gpt-4o", EmbeddingModel: "not-deployed"}}}
 
-	st := f.Reconcile(context.Background(), []shared.DesiredAgent{a}, stores)
-	if len(st) != 1 || st[0].Health != healthHealthy {
+	st := reconcileAgents(f, context.Background(), []shared.DesiredAgent{a}, stores)
+	if len(st) != 1 || st[0].Health != healthLive {
 		t.Fatalf("agent should stay healthy even if its store can't provision: %+v", st)
 	}
 	if fake.creates != 1 {

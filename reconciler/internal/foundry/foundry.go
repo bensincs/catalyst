@@ -40,10 +40,12 @@ import (
 	"github.com/inception42/cortex/shared"
 )
 
-// Health states reported back to the control plane (shared.AgentStatus.Health).
+// Lifecycle states reported back to the control plane, shared by agents and
+// memory stores (see shared.Status*). A resource the reconciler has realized in
+// Foundry is `live`; one it couldn't realize is `blocked`.
 const (
-	healthHealthy = "healthy"
-	healthBlocked = "blocked"
+	healthLive    = shared.StatusLive
+	healthBlocked = shared.StatusBlocked
 )
 
 // Metadata keys stamped on every Cortex-managed agent version and memory store,
@@ -98,14 +100,14 @@ func New(cfg config.Config, ts tokens.Source) *Foundry {
 // for drifted ones, prunes managed agents that are no longer desired, and reports
 // honest state: telemetry it cannot yet measure stays zero, and anything it
 // cannot realize (a failed call, or a hosted agent) is reported blocked.
-func (f *Foundry) Reconcile(ctx context.Context, desired []shared.DesiredAgent, stores []shared.DesiredMemoryStore) []shared.AgentStatus {
+func (f *Foundry) Reconcile(ctx context.Context, desired []shared.DesiredAgent, stores []shared.DesiredMemoryStore) ([]shared.AgentStatus, []shared.MemoryStoreStatus) {
 	out := make([]shared.AgentStatus, 0, len(desired))
 
-	// Provision the memory stores referenced by desired agents as first-class
-	// Foundry resources. The returned map (control-plane store id → Foundry store
-	// name) covers only stores that are actually provisioned, so an agent is bound
-	// only to a store that exists — never to a dangling name.
-	storeNames := f.reconcileStores(ctx, stores)
+	// Provision the memory stores enabled in this tenant as first-class Foundry
+	// resources. storeNames (control-plane store id → Foundry store name) covers
+	// only stores actually provisioned, so an agent is bound only to a store that
+	// exists; storeStatuses is the per-store lifecycle reported back.
+	storeNames, storeStatuses := f.reconcileStores(ctx, stores)
 
 	// The agents Cortex already manages in this project, keyed by control-plane
 	// agent id. If we can't read the project we can't assert anything true about
@@ -147,7 +149,7 @@ func (f *Foundry) Reconcile(ctx context.Context, desired []shared.DesiredAgent, 
 		}
 	}
 
-	return out
+	return out, storeStatuses
 }
 
 // converge creates the agent backing one prompt agent, or publishes a new
@@ -164,12 +166,12 @@ func (f *Foundry) converge(ctx context.Context, d shared.DesiredAgent, existing 
 		}
 		slog.Info("foundry: created agent", "agentId", d.AgentID, "version", d.Version)
 		warnSkippedTools(d.AgentID, skipped)
-		return healthy(d.AgentID, d.Version)
+		return live(d.AgentID, d.Version)
 	}
 
 	latest := existing.Versions.Latest
 	if latest.Metadata[metaVersion] == d.Version && sameDefinition(latest.Definition, def) {
-		return healthy(d.AgentID, d.Version) // already converged — no new version
+		return live(d.AgentID, d.Version) // already converged — no new version
 	}
 
 	if err := f.addVersion(ctx, existing.Name, d.Name, meta, def); err != nil {
@@ -179,7 +181,7 @@ func (f *Foundry) converge(ctx context.Context, d shared.DesiredAgent, existing 
 	}
 	slog.Info("foundry: published agent version", "agentId", d.AgentID, "agent", existing.Name, "version", d.Version)
 	warnSkippedTools(d.AgentID, skipped)
-	return healthy(d.AgentID, d.Version)
+	return live(d.AgentID, d.Version)
 }
 
 // bareTools are the Foundry agent tool types realizable from just their type
@@ -300,14 +302,14 @@ func sameTools(a, b []toolDef) bool {
 	return true
 }
 
-func healthy(agentID, version string) shared.AgentStatus {
-	return shared.AgentStatus{AgentID: agentID, Version: version, Health: healthHealthy, Calls30d: 0}
+func live(agentID, version string) shared.AgentStatus {
+	return shared.AgentStatus{AgentID: agentID, Version: version, Health: healthLive, Calls30d: 0}
 }
 
 // blocked reports an agent that couldn't be realized. version is whatever is
 // actually live (empty if nothing is), never the unachieved desired version.
 //
-// Calls30d is 0 here and in healthy(): 30-day call volume is real usage
+// Calls30d is 0 here and in live(): 30-day call volume is real usage
 // telemetry (Azure Monitor / Foundry metrics) the reconciler does not yet read,
 // so it stays zero rather than showing a fabricated number.
 func blocked(agentID, version string) shared.AgentStatus {
@@ -532,17 +534,22 @@ func sameStoreDefinition(have, want memStoreDefinition) bool {
 // accumulated memories, and its definition is immutable (the resource has no
 // update surface), so the reconciler will not destroy and recreate one. Drift is
 // reported, not "converged" by deletion.
-func (f *Foundry) reconcileStores(ctx context.Context, desired []shared.DesiredMemoryStore) map[string]string {
+func (f *Foundry) reconcileStores(ctx context.Context, desired []shared.DesiredMemoryStore) (map[string]string, []shared.MemoryStoreStatus) {
 	ready := make(map[string]string, len(desired))
+	statuses := make([]shared.MemoryStoreStatus, 0, len(desired))
 	if len(desired) == 0 {
-		return ready
+		return ready, statuses
 	}
 	managed, err := f.listManagedStores(ctx)
 	if err != nil {
 		// Can't assert the stores exist — skip binding rather than point agents
-		// at names we haven't confirmed.
+		// at names we haven't confirmed, and report them as still reconciling (a
+		// transient read failure isn't a real "blocked").
 		slog.Warn("foundry: list memory stores failed; agents referencing a store are left unbound this cycle", "project", f.project, "err", err)
-		return ready
+		for _, ds := range desired {
+			statuses = append(statuses, shared.MemoryStoreStatus{StoreID: ds.ID, Health: shared.StatusReconciling})
+		}
+		return ready, statuses
 	}
 	for _, ds := range desired {
 		if existing, ok := managed[ds.ID]; ok {
@@ -551,18 +558,21 @@ func (f *Foundry) reconcileStores(ctx context.Context, desired []shared.DesiredM
 					"storeId", ds.ID, "store", existing.Name)
 			}
 			ready[ds.ID] = existing.Name
+			statuses = append(statuses, shared.MemoryStoreStatus{StoreID: ds.ID, Health: shared.StatusLive})
 			continue
 		}
 		name := agentName(ds.ID)
 		if err := f.createStore(ctx, name, ds.Name, storeMetadata(ds.ID), storeDefinitionFor(ds.Definition)); err != nil {
 			slog.Warn("foundry: create memory store failed; agents referencing it are left unbound (is its embedding model deployed?)",
 				"storeId", ds.ID, "store", name, "err", err)
+			statuses = append(statuses, shared.MemoryStoreStatus{StoreID: ds.ID, Health: shared.StatusBlocked})
 			continue
 		}
 		slog.Info("foundry: created memory store", "storeId", ds.ID, "store", name)
 		ready[ds.ID] = name
+		statuses = append(statuses, shared.MemoryStoreStatus{StoreID: ds.ID, Health: shared.StatusLive})
 	}
-	return ready
+	return ready, statuses
 }
 
 // listManagedStores pages through the project's memory stores and returns those

@@ -280,7 +280,9 @@ func compareVersions(a, b string) int {
 
 func (s *Store) CatalogList(ctx context.Context) ([]model.CatalogAgent, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT id, name, description, coalesce(type,'prompt'), model, created_at FROM catalog_agents ORDER BY created_at DESC`)
+		`SELECT ca.id, ca.name, ca.description, coalesce(ca.type,'prompt'), ca.model, ca.owner_tenant, coalesce(t.name,''), ca.created_at
+		 FROM catalog_agents ca LEFT JOIN tenants t ON t.id = ca.owner_tenant
+		 ORDER BY ca.created_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -290,9 +292,10 @@ func (s *Store) CatalogList(ctx context.Context) ([]model.CatalogAgent, error) {
 	byID := map[string]*model.CatalogAgent{}
 	for rows.Next() {
 		var a model.CatalogAgent
-		if err := rows.Scan(&a.ID, &a.Name, &a.Description, &a.Type, &a.Model, &a.CreatedAt); err != nil {
+		if err := rows.Scan(&a.ID, &a.Name, &a.Description, &a.Type, &a.Model, &a.Owner, &a.OwnerName, &a.CreatedAt); err != nil {
 			return nil, err
 		}
+		a.Platform = a.Owner == ""
 		a.Versions = []model.CatalogVersion{}
 		byID[a.ID] = &a
 		order = append(order, a.ID)
@@ -337,8 +340,9 @@ func (s *Store) CatalogList(ctx context.Context) ([]model.CatalogAgent, error) {
 	return out, nil
 }
 
-// CatalogForTenant returns only the agents a tenant is entitled to, flagged with
-// whether each is already enabled.
+// CatalogForTenant returns the agents a tenant can use — the platform agents it
+// is entitled to, plus the agents it owns — each flagged with ownership and
+// whether it's already enabled.
 func (s *Store) CatalogForTenant(ctx context.Context, slug string) ([]model.CatalogAgent, error) {
 	var entitled []string
 	if err := s.pool.QueryRow(ctx,
@@ -374,17 +378,22 @@ func (s *Store) CatalogForTenant(ctx context.Context, slug string) ([]model.Cata
 	}
 	out := []model.CatalogAgent{}
 	for _, a := range all {
-		if !entitledSet[a.ID] {
-			continue
+		owned := a.Owner == slug
+		entitled := a.Owner == "" && entitledSet[a.ID]
+		if !owned && !entitled {
+			continue // another tenant's private agent, or a platform agent not entitled
 		}
-		a.Entitled = true
+		a.Platform = a.Owner == ""
+		a.Owned = owned
+		a.Entitled = entitled
 		a.Enabled = enabledSet[a.ID]
+		a.OwnerName = "" // don't leak owner display names into the tenant view
 		out = append(out, a)
 	}
 	return out, nil
 }
 
-func (s *Store) CreateCatalogAgent(ctx context.Context, id, name, description, agentType, agentModel, createdBy string, def shared.AgentDefinition) error {
+func (s *Store) CreateCatalogAgent(ctx context.Context, id, name, description, agentType, agentModel, owner, createdBy string, def shared.AgentDefinition) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -392,8 +401,8 @@ func (s *Store) CreateCatalogAgent(ctx context.Context, id, name, description, a
 	defer tx.Rollback(ctx)
 
 	if _, err := tx.Exec(ctx,
-		`INSERT INTO catalog_agents (id, name, description, type, model, created_by) VALUES ($1,$2,$3,$4,$5,$6)`,
-		id, name, description, agentType, agentModel, createdBy); err != nil {
+		`INSERT INTO catalog_agents (id, name, description, type, model, owner_tenant, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+		id, name, description, agentType, agentModel, owner, createdBy); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx,
@@ -403,6 +412,17 @@ func (s *Store) CreateCatalogAgent(ctx context.Context, id, name, description, a
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// CatalogAgentOwner returns a catalog agent's owner ("" = platform-authored),
+// used to enforce that a tenant may only edit/version agents it owns.
+func (s *Store) CatalogAgentOwner(ctx context.Context, agentID string) (string, error) {
+	var owner string
+	err := s.pool.QueryRow(ctx, `SELECT owner_tenant FROM catalog_agents WHERE id = $1`, agentID).Scan(&owner)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	return owner, err
 }
 
 func (s *Store) PublishVersion(ctx context.Context, agentID, version, channel, notes string, rollout int, def shared.AgentDefinition) error {
@@ -460,7 +480,8 @@ func (s *Store) MemoryStoreList(ctx context.Context) ([]model.MemoryStore, error
 }
 
 // MemoryStoresForTenant returns the stores a tenant can use: its own, plus the
-// platform stores it's entitled to, each flagged accordingly.
+// platform stores it's entitled to, each flagged with ownership + whether it's
+// enabled (reconciled) in the tenant and its per-tenant lifecycle health.
 func (s *Store) MemoryStoresForTenant(ctx context.Context, slug string) ([]model.MemoryStore, error) {
 	var entitled []string
 	if err := s.pool.QueryRow(ctx, `SELECT entitled_stores FROM tenants WHERE id = $1`, slug).Scan(&entitled); err != nil {
@@ -474,7 +495,9 @@ func (s *Store) MemoryStoresForTenant(ctx context.Context, slug string) ([]model
 		entitledSet[id] = true
 	}
 	rows, err := s.pool.Query(ctx,
-		`SELECT `+memoryStoreCols+` FROM memory_stores m
+		`SELECT `+memoryStoreCols+`, (ts.store_id IS NOT NULL) AS enabled, coalesce(ts.health,'')
+		 FROM memory_stores m
+		 LEFT JOIN tenant_stores ts ON ts.store_id = m.id AND ts.tenant_slug = $1
 		 WHERE m.owner_tenant = $1 OR (m.owner_tenant = '' AND m.id = ANY($2))
 		 ORDER BY m.created_at DESC`, slug, entitled)
 	if err != nil {
@@ -483,12 +506,17 @@ func (s *Store) MemoryStoresForTenant(ctx context.Context, slug string) ([]model
 	defer rows.Close()
 	out := []model.MemoryStore{}
 	for rows.Next() {
-		m, err := scanMemoryStore(rows)
-		if err != nil {
+		var m model.MemoryStore
+		var enabled bool
+		var health string
+		if err := rows.Scan(append(memStoreScanDest(&m), &enabled, &health)...); err != nil {
 			return nil, err
 		}
+		m.Platform = m.Owner == ""
 		m.Owned = m.Owner == slug
 		m.Entitled = entitledSet[m.ID]
+		m.Enabled = enabled
+		m.Health = health
 		out = append(out, m)
 	}
 	return out, rows.Err()
@@ -540,8 +568,9 @@ func (s *Store) DeleteMemoryStore(ctx context.Context, id string) error {
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
 	}
-	// Detach the store from tenant entitlements + agent connections.
+	// Detach the store from tenant entitlements, enablements + agent connections.
 	_, _ = s.pool.Exec(ctx, `UPDATE tenants SET entitled_stores = array_remove(entitled_stores, $1)`, id)
+	_, _ = s.pool.Exec(ctx, `DELETE FROM tenant_stores WHERE store_id = $1`, id)
 	_, _ = s.pool.Exec(ctx, `UPDATE agents SET memory_store = '' WHERE memory_store = $1`, id)
 	return nil
 }
@@ -558,17 +587,27 @@ func (s *Store) SetStoreEntitlements(ctx context.Context, slug string, storeIDs 
 }
 
 var ErrStoreNotAccessible = errors.New("memory store not accessible")
+var ErrStoreInUse = errors.New("memory store is in use by an enabled agent")
+
+// storeAccessible reports whether a tenant may use a store — it owns the store,
+// or the store is a platform store the tenant is entitled to.
+func (s *Store) storeAccessible(ctx context.Context, slug, storeID string) (bool, error) {
+	var ok bool
+	err := s.pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM memory_stores m WHERE m.id = $2 AND
+		   (m.owner_tenant = $1 OR (m.owner_tenant = '' AND m.id IN
+		     (SELECT unnest(entitled_stores) FROM tenants WHERE id = $1))))`,
+		slug, storeID).Scan(&ok)
+	return ok, err
+}
 
 // ConnectAgentStore connects (storeID != "") or disconnects (storeID == "") an
-// enabled agent to a memory store the tenant owns or is entitled to.
+// enabled agent to a memory store the tenant owns or is entitled to. Connecting
+// auto-enables the store so the reconciler provisions it.
 func (s *Store) ConnectAgentStore(ctx context.Context, slug, catalogAgentID, storeID string) error {
 	if storeID != "" {
-		var ok bool
-		if err := s.pool.QueryRow(ctx,
-			`SELECT EXISTS(SELECT 1 FROM memory_stores m WHERE m.id = $2 AND
-			   (m.owner_tenant = $1 OR (m.owner_tenant = '' AND m.id IN
-			     (SELECT unnest(entitled_stores) FROM tenants WHERE id = $1))))`,
-			slug, storeID).Scan(&ok); err != nil {
+		ok, err := s.storeAccessible(ctx, slug, storeID)
+		if err != nil {
 			return err
 		}
 		if !ok {
@@ -583,7 +622,153 @@ func (s *Store) ConnectAgentStore(ctx context.Context, slug, catalogAgentID, sto
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
 	}
+	if storeID != "" {
+		if err := s.autoEnableStores(ctx, slug, []string{storeID}); err != nil {
+			return err
+		}
+	}
+	return s.pruneAutoStores(ctx, slug)
+}
+
+// EnableStore activates a memory store (one the tenant owns or is entitled to) in
+// a tenant, mirroring EnableAgent: it records desired state as a tenant_stores
+// row the reconciler provisions into Foundry and reports back on. A manual enable
+// clears the auto flag so it survives agent churn.
+func (s *Store) EnableStore(ctx context.Context, slug, storeID string) error {
+	ok, err := s.storeAccessible(ctx, slug, storeID)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return ErrStoreNotAccessible
+	}
+	_, err = s.pool.Exec(ctx,
+		`INSERT INTO tenant_stores (tenant_slug, store_id, health, auto, sort_order)
+		 VALUES ($1,$2,'reconciling',false,
+		         coalesce((SELECT max(sort_order)+1 FROM tenant_stores WHERE tenant_slug=$1),1))
+		 ON CONFLICT (tenant_slug, store_id) DO UPDATE SET auto = false`,
+		slug, storeID)
+	return err
+}
+
+// DisableStore deactivates a store in a tenant. It refuses if an enabled agent
+// still binds to the store (that would strand the agent's memory) — disconnect or
+// disable those agents first.
+func (s *Store) DisableStore(ctx context.Context, slug, storeID string) error {
+	refs, err := s.storesReferencedByEnabledAgents(ctx, slug)
+	if err != nil {
+		return err
+	}
+	if refs[storeID] {
+		return ErrStoreInUse
+	}
+	tag, err := s.pool.Exec(ctx,
+		`DELETE FROM tenant_stores WHERE tenant_slug = $1 AND store_id = $2`, slug, storeID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
 	return nil
+}
+
+// autoEnableStores enables (as auto rows) each accessible store id, so a store an
+// agent binds to is provisioned even if it was never explicitly enabled.
+// Inaccessible ids are skipped.
+func (s *Store) autoEnableStores(ctx context.Context, slug string, storeIDs []string) error {
+	for _, id := range storeIDs {
+		if id == "" {
+			continue
+		}
+		ok, err := s.storeAccessible(ctx, slug, id)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			continue
+		}
+		if _, err := s.pool.Exec(ctx,
+			`INSERT INTO tenant_stores (tenant_slug, store_id, health, auto, sort_order)
+			 VALUES ($1,$2,'reconciling',true,
+			         coalesce((SELECT max(sort_order)+1 FROM tenant_stores WHERE tenant_slug=$1),1))
+			 ON CONFLICT (tenant_slug, store_id) DO NOTHING`,
+			slug, id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// pruneAutoStores removes auto-enabled store rows no longer bound by any enabled
+// agent — the symmetric cleanup when an agent is disabled or disconnected.
+// Manually-enabled stores (auto = false) are left alone.
+func (s *Store) pruneAutoStores(ctx context.Context, slug string) error {
+	refs, err := s.storesReferencedByEnabledAgents(ctx, slug)
+	if err != nil {
+		return err
+	}
+	keep := make([]string, 0, len(refs))
+	for id := range refs {
+		keep = append(keep, id)
+	}
+	_, err = s.pool.Exec(ctx,
+		`DELETE FROM tenant_stores WHERE tenant_slug = $1 AND auto = true AND store_id <> ALL($2)`,
+		slug, keep)
+	return err
+}
+
+// storesReferencedByEnabledAgents returns the set of store ids that enabled
+// agents in the tenant effectively bind to (per-agent override, else the catalog
+// definition's memoryStore).
+func (s *Store) storesReferencedByEnabledAgents(ctx context.Context, slug string) (map[string]bool, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT DISTINCT coalesce(nullif(a.memory_store,''),
+		          (SELECT v.definition->>'memoryStore' FROM catalog_versions v
+		           WHERE v.agent_id = a.agent_id ORDER BY v.created_at DESC LIMIT 1))
+		 FROM agents a WHERE a.tenant_slug = $1`, slug)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var id *string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		if id != nil && *id != "" {
+			out[*id] = true
+		}
+	}
+	return out, rows.Err()
+}
+
+// agentStoreRefs returns the store ids referenced by the latest definition of
+// each given catalog agent (any ownership; non-empty only).
+func (s *Store) agentStoreRefs(ctx context.Context, agentIDs []string) ([]string, error) {
+	if len(agentIDs) == 0 {
+		return nil, nil
+	}
+	rows, err := s.pool.Query(ctx,
+		`SELECT (SELECT v.definition->>'memoryStore' FROM catalog_versions v
+		         WHERE v.agent_id = ca.id ORDER BY v.created_at DESC LIMIT 1)
+		 FROM catalog_agents ca WHERE ca.id = ANY($1)`, agentIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id *string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		if id != nil && *id != "" {
+			out = append(out, *id)
+		}
+	}
+	return out, rows.Err()
 }
 
 // referencedStores returns the platform memory-store ids referenced by the
@@ -680,15 +865,17 @@ func (s *Store) SetEntitlements(ctx context.Context, slug string, agentIDs []str
 var ErrNotEntitled = errors.New("not entitled")
 
 func (s *Store) EnableAgent(ctx context.Context, slug, catalogAgentID string, publishTo []string) error {
-	var entitled bool
+	var allowed bool
 	if err := s.pool.QueryRow(ctx,
-		`SELECT $2 = ANY(entitled_agents) FROM tenants WHERE id = $1`, slug, catalogAgentID).Scan(&entitled); err != nil {
+		`SELECT ($2 = ANY(entitled_agents))
+		        OR EXISTS(SELECT 1 FROM catalog_agents WHERE id = $2 AND owner_tenant = $1)
+		 FROM tenants WHERE id = $1`, slug, catalogAgentID).Scan(&allowed); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
 		return err
 	}
-	if !entitled {
+	if !allowed {
 		return ErrNotEntitled
 	}
 
@@ -724,12 +911,22 @@ func (s *Store) EnableAgent(ctx context.Context, slug, catalogAgentID string, pu
 		slug+":"+catalogAgentID, slug, catalogAgentID, name, version, channel, agentModel, publishTo); err != nil {
 		return err
 	}
+	// Auto-enable any memory store this agent binds to, so the reconciler
+	// provisions it alongside the agent.
+	if refs, err := s.agentStoreRefs(ctx, []string{catalogAgentID}); err != nil {
+		return err
+	} else if err := s.autoEnableStores(ctx, slug, refs); err != nil {
+		return err
+	}
 	return s.recountAgents(ctx, slug)
 }
 
 func (s *Store) DisableAgent(ctx context.Context, slug, catalogAgentID string) error {
 	if _, err := s.pool.Exec(ctx,
 		`DELETE FROM agents WHERE tenant_slug = $1 AND agent_id = $2`, slug, catalogAgentID); err != nil {
+		return err
+	}
+	if err := s.pruneAutoStores(ctx, slug); err != nil {
 		return err
 	}
 	return s.recountAgents(ctx, slug)
@@ -782,7 +979,6 @@ func (s *Store) SyncDesired(ctx context.Context, tid string) (shared.DesiredStat
 		return out, err
 	}
 	defer rows.Close()
-	storeIDs := map[string]bool{}
 	for rows.Next() {
 		var a shared.DesiredAgent
 		var typeStr string
@@ -796,41 +992,36 @@ func (s *Store) SyncDesired(ctx context.Context, tid string) (shared.DesiredStat
 		// The effective store is the per-tenant override, else the catalog default.
 		if eff := firstNonEmpty(override, a.Definition.MemoryStore); eff != "" {
 			a.Definition.MemoryStore = eff
-			storeIDs[eff] = true
 		}
 		out.Agents = append(out.Agents, a)
 	}
 	if err := rows.Err(); err != nil {
 		return out, err
 	}
-	// Attach the typed definition of every memory store the desired agents
-	// reference, so the reconciler can provision each store and bind agents to it.
-	if len(storeIDs) > 0 {
-		ids := make([]string, 0, len(storeIDs))
-		for id := range storeIDs {
-			ids = append(ids, id)
-		}
-		srows, err := s.pool.Query(ctx,
-			`SELECT id, name, chat_model, embedding_model, user_profile_enabled,
-			        user_profile_details, chat_summary_enabled, procedural_memory_enabled, ttl_seconds
-			 FROM memory_stores WHERE id = ANY($1)`, ids)
-		if err != nil {
+	// Attach the typed definition of every store ENABLED in this tenant (explicit
+	// or auto-enabled via an agent), so the reconciler provisions each as a
+	// Foundry memory_store and binds the agents that reference it.
+	srows, err := s.pool.Query(ctx,
+		`SELECT m.id, m.name, m.chat_model, m.embedding_model, m.user_profile_enabled,
+		        m.user_profile_details, m.chat_summary_enabled, m.procedural_memory_enabled, m.ttl_seconds
+		 FROM memory_stores m JOIN tenant_stores ts ON ts.store_id = m.id AND ts.tenant_slug = $1
+		 ORDER BY ts.sort_order`, t.ID)
+	if err != nil {
+		return out, err
+	}
+	defer srows.Close()
+	for srows.Next() {
+		var ms shared.DesiredMemoryStore
+		d := &ms.Definition
+		if err := srows.Scan(&ms.ID, &ms.Name, &d.ChatModel, &d.EmbeddingModel,
+			&d.UserProfileEnabled, &d.UserProfileDetails, &d.ChatSummaryEnabled,
+			&d.ProceduralMemoryEnabled, &d.TTLSeconds); err != nil {
 			return out, err
 		}
-		defer srows.Close()
-		for srows.Next() {
-			var ms shared.DesiredMemoryStore
-			d := &ms.Definition
-			if err := srows.Scan(&ms.ID, &ms.Name, &d.ChatModel, &d.EmbeddingModel,
-				&d.UserProfileEnabled, &d.UserProfileDetails, &d.ChatSummaryEnabled,
-				&d.ProceduralMemoryEnabled, &d.TTLSeconds); err != nil {
-				return out, err
-			}
-			out.MemoryStores = append(out.MemoryStores, ms)
-		}
-		if err := srows.Err(); err != nil {
-			return out, err
-		}
+		out.MemoryStores = append(out.MemoryStores, ms)
+	}
+	if err := srows.Err(); err != nil {
+		return out, err
 	}
 	return out, nil
 }
@@ -879,6 +1070,16 @@ func (s *Store) ApplyHeartbeat(ctx context.Context, hb shared.Heartbeat) error {
 			`UPDATE agents SET health = $3, calls_30d = $4, version = coalesce(nullif($5,''), version)
 			 WHERE tenant_slug = $1 AND agent_id = $2`,
 			t.ID, a.AgentID, a.Health, a.Calls30d, a.Version); err != nil {
+			return err
+		}
+	}
+	// Record each memory store's reconcile lifecycle (reconciling → live →
+	// blocked). Only rows still enabled are updated; a store disabled between
+	// sync and heartbeat is a harmless no-op.
+	for _, ms := range hb.MemoryStores {
+		if _, err := s.pool.Exec(ctx,
+			`UPDATE tenant_stores SET health = $3 WHERE tenant_slug = $1 AND store_id = $2`,
+			t.ID, ms.StoreID, ms.Health); err != nil {
 			return err
 		}
 	}

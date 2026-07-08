@@ -275,9 +275,13 @@ interface ApiCatalogAgent {
   description: string;
   type: string;
   model: string;
+  owner?: string;
   latestVersion: string;
   versions: { version: string; channel: string; notes?: string; rolloutPercent: number; definition: AgentDefinition; createdAt: string }[];
   createdAt: string;
+  ownerName?: string;
+  platform?: boolean;
+  owned?: boolean;
   entitled: boolean;
   enabled: boolean;
 }
@@ -287,6 +291,11 @@ export const getCatalog = cache(async (): Promise<CatalogAgent[]> => {
   return (c.agents ?? []).map((a) => ({
     ...a,
     type: (a.type as AgentType) || "prompt",
+    owner: a.owner ?? "",
+    platform: a.platform ?? (a.owner ?? "") === "",
+    owned: Boolean(a.owned),
+    entitled: Boolean(a.entitled),
+    enabled: Boolean(a.enabled),
     versions: (a.versions ?? []).map((v) => ({
       ...v,
       channel: v.channel === "beta" ? "beta" : "stable",
@@ -334,6 +343,8 @@ interface ApiMemoryStore {
   platform?: boolean;
   owned?: boolean;
   entitled?: boolean;
+  enabled?: boolean;
+  health?: string;
 }
 
 /** Fill in a complete definition from a possibly-partial API payload, so the UI
@@ -363,5 +374,7 @@ export const getMemoryStores = cache(async (): Promise<MemoryStore[]> => {
     platform: s.platform ?? s.owner === "",
     owned: Boolean(s.owned),
     entitled: Boolean(s.entitled),
+    enabled: Boolean(s.enabled),
+    health: (s.health as MemoryStore["health"]) || undefined,
   }));
 });

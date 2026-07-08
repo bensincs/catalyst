@@ -115,3 +115,19 @@ export async function connectAgentStore(agentId: string, storeId: string): Promi
   );
 }
 
+// Enable/disable a memory store in the caller's tenant — the store lifecycle
+// mirror of enabling/disabling an agent.
+export async function enableStore(storeId: string): Promise<ActionResult> {
+  return run(
+    () => apiSend("POST", `/api/tenant/stores/${encodeURIComponent(storeId)}`),
+    ["/memory-stores"],
+  );
+}
+
+export async function disableStore(storeId: string): Promise<ActionResult> {
+  return run(
+    () => apiSend("DELETE", `/api/tenant/stores/${encodeURIComponent(storeId)}`),
+    ["/memory-stores"],
+  );
+}
+
