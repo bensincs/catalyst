@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { ApiError, getCatalog, getMe, getMemoryStores, getTenantContext, getTenantsRegistry } from "@/lib/api";
 import { TenantOverview } from "@/components/views/tenant-overview";
+import { TenantAccessPanel } from "@/components/views/tenant-access-panel";
 import { EntitlementsPanel } from "@/components/views/entitlements-panel";
 import { StoreEntitlementsPanel } from "@/components/views/store-entitlements-panel";
 
@@ -25,6 +26,7 @@ export default async function TenantDrillInPage({
       const row = registry.find((r) => r.id === slug);
       entitlements = (
         <>
+          <TenantAccessPanel slug={slug} name={ctx.tenant.name} enabled={ctx.tenant.enabled} />
           <EntitlementsPanel
             slug={slug}
             name={ctx.tenant.name}

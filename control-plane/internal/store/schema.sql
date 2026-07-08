@@ -74,6 +74,11 @@ CREATE INDEX IF NOT EXISTS catalog_versions_agent_idx ON catalog_versions(agent_
 -- Which catalog agents a tenant is entitled to enable.
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS entitled_agents text[] NOT NULL DEFAULT '{}';
 
+-- Access gate: only enabled tenants may sign in to the console/API or run a
+-- reconciler. Existing tenants stay enabled (default true); new tenants are
+-- created DISABLED (pending platform approval) by EnsureTenantForTID.
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS enabled boolean NOT NULL DEFAULT true;
+
 -- Tenant-level health was replaced by the derived lifecycle (enrollment +
 -- heartbeat freshness), computed in Go. Per-agent health lives on agents.
 ALTER TABLE tenants DROP COLUMN IF EXISTS health;

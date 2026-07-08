@@ -32,6 +32,7 @@ type Tenant struct {
 	Plan             string     `json:"plan"`
 	Enrollment       string     `json:"enrollment"`
 	Lifecycle        string     `json:"lifecycle"` // enrolling | live | degraded | suspended (derived)
+	Enabled          bool       `json:"enabled"`   // access gate: may sign in / run a reconciler
 	AgentCount       int        `json:"agentCount"`
 	ReconcilingCount int        `json:"reconcilingCount"`
 	Version          string     `json:"version"`

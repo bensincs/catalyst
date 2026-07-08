@@ -73,14 +73,14 @@ func (s *Store) Seed(ctx context.Context) error {
 
 const tenantCols = `id, name, coalesce(tenant_id,''), region, plan, enrollment, version,
 	agent_count, reconciling_count, monthly_calls, drift, last_heartbeat,
-	subscription_id, reconciler_identity, foundry_project, reconciler_version, installed_at`
+	subscription_id, reconciler_identity, foundry_project, reconciler_version, installed_at, enabled`
 
 func scanTenant(row pgx.Row) (model.Tenant, error) {
 	var t model.Tenant
 	var installedAt string
 	err := row.Scan(&t.ID, &t.Name, &t.TenantID, &t.Region, &t.Plan, &t.Enrollment,
 		&t.Version, &t.AgentCount, &t.ReconcilingCount, &t.MonthlyCalls, &t.Drift, &t.LastHeartbeat,
-		&t.SubscriptionID, &t.ReconcilerIdentity, &t.FoundryProject, &t.ReconcilerVersion, &installedAt)
+		&t.SubscriptionID, &t.ReconcilerIdentity, &t.FoundryProject, &t.ReconcilerVersion, &installedAt, &t.Enabled)
 	if installedAt != "" {
 		t.InstalledAt = &installedAt
 	}
@@ -222,15 +222,30 @@ func (s *Store) EnsureTenantForTID(ctx context.Context, tid, name string) (model
 	if name == "" {
 		name = "New tenant"
 	}
+	// New directories are created DISABLED — a platform admin must enable a
+	// tenant before its users can sign in or its reconciler can sync.
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO tenants (id, name, tenant_id, region, plan, enrollment, version)
-		 VALUES ($1,$2,$3,'—','team','pending','')
+		`INSERT INTO tenants (id, name, tenant_id, region, plan, enrollment, version, enabled)
+		 VALUES ($1,$2,$3,'—','team','pending','',false)
 		 ON CONFLICT (tenant_id) DO NOTHING`,
 		slug, name, tid)
 	if err != nil {
 		return model.Tenant{}, err
 	}
 	return s.TenantByTID(ctx, tid)
+}
+
+// SetTenantEnabled enables or disables a tenant's access (console/API sign-in +
+// reconciler sync). Platform admins call this to approve or cut off a tenant.
+func (s *Store) SetTenantEnabled(ctx context.Context, slug string, enabled bool) error {
+	tag, err := s.pool.Exec(ctx, `UPDATE tenants SET enabled = $2 WHERE id = $1`, slug, enabled)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func computeStats(tenants []model.Tenant) model.FleetStats {
@@ -828,7 +843,7 @@ func (s *Store) TenantsRegistry(ctx context.Context) ([]model.TenantRegistryRow,
 		var installedAt string
 		if err := rows.Scan(&r.ID, &r.Name, &r.TenantID, &r.Region, &r.Plan, &r.Enrollment,
 			&r.Version, &r.AgentCount, &r.ReconcilingCount, &r.MonthlyCalls, &r.Drift, &r.LastHeartbeat,
-			&r.SubscriptionID, &r.ReconcilerIdentity, &r.FoundryProject, &r.ReconcilerVersion, &installedAt,
+			&r.SubscriptionID, &r.ReconcilerIdentity, &r.FoundryProject, &r.ReconcilerVersion, &installedAt, &r.Enabled,
 			&r.EntitledAgents, &r.EntitledStores); err != nil {
 			return nil, err
 		}

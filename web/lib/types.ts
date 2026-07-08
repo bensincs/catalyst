@@ -64,6 +64,7 @@ export interface TenantSummary {
   monthlyCalls: number;
   drift?: number; // pending desired-vs-actual changes
   lifecycle: Lifecycle;
+  enabled: boolean; // access gate: may sign in / run a reconciler
 }
 
 export interface EnabledAgent {
@@ -97,6 +98,7 @@ export interface TenantContextInfo {
   reconcilerVersion: string;
   lastHeartbeatMs: number;
   lifecycle: Lifecycle;
+  enabled: boolean;
 }
 
 export interface FleetStats {
@@ -151,6 +153,7 @@ export interface TenantRegistryRow {
   entitledCount: number;
   entitledStores: string[];
   lifecycle: Lifecycle;
+  enabled: boolean;
 }
 
 /** The typed Foundry memory-store definition (kind "default"): the models that

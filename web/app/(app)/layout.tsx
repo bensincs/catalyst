@@ -5,6 +5,7 @@ import { ApiError, getFleet, getMe, getMyContext, type Me } from "@/lib/api";
 import { ConsoleProvider, type ConsoleData } from "@/components/providers/console-provider";
 import { ToastProvider } from "@/components/providers/toast-provider";
 import { AppShell } from "@/components/shell/app-shell";
+import { PendingApproval } from "@/components/views/pending-approval";
 import { ErrorState } from "@/components/ui/error-state";
 import { RetryButton } from "@/components/ui/retry-button";
 import type { Environment, TenantContextInfo, TenantSummary } from "@/lib/types";
@@ -28,6 +29,11 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
 
   try {
     me = await getMe();
+    if (me.role === "tenant" && me.tenant && !me.tenant.enabled) {
+      // Signed in, but the organization isn't enabled yet — show a pending
+      // screen instead of the app (all other API routes are gated anyway).
+      return <PendingApproval tenantName={me.tenant.name} email={me.email} />;
+    }
     if (me.role === "platform") {
       tenants = (await getFleet()).tenants;
     } else {

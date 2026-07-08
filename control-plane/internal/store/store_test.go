@@ -329,3 +329,41 @@ func TestTenantOwnedAgentVisibility(t *testing.T) {
 		t.Fatalf("tenant saw a platform agent it isn't entitled to")
 	}
 }
+
+// A JIT-provisioned tenant starts disabled (pending approval); a platform admin
+// enables/disables its access.
+func TestTenantAccessGate(t *testing.T) {
+	st, ctx := testStore(t)
+	defer st.Close()
+
+	const tid = "zz-gate-tid-0004"
+	cleanup := func() { st.pool.Exec(ctx, `DELETE FROM tenants WHERE tenant_id = $1`, tid) }
+	cleanup()
+	defer cleanup()
+
+	tn, err := st.EnsureTenantForTID(ctx, tid, "Gate Co")
+	if err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	if tn.Enabled {
+		t.Fatalf("a JIT-provisioned tenant must start disabled (pending approval)")
+	}
+
+	if err := st.SetTenantEnabled(ctx, tn.ID, true); err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+	if got, _ := st.TenantByTID(ctx, tid); !got.Enabled {
+		t.Fatalf("tenant should be enabled after SetTenantEnabled(true)")
+	}
+
+	if err := st.SetTenantEnabled(ctx, tn.ID, false); err != nil {
+		t.Fatalf("disable: %v", err)
+	}
+	if got, _ := st.TenantByTID(ctx, tid); got.Enabled {
+		t.Fatalf("tenant should be disabled after SetTenantEnabled(false)")
+	}
+
+	if err := st.SetTenantEnabled(ctx, "no-such-tenant", true); err != ErrNotFound {
+		t.Fatalf("expected ErrNotFound for unknown tenant, got %v", err)
+	}
+}

@@ -379,6 +379,11 @@ function FleetRow({
             <span className={styles.version + " mono"} data-behind={behind || undefined}>
               {tenant.version ? `v${tenant.version}` : "—"}
             </span>
+            {!tenant.enabled && (
+              <span className={styles.metaFlag} data-tone="warning">
+                pending
+              </span>
+            )}
             {behind && (
               <span className={styles.metaFlag} data-tone="warning">
                 behind

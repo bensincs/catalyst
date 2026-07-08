@@ -55,6 +55,14 @@ export async function setEntitlements(
   );
 }
 
+// Enable/disable a tenant's access (console + reconciler). Platform admins only.
+export async function setTenantEnabled(slug: string, enabled: boolean): Promise<ActionResult> {
+  return run(
+    () => apiSend("PATCH", `/api/tenants/${encodeURIComponent(slug)}/enabled`, { enabled }),
+    [`/tenants/${slug}`, "/"],
+  );
+}
+
 export async function enableAgent(input: {
   catalogAgentId: string;
   publishTo: string[];

@@ -39,33 +39,42 @@ func (s *Server) Router() http.Handler {
 
 	r.Route("/api", func(r chi.Router) {
 		r.Use(s.auth.Middleware)
+		// /me is intentionally NOT tenant-gated: a pending (not-yet-enabled)
+		// tenant must still be able to learn its own status so the console can
+		// show a "pending approval" screen instead of failing opaquely.
 		r.Get("/me", s.handleMe)
-		r.Get("/fleet", s.handleFleet)
-		r.Get("/tenant/context", s.handleMyContext)
-		r.Get("/tenants/{slug}/context", s.handleTenantContext)
 
-		// Catalog
-		r.Get("/catalog", s.handleCatalog)
-		r.Post("/catalog", s.handleCreateCatalogAgent)
-		r.Post("/catalog/{id}/versions", s.handlePublishVersion)
+		// Everything else requires an ENABLED tenant. Platform admins always pass.
+		r.Group(func(r chi.Router) {
+			r.Use(s.tenantGate)
+			r.Get("/fleet", s.handleFleet)
+			r.Get("/tenant/context", s.handleMyContext)
+			r.Get("/tenants/{slug}/context", s.handleTenantContext)
 
-		// Tenant registry + entitlements (platform)
-		r.Get("/tenants", s.handleTenantsRegistry)
-		r.Patch("/tenants/{slug}/entitlements", s.handleSetEntitlements)
-		r.Patch("/tenants/{slug}/store-entitlements", s.handleSetStoreEntitlements)
+			// Catalog
+			r.Get("/catalog", s.handleCatalog)
+			r.Post("/catalog", s.handleCreateCatalogAgent)
+			r.Post("/catalog/{id}/versions", s.handlePublishVersion)
 
-		// Memory stores (platform-authored + tenant-created)
-		r.Get("/memory-stores", s.handleMemoryStores)
-		r.Post("/memory-stores", s.handleCreateMemoryStore)
-		r.Patch("/memory-stores/{id}", s.handleUpdateMemoryStore)
-		r.Delete("/memory-stores/{id}", s.handleDeleteMemoryStore)
+			// Tenant registry + entitlements + access (platform)
+			r.Get("/tenants", s.handleTenantsRegistry)
+			r.Patch("/tenants/{slug}/entitlements", s.handleSetEntitlements)
+			r.Patch("/tenants/{slug}/store-entitlements", s.handleSetStoreEntitlements)
+			r.Patch("/tenants/{slug}/enabled", s.handleSetTenantEnabled)
 
-		// Tenant desired state
-		r.Post("/tenant/agents", s.handleEnableAgent)
-		r.Delete("/tenant/agents/{agentId}", s.handleDisableAgent)
-		r.Post("/tenant/agents/{agentId}/store", s.handleConnectAgentStore)
-		r.Post("/tenant/stores/{storeId}", s.handleEnableStore)
-		r.Delete("/tenant/stores/{storeId}", s.handleDisableStore)
+			// Memory stores (platform-authored + tenant-created)
+			r.Get("/memory-stores", s.handleMemoryStores)
+			r.Post("/memory-stores", s.handleCreateMemoryStore)
+			r.Patch("/memory-stores/{id}", s.handleUpdateMemoryStore)
+			r.Delete("/memory-stores/{id}", s.handleDeleteMemoryStore)
+
+			// Tenant desired state
+			r.Post("/tenant/agents", s.handleEnableAgent)
+			r.Delete("/tenant/agents/{agentId}", s.handleDisableAgent)
+			r.Post("/tenant/agents/{agentId}/store", s.handleConnectAgentStore)
+			r.Post("/tenant/stores/{storeId}", s.handleEnableStore)
+			r.Delete("/tenant/stores/{storeId}", s.handleDisableStore)
+		})
 	})
 
 	// Reconciler-facing endpoints. The in-tenant reconciler authenticates with
@@ -73,6 +82,7 @@ func (s *Server) Router() http.Handler {
 	// tenant it acts on is the token's tid — never a client-supplied parameter.
 	r.Route("/recon", func(r chi.Router) {
 		r.Use(s.recon.Middleware)
+		r.Use(s.reconGate)
 		r.Get("/sync", s.handleSync)
 		r.Post("/heartbeat", s.handleHeartbeat)
 	})
@@ -99,6 +109,79 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// tenantGate blocks non-enabled tenants from every /api route except /me.
+// Platform admins always pass. First contact records the tenant (disabled) so it
+// surfaces for platform approval, then rejects it so the console can show a
+// pending-approval screen.
+func (s *Server) tenantGate(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id, ok := auth.IdentityFrom(r.Context())
+		if !ok {
+			writeErr(w, http.StatusUnauthorized, "unauthenticated")
+			return
+		}
+		if id.Role == model.RolePlatform {
+			next.ServeHTTP(w, r) // the platform tenant is always enabled
+			return
+		}
+		t, err := s.store.EnsureTenantForTID(r.Context(), id.TID, orgNameFromEmail(id.Email))
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		if !t.Enabled {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "tenant not enabled", "code": "tenant_disabled"})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// reconGate blocks a reconciler whose tenant isn't enabled. An unknown tenant is
+// recorded (disabled) so it surfaces for approval, then rejected.
+func (s *Server) reconGate(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id, ok := auth.ReconIdentityFrom(r.Context())
+		if !ok || id.TID == "" {
+			writeErr(w, http.StatusUnauthorized, "unauthenticated reconciler")
+			return
+		}
+		t, err := s.store.EnsureTenantForTID(r.Context(), id.TID, "")
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		if !t.Enabled {
+			writeErr(w, http.StatusForbidden, "tenant not enabled")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// handleSetTenantEnabled enables or disables a tenant's access (platform only).
+func (s *Server) handleSetTenantEnabled(w http.ResponseWriter, r *http.Request) {
+	id, _ := auth.IdentityFrom(r.Context())
+	if !s.requirePlatform(w, id) {
+		return
+	}
+	var body struct {
+		Enabled bool `json:"enabled"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if err := s.store.SetTenantEnabled(r.Context(), chi.URLParam(r, "slug"), body.Enabled); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "tenant not found")
+			return
+		}
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
 func (s *Server) handleFleet(w http.ResponseWriter, r *http.Request) {

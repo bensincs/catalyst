@@ -44,6 +44,7 @@ interface ApiTenant {
   foundryProject?: string;
   reconcilerVersion?: string;
   installedAt?: string;
+  enabled?: boolean;
 }
 interface ApiAgent {
   id: string;
@@ -178,6 +179,7 @@ function toSummary(t: ApiTenant): TenantSummary {
     monthlyCalls: t.monthlyCalls,
     drift: t.drift,
     lifecycle: (t.lifecycle ?? "enrolling") as Lifecycle,
+    enabled: t.enabled ?? true,
   };
 }
 
@@ -196,6 +198,7 @@ function toContext(t: ApiTenant): TenantContextInfo {
     reconcilerVersion: t.reconcilerVersion ?? "",
     lastHeartbeatMs: ms(t.lastHeartbeat),
     lifecycle: (t.lifecycle ?? "enrolling") as Lifecycle,
+    enabled: t.enabled ?? true,
   };
 }
 
@@ -327,6 +330,7 @@ export const getTenantsRegistry = cache(async (): Promise<TenantRegistryRow[]> =
     entitledCount: t.entitledCount,
     entitledStores: t.entitledStores ?? [],
     lifecycle: (t.lifecycle ?? "enrolling") as Lifecycle,
+    enabled: t.enabled ?? true,
   }));
 });
 
