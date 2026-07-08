@@ -15,7 +15,8 @@ installs, or bootstrapping a tenant before the offer is published.
  │        │  identity token (Foundry User)                         │
  │        ▼                                                        │
  │  cortex-ai-<hash>  (Foundry account) / agents-prod  (project)  │
- │        └─ gpt-4o   (model deployment)                          │
+ │        ├─ gpt-4o                  (chat model deployment)      │
+ │        └─ text-embedding-3-small  (embedding — memory stores)  │
  └───────────────────────────────────────────────────────────────┘
           │  identity token (CORTEX_API_SCOPE), tid → tenant
           ▼
@@ -34,6 +35,7 @@ derived from that name.
 | Foundry account (AI Services) | `cortex-ai-<hash>` | `kind: AIServices`, `allowProjectManagement`, Entra-only (`disableLocalAuth`) |
 | Foundry project | `agents-prod` | where agents are converged |
 | Model deployment | `gpt-4o` | what agents run on |
+| Embedding deployment | `text-embedding-3-small` | required by memory stores to index memories |
 | Role assignment | — | identity → **Foundry User** on the account (the `AIServices/agents/*` data plane) |
 | Managed environment | `cortex-recon-env` | Container Apps env |
 | Container app | `cortex-reconciler` | outbound-only worker, 1 replica |
@@ -49,6 +51,10 @@ derived from that name.
 - **Model quota**: `gpt-4o` `GlobalStandard` capacity in your region (default 30k
   TPM). Override `modelName`/`modelVersion`/`modelSkuName`/`modelCapacity` if your
   region or quota differs, or point at a region that has it.
+- **Embedding quota**: `text-embedding-3-small` `Standard` capacity (default 30k
+  TPM) — memory stores can't be created without an embedding deployment. Override
+  `embeddingModelName`/`embeddingModelVersion`/`embeddingSkuName`/`embeddingCapacity`
+  to match your region.
 - The **Cortex Entra app** must be provisioned (admin-consented) in the target
   tenant so the reconciler identity can obtain Cortex API tokens — this is the
   same multi-tenant app from the control plane
@@ -189,6 +195,8 @@ Parameters (`main.bicep`) — all optional except `tenantName`:
 | `foundryProjectName` | `agents-prod` | project agents converge into |
 | `modelName` / `modelVersion` | `gpt-4o` / `2024-11-20` | model for agents |
 | `modelSkuName` / `modelCapacity` | `GlobalStandard` / `30` | deployment throughput |
+| `embeddingModelName` / `embeddingModelVersion` | `text-embedding-3-small` / `1` | embedding model for memory stores |
+| `embeddingSkuName` / `embeddingCapacity` | `Standard` / `30` | embedding deployment throughput |
 | `reconcilerImage` | `ghcr.io/inception42/cortex-reconciler:latest` | container image |
 | `reconcilerVersion` | `0.1.0` | version reported to the control plane |
 | `pollIntervalSeconds` | `30` | reconcile + heartbeat interval |

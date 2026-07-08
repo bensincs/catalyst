@@ -60,6 +60,21 @@ param modelSkuName string = 'GlobalStandard'
 @description('Model capacity, in thousands of tokens-per-minute. Foundry recommends >= 30 for agents/tools.')
 param modelCapacity int = 30
 
+@description('Embedding model deployment name — required by memory stores to index memories.')
+param embeddingDeploymentName string = 'text-embedding-3-small'
+
+@description('Embedding model to deploy for memory stores.')
+param embeddingModelName string = 'text-embedding-3-small'
+
+@description('Embedding model version.')
+param embeddingModelVersion string = '1'
+
+@description('Embedding deployment SKU (throughput type).')
+param embeddingSkuName string = 'Standard'
+
+@description('Embedding capacity, in thousands of tokens-per-minute.')
+param embeddingCapacity int = 30
+
 @description('Reconciler container image (published by Cortex, or your own registry).')
 param reconcilerImage string = 'ghcr.io/inception42/cortex-reconciler:latest'
 
@@ -156,6 +171,27 @@ resource modelDeployment 'Microsoft.CognitiveServices/accounts/deployments@2024-
   dependsOn: [ foundryProject ]
 }
 
+// An embedding model for memory stores to index memories on. Serialized after
+// the chat model — deployments on one Cognitive Services account can't be
+// written concurrently. Without this, POST /memory_stores fails with
+// "Embedding model deployment '…' was not found".
+resource embeddingDeployment 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' = {
+  parent: foundryAccount
+  name: embeddingDeploymentName
+  sku: {
+    name: embeddingSkuName
+    capacity: embeddingCapacity
+  }
+  properties: {
+    model: {
+      format: 'OpenAI'
+      name: embeddingModelName
+      version: embeddingModelVersion
+    }
+  }
+  dependsOn: [ modelDeployment ]
+}
+
 // Grant the reconciler identity the agents data plane on the Foundry account.
 resource foundryRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(foundryAccount.id, reconIdentity.id, foundryUserRoleId)
@@ -233,7 +269,7 @@ resource reconciler 'Microsoft.App/containerApps@2024-03-01' = if (deployReconci
   }
   // The container isn't linked to Foundry by symbolic reference (the endpoint is
   // a derived string), so make the ordering + RBAC propagation explicit.
-  dependsOn: [ foundryRoleAssignment, modelDeployment ]
+  dependsOn: [ foundryRoleAssignment, modelDeployment, embeddingDeployment ]
 }
 
 output reconcilerPrincipalId string = reconIdentity.properties.principalId
