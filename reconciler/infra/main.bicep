@@ -78,6 +78,9 @@ param embeddingCapacity int = 30
 @description('Reconciler container image (published by Cortex, or your own registry).')
 param reconcilerImage string = 'ghcr.io/inception42/cortex-reconciler:latest'
 
+@description('Private registry server for the reconciler image (e.g. myacr.azurecr.io). Empty = a public image pulled without auth. When set, the reconciler identity pulls with its own identity and needs AcrPull on the registry.')
+param registryServer string = ''
+
 @description('Reconciler build/release version reported to the control plane (match the image tag).')
 param reconcilerVersion string = '0.1.0'
 
@@ -233,6 +236,15 @@ resource reconciler 'Microsoft.App/containerApps@2024-03-01' = if (deployReconci
     configuration: {
       activeRevisionsMode: 'Single'
       // Outbound-only worker: no ingress, no secrets — identity-based auth only.
+      // A private registry (e.g. ACR) is pulled with the reconciler's own
+      // user-assigned identity; empty registryServer keeps the public-image
+      // default (anonymous pull). The identity needs AcrPull on the registry.
+      registries: empty(registryServer) ? [] : [
+        {
+          server: registryServer
+          identity: reconIdentity.id
+        }
+      ]
     }
     template: {
       containers: [
