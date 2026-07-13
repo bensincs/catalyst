@@ -3,6 +3,7 @@ package cluster
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/inception42/cortex/shared"
 
@@ -23,7 +24,51 @@ const (
 	// meshConfig) that points at the in-cluster Alloy collector, so Istio ships
 	// traces + access logs for every meshed workload to it.
 	otelProviderName = "cortex-otel"
+
+	// Argo AppProjects that bound what Cortex deploys: the mesh's own charts vs
+	// tenant Helm apps. Both cap blast radius (source repos + destinations).
+	projectSystem  = "cortex-system"
+	projectTenants = "cortex-tenants"
 )
+
+const kubeAPIServer = "https://kubernetes.default.svc"
+
+// argoProjects are the two restricted Argo AppProjects. cortex-system may only
+// source the mesh chart repos (so a mis-created "system" app can't pull an
+// arbitrary chart) and may manage cluster-scoped resources; cortex-tenants may
+// source any repo but is barred from deploying into the platform/system
+// namespaces, so a tenant app can never tamper with the mesh, gateway, Argo, or
+// the collector.
+func argoProjects() []*unstructured.Unstructured {
+	dests := []any{map[string]any{"server": kubeAPIServer, "namespace": "*"}}
+	for _, ns := range protectedNamespaceList {
+		dests = append(dests, map[string]any{"server": kubeAPIServer, "namespace": "!" + ns})
+	}
+	anyResource := []any{map[string]any{"group": "*", "kind": "*"}}
+	return []*unstructured.Unstructured{
+		appProject(projectSystem, []any{istioRepo, alloyRepo},
+			[]any{map[string]any{"server": kubeAPIServer, "namespace": "*"}}, anyResource, anyResource),
+		appProject(projectTenants, []any{"*"}, dests, anyResource, anyResource),
+	}
+}
+
+func appProject(name string, sourceRepos, destinations, clusterWhitelist, nsWhitelist []any) *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "argoproj.io/v1alpha1",
+		"kind":       "AppProject",
+		"metadata": map[string]any{
+			"name":      name,
+			"namespace": argoNamespace,
+			"labels":    map[string]any{labelManaged: "true", labelSystem: "true"},
+		},
+		"spec": map[string]any{
+			"sourceRepos":                sourceRepos,
+			"destinations":               destinations,
+			"clusterResourceWhitelist":   clusterWhitelist,
+			"namespaceResourceWhitelist": nsWhitelist,
+		},
+	}}
+}
 
 // systemApps are the mesh's Argo Applications, ordered by sync-wave so Istio CRDs
 // (base) land before the control plane (istiod) before the gateway + collector.
@@ -56,7 +101,7 @@ func meshApp(name, namespace, repo, chart, version, values string, wave int) *un
 			},
 		},
 		"spec": map[string]any{
-			"project": "default",
+			"project": projectSystem,
 			"source":  source,
 			"destination": map[string]any{
 				"server":    "https://kubernetes.default.svc",
@@ -78,6 +123,8 @@ func istiodValues(o Options) string {
 	return fmt.Sprintf(`meshConfig:
   accessLogFile: /dev/stdout
   enableTracing: true
+  pathNormalization:
+    normalization: DECODE_AND_MERGE_SLASHES
   outboundTrafficPolicy:
     mode: %s
   defaultConfig:
@@ -285,17 +332,34 @@ const (
 	authPolicyName  = "cortex-require-jwt"
 )
 
+// validAuthRules keeps only fully-formed JWT rules: a rule missing an issuer,
+// JWKS URI, or audience would weaken the gateway (accept any audience, or match
+// an empty principal), so we drop it rather than apply it.
+func validAuthRules(auth *shared.IngressAuth) []shared.IngressJWTRule {
+	if auth == nil {
+		return nil
+	}
+	out := make([]shared.IngressJWTRule, 0, len(auth.Rules))
+	for _, r := range auth.Rules {
+		if strings.TrimSpace(r.Issuer) == "" || strings.TrimSpace(r.JWKSURI) == "" || len(r.Audiences) == 0 {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
 // requestAuthentication validates Entra JWTs presented at the ingress gateway
 // against the supplied issuer rules. It does NOT by itself reject tokenless
 // requests — requireJWTPolicy does that.
-func requestAuthentication(auth *shared.IngressAuth) *unstructured.Unstructured {
-	rules := make([]any, 0, len(auth.Rules))
-	for _, r := range auth.Rules {
-		jr := map[string]any{"issuer": r.Issuer, "jwksUri": r.JWKSURI}
-		if len(r.Audiences) > 0 {
-			jr["audiences"] = toAny(r.Audiences)
-		}
-		rules = append(rules, jr)
+func requestAuthentication(rules []shared.IngressJWTRule) *unstructured.Unstructured {
+	jwtRules := make([]any, 0, len(rules))
+	for _, r := range rules {
+		jwtRules = append(jwtRules, map[string]any{
+			"issuer":    r.Issuer,
+			"jwksUri":   r.JWKSURI,
+			"audiences": toAny(r.Audiences),
+		})
 	}
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "security.istio.io/v1",
@@ -307,7 +371,7 @@ func requestAuthentication(auth *shared.IngressAuth) *unstructured.Unstructured 
 		},
 		"spec": map[string]any{
 			"selector": map[string]any{"matchLabels": map[string]any{"istio": ingressGWLabel}},
-			"jwtRules": rules,
+			"jwtRules": jwtRules,
 		},
 	}}
 }
@@ -315,9 +379,9 @@ func requestAuthentication(auth *shared.IngressAuth) *unstructured.Unstructured 
 // requireJWTPolicy makes a valid token from one of the pinned issuers mandatory:
 // requests whose principal (iss/sub) doesn't match any issuer — including
 // tokenless requests, which have no principal — are denied at the gateway.
-func requireJWTPolicy(auth *shared.IngressAuth) *unstructured.Unstructured {
-	principals := make([]any, 0, len(auth.Rules))
-	for _, r := range auth.Rules {
+func requireJWTPolicy(rules []shared.IngressJWTRule) *unstructured.Unstructured {
+	principals := make([]any, 0, len(rules))
+	for _, r := range rules {
 		principals = append(principals, r.Issuer+"/*")
 	}
 	return &unstructured.Unstructured{Object: map[string]any{

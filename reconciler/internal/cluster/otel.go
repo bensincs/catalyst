@@ -23,6 +23,8 @@ const (
 // collector with a stable Service name and the OTLP ports exposed.
 func alloyValues(otlpEndpoint string) string {
 	return fmt.Sprintf(`fullnameOverride: %s
+service:
+  type: ClusterIP
 controller:
   type: deployment
   replicas: 1
@@ -101,7 +103,8 @@ func alloyConfig(otlpEndpoint string) string {
 
 otelcol.receiver.otlp "default" {
   grpc {
-    endpoint = "0.0.0.0:%d"
+    endpoint         = "0.0.0.0:%d"
+    max_recv_msg_size = "8MiB"
   }
   http {
     endpoint = "0.0.0.0:%d"

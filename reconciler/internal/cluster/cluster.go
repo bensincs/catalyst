@@ -11,6 +11,7 @@ package cluster
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -53,6 +54,7 @@ const (
 
 var (
 	appGVR = schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"}
+	prjGVR = schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "appprojects"}
 	nsGVR  = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "namespaces"}
 	depGVR = schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
 	svcGVR = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "services"}
@@ -88,8 +90,13 @@ type Client struct {
 func New(cred azcore.TokenCredential, o Options) *Client {
 	return &Client{
 		cred: cred,
-		http: &http.Client{Timeout: 60 * time.Second},
-		o:    o,
+		http: &http.Client{
+			Timeout: 60 * time.Second,
+			// Pin a TLS 1.2 floor for all outbound calls (ARM, Argo manifest),
+			// independent of the Go default.
+			Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}},
+		},
+		o: o,
 	}
 }
 
@@ -301,6 +308,18 @@ func parseKubeconfig(data []byte) (server string, ca []byte, err error) {
 		return "", nil, err
 	}
 	for _, cl := range cfg.Clusters {
+		// Never talk to an API server without pinned TLS verification: require an
+		// HTTPS endpoint, a CA bundle, and no skip-verify, so a tampered or
+		// misconfigured kubeconfig can't downgrade us to an unverified connection.
+		if !strings.HasPrefix(strings.ToLower(cl.Server), "https://") {
+			return "", nil, fmt.Errorf("refusing non-HTTPS API server %q", cl.Server)
+		}
+		if len(cl.CertificateAuthorityData) == 0 {
+			return "", nil, errors.New("kubeconfig has no certificate authority — refusing unverified TLS")
+		}
+		if cl.InsecureSkipTLSVerify {
+			return "", nil, errors.New("kubeconfig sets insecure-skip-tls-verify — refusing")
+		}
 		return cl.Server, cl.CertificateAuthorityData, nil
 	}
 	return "", nil, errors.New("no cluster in kubeconfig")

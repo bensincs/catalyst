@@ -47,13 +47,30 @@ func (k *kube) ensureNamespace(ctx context.Context, name string) error {
 	return err
 }
 
+// protectedNamespaceList is the deterministic set of namespaces that are never
+// mesh-injected or used as tenant workload destinations — the mesh/platform
+// namespaces and Kubernetes' own system namespaces. Kept as an ordered slice so
+// the derived Argo project denies apply without churn.
+var protectedNamespaceList = []string{
+	argoNamespace, istioSystemNS, istioIngressNS, observabilityNS,
+	"kube-system", "kube-public", "kube-node-lease", "default", "gatekeeper-system",
+}
+
+var protectedNamespaces = func() map[string]bool {
+	m := make(map[string]bool, len(protectedNamespaceList))
+	for _, n := range protectedNamespaceList {
+		m[n] = true
+	}
+	return m
+}()
+
 // ensureMeshNamespace enrolls a tenant workload namespace into the mesh
 // (istio-injection=enabled) so STRICT mTLS, deny-by-default egress, and
 // telemetry actually cover the workloads Argo deploys there. Best-effort: it
 // only adds the label (server-side apply), never fighting Argo for the rest of
-// the namespace.
+// the namespace, and never touches a protected namespace.
 func (k *kube) ensureMeshNamespace(ctx context.Context, name string) {
-	if name == "" || name == argoNamespace || name == istioSystemNS || name == istioIngressNS || name == observabilityNS {
+	if name == "" || protectedNamespaces[name] {
 		return
 	}
 	ns := &unstructured.Unstructured{Object: map[string]any{
@@ -178,6 +195,11 @@ var ssaOpts = metav1.ApplyOptions{FieldManager: fieldManager, Force: true}
 // address. Best-effort: the CRs need Istio CRDs, which land over a few cycles,
 // so errors are tolerated and retried.
 func (k *kube) reconcileMesh(ctx context.Context, o Options) meshResult {
+	// Restricted Argo projects first, so the mesh + tenant apps are bounded the
+	// moment they're stamped.
+	for _, p := range argoProjects() {
+		_, _ = k.dyn.Resource(prjGVR).Namespace(argoNamespace).Apply(ctx, p.GetName(), p, ssaOpts)
+	}
 	ri := k.dyn.Resource(appGVR).Namespace(argoNamespace)
 	for _, app := range systemApps(o) {
 		_, _ = ri.Apply(ctx, app.GetName(), app, ssaOpts)
@@ -211,15 +233,17 @@ func (k *kube) reconcileMesh(ctx context.Context, o Options) meshResult {
 func (k *kube) reconcileIngressAuth(ctx context.Context, auth *shared.IngressAuth) string {
 	ap := k.dyn.Resource(apGVR).Namespace(istioIngressNS)
 	ra := k.dyn.Resource(raGVR).Namespace(istioIngressNS)
-	if auth == nil || len(auth.Rules) == 0 {
-		// Fail closed: deny all ingress and drop any stale JWT rule.
+	rules := validAuthRules(auth)
+	if len(rules) == 0 {
+		// No usable identity ⇒ fail closed: deny all ingress and drop any stale
+		// JWT rule.
 		_, _ = ap.Apply(ctx, authPolicyName, denyAllPolicy(), ssaOpts)
 		_ = ra.Delete(ctx, requestAuthName, metav1.DeleteOptions{})
 		return ""
 	}
-	_, _ = ra.Apply(ctx, requestAuthName, requestAuthentication(auth), ssaOpts)
-	_, _ = ap.Apply(ctx, authPolicyName, requireJWTPolicy(auth), ssaOpts)
-	return auth.Rules[0].Issuer
+	_, _ = ra.Apply(ctx, requestAuthName, requestAuthentication(rules), ssaOpts)
+	_, _ = ap.Apply(ctx, authPolicyName, requireJWTPolicy(rules), ssaOpts)
+	return rules[0].Issuer
 }
 
 // ingressIP returns the public address (IP or hostname) of the ingress gateway's
@@ -265,9 +289,12 @@ func buildApplication(a shared.DesiredApplication, name string) *unstructured.Un
 				labelManaged: "true",
 				labelAppID:   a.ID,
 			},
+			// Cascade-delete the app's workloads when the Application is pruned,
+			// so a removed deployment actually stops running (no orphans).
+			"finalizers": []any{"resources-finalizer.argocd.argoproj.io"},
 		},
 		"spec": map[string]any{
-			"project": "default",
+			"project": projectTenants,
 			"source":  source,
 			"destination": map[string]any{
 				"server":    "https://kubernetes.default.svc",

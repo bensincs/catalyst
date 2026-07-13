@@ -905,10 +905,15 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, err error) {
 
 func (s *Server) cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", s.corsOrigin)
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
-		w.Header().Set("Vary", "Origin")
+		// Only advertise CORS when a specific origin is configured — never an
+		// empty or wildcard allow-origin. Requests are authorized by bearer
+		// token (not cookies), so a single fixed origin is the whole allowlist.
+		if s.corsOrigin != "" {
+			w.Header().Set("Access-Control-Allow-Origin", s.corsOrigin)
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+			w.Header().Set("Vary", "Origin")
+		}
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
