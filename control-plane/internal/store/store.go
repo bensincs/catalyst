@@ -74,7 +74,8 @@ func (s *Store) Seed(ctx context.Context) error {
 const tenantCols = `id, name, coalesce(tenant_id,''), region, plan, enrollment, version,
 	agent_count, reconciling_count, monthly_calls, drift, last_heartbeat,
 	subscription_id, reconciler_identity, foundry_project, reconciler_version, installed_at, enabled,
-	cluster_name, cluster_phase, cluster_k8s_version, cluster_argo_installed, cluster_node_count, cluster_detail`
+	cluster_name, cluster_phase, cluster_k8s_version, cluster_argo_installed, cluster_node_count, cluster_detail,
+	cluster_mesh_installed, cluster_gateway_ip`
 
 func scanTenant(row pgx.Row) (model.Tenant, error) {
 	var t model.Tenant
@@ -82,7 +83,8 @@ func scanTenant(row pgx.Row) (model.Tenant, error) {
 	err := row.Scan(&t.ID, &t.Name, &t.TenantID, &t.Region, &t.Plan, &t.Enrollment,
 		&t.Version, &t.AgentCount, &t.ReconcilingCount, &t.MonthlyCalls, &t.Drift, &t.LastHeartbeat,
 		&t.SubscriptionID, &t.ReconcilerIdentity, &t.FoundryProject, &t.ReconcilerVersion, &installedAt, &t.Enabled,
-		&t.Cluster.Name, &t.Cluster.Phase, &t.Cluster.K8sVersion, &t.Cluster.ArgoInstalled, &t.Cluster.NodeCount, &t.Cluster.Detail)
+		&t.Cluster.Name, &t.Cluster.Phase, &t.Cluster.K8sVersion, &t.Cluster.ArgoInstalled, &t.Cluster.NodeCount, &t.Cluster.Detail,
+		&t.Cluster.MeshInstalled, &t.Cluster.GatewayIP)
 	if installedAt != "" {
 		t.InstalledAt = &installedAt
 	}
@@ -847,6 +849,7 @@ func (s *Store) TenantsRegistry(ctx context.Context) ([]model.TenantRegistryRow,
 			&r.Version, &r.AgentCount, &r.ReconcilingCount, &r.MonthlyCalls, &r.Drift, &r.LastHeartbeat,
 			&r.SubscriptionID, &r.ReconcilerIdentity, &r.FoundryProject, &r.ReconcilerVersion, &installedAt, &r.Enabled,
 			&r.Cluster.Name, &r.Cluster.Phase, &r.Cluster.K8sVersion, &r.Cluster.ArgoInstalled, &r.Cluster.NodeCount, &r.Cluster.Detail,
+			&r.Cluster.MeshInstalled, &r.Cluster.GatewayIP,
 			&r.EntitledAgents, &r.EntitledStores); err != nil {
 			return nil, err
 		}
@@ -1125,9 +1128,11 @@ func (s *Store) ApplyHeartbeat(ctx context.Context, hb shared.Heartbeat) error {
 	if c := hb.Cluster; c != nil {
 		if _, err := s.pool.Exec(ctx,
 			`UPDATE tenants SET cluster_name = $2, cluster_phase = $3, cluster_k8s_version = $4,
-			   cluster_argo_installed = $5, cluster_node_count = $6, cluster_detail = $7
+			   cluster_argo_installed = $5, cluster_node_count = $6, cluster_detail = $7,
+			   cluster_mesh_installed = $8, cluster_gateway_ip = $9
 			 WHERE id = $1`,
-			t.ID, c.Name, c.Phase, c.KubernetesVer, c.ArgoInstalled, c.NodeCount, c.Detail); err != nil {
+			t.ID, c.Name, c.Phase, c.KubernetesVer, c.ArgoInstalled, c.NodeCount, c.Detail,
+			c.MeshInstalled, c.GatewayIP); err != nil {
 			return err
 		}
 	}

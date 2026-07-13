@@ -128,7 +128,7 @@ func (k *kube) reconcileApplications(ctx context.Context, apps []shared.DesiredA
 		out = append(out, st)
 	}
 
-	if list, err := ri.List(ctx, metav1.ListOptions{LabelSelector: labelManaged + "=true"}); err == nil {
+	if list, err := ri.List(ctx, metav1.ListOptions{LabelSelector: labelManaged + "=true," + labelSystem + "!=true"}); err == nil {
 		for i := range list.Items {
 			n := list.Items[i].GetName()
 			if !desired[n] {
@@ -137,6 +137,49 @@ func (k *kube) reconcileApplications(ctx context.Context, apps []shared.DesiredA
 		}
 	}
 	return out
+}
+
+// reconcileMesh installs the Istio service mesh + a default public ingress
+// gateway (as Argo "system" Applications) and applies the default Gateway CR.
+// It reports whether the mesh control plane is up and the gateway's public
+// address. Best-effort: the Gateway CR needs Istio CRDs, which land over a few
+// cycles, so errors are tolerated and retried.
+func (k *kube) reconcileMesh(ctx context.Context, istioVersion string) (meshInstalled bool, gatewayIP string) {
+	ri := k.dyn.Resource(appGVR).Namespace(argoNamespace)
+	for _, app := range systemApps(istioVersion) {
+		_, _ = ri.Apply(ctx, app.GetName(), app, metav1.ApplyOptions{FieldManager: fieldManager, Force: true})
+	}
+	// The Gateway CR depends on Istio's CRDs — tolerate absence (retried).
+	_, _ = k.dyn.Resource(gwGVR).Namespace(istioIngressNS).Apply(ctx, defaultGWName, defaultGateway(), metav1.ApplyOptions{FieldManager: fieldManager, Force: true})
+
+	if _, err := k.dyn.Resource(depGVR).Namespace(istioSystemNS).Get(ctx, "istiod", metav1.GetOptions{}); err == nil {
+		meshInstalled = true
+	}
+	return meshInstalled, k.ingressIP(ctx)
+}
+
+// ingressIP returns the public address (IP or hostname) of the ingress gateway's
+// LoadBalancer Service, or "" until Azure has assigned one.
+func (k *kube) ingressIP(ctx context.Context) string {
+	list, err := k.dyn.Resource(svcGVR).Namespace(istioIngressNS).List(ctx, metav1.ListOptions{LabelSelector: "istio=" + ingressGWLabel})
+	if err != nil || len(list.Items) == 0 {
+		return ""
+	}
+	ing, found, _ := unstructured.NestedSlice(list.Items[0].Object, "status", "loadBalancer", "ingress")
+	if !found || len(ing) == 0 {
+		return ""
+	}
+	m, ok := ing[0].(map[string]any)
+	if !ok {
+		return ""
+	}
+	if ip, ok := m["ip"].(string); ok && ip != "" {
+		return ip
+	}
+	if host, ok := m["hostname"].(string); ok {
+		return host
+	}
+	return ""
 }
 
 func buildApplication(a shared.DesiredApplication, name string) *unstructured.Unstructured {

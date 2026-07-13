@@ -117,6 +117,14 @@ export function DeploymentsView({
         <span className={styles.chip} data-off={!cluster.argoInstalled}>
           Argo CD
         </span>
+        <span className={styles.chip} data-off={!cluster.meshInstalled}>
+          Istio
+        </span>
+        {cluster.gatewayIP && (
+          <span className={styles.chip}>
+            gateway <span className="mono">{cluster.gatewayIP}</span>
+          </span>
+        )}
         {cluster.detail && cluster.phase !== "ready" && <span className={styles.count}>{cluster.detail}</span>}
       </div>
 

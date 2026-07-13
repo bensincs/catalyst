@@ -145,10 +145,11 @@ export function TenantOverview({
             label="Cluster"
             value={
               tenant.cluster.phase
-                ? `${tenant.cluster.name || "cluster"} · ${tenant.cluster.phase}${tenant.cluster.argoInstalled ? " · Argo CD" : ""}`
+                ? `${tenant.cluster.name || "cluster"} · ${tenant.cluster.phase}${tenant.cluster.argoInstalled ? " · Argo CD" : ""}${tenant.cluster.meshInstalled ? " · Istio" : ""}`
                 : "—"
             }
           />
+          {tenant.cluster.gatewayIP ? <Fact label="Ingress gateway" value={tenant.cluster.gatewayIP} mono /> : null}
         </dl>
 
         <div className={styles.installFoot}>

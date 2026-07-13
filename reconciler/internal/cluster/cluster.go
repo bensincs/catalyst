@@ -43,9 +43,11 @@ const (
 )
 
 // Labels Cortex stamps on every Argo Application it manages, so it only ever
-// mutates or prunes Applications it owns.
+// mutates or prunes Applications it owns. System apps (Istio, gateway) also carry
+// labelSystem so the tenant-app prune never removes the mesh.
 const (
 	labelManaged = "cortex.io/managed" // "true"
+	labelSystem  = "cortex.io/system"  // "true" for mesh/gateway apps
 	labelAppID   = "cortex.io/app-id"  // control-plane application id
 )
 
@@ -53,6 +55,8 @@ var (
 	appGVR = schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"}
 	nsGVR  = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "namespaces"}
 	depGVR = schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
+	svcGVR = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "services"}
+	gwGVR  = schema.GroupVersionResource{Group: "networking.istio.io", Version: "v1", Resource: "gateways"}
 )
 
 // Client drives one tenant's cluster (one reconciler → one cluster).
@@ -63,9 +67,10 @@ type Client struct {
 	resourceGroup string
 	clusterName   string
 	argoVersion   string
+	istioVersion  string
 }
 
-func New(cred azcore.TokenCredential, sub, rg, clusterName, argoVersion string) *Client {
+func New(cred azcore.TokenCredential, sub, rg, clusterName, argoVersion, istioVersion string) *Client {
 	return &Client{
 		cred:          cred,
 		http:          &http.Client{Timeout: 60 * time.Second},
@@ -73,6 +78,7 @@ func New(cred azcore.TokenCredential, sub, rg, clusterName, argoVersion string) 
 		resourceGroup: rg,
 		clusterName:   clusterName,
 		argoVersion:   argoVersion,
+		istioVersion:  istioVersion,
 	}
 }
 
@@ -120,6 +126,10 @@ func (c *Client) Reconcile(ctx context.Context, apps []shared.DesiredApplication
 	}
 	status.ArgoInstalled = true
 	status.Phase = shared.ClusterReady
+
+	// Bootstrap the service mesh + default public ingress gateway (as Argo
+	// "system" Applications), and report mesh/gateway status.
+	status.MeshInstalled, status.GatewayIP = k.reconcileMesh(ctx, c.istioVersion)
 
 	return status, k.reconcileApplications(ctx, apps)
 }

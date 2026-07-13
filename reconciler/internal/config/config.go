@@ -15,6 +15,7 @@ const (
 	defaultFoundryAPIVersion = "v1"                            // Foundry Agents API (new /agents surface)
 	defaultFoundryScope      = "https://ai.azure.com/.default" // Entra resource for Foundry
 	defaultArgoCDVersion     = "v2.13.2"                       // Argo CD the reconciler bootstraps
+	defaultIstioVersion      = "1.24.2"                        // Istio service mesh + gateway charts
 )
 
 type Config struct {
@@ -39,6 +40,7 @@ type Config struct {
 	ClusterName          string
 	ClusterResourceGroup string
 	ArgoCDVersion        string
+	IstioVersion         string
 }
 
 // Load reads .env then the environment. Nothing is defaulted or derived — every
@@ -62,6 +64,10 @@ func Load() Config {
 	if argocd == "" {
 		argocd = defaultArgoCDVersion
 	}
+	istio := strings.TrimSpace(env("ISTIO_VERSION"))
+	if istio == "" {
+		istio = defaultIstioVersion
+	}
 	return Config{
 		ControlPlaneURL:    strings.TrimRight(env("CONTROL_PLANE_URL"), "/"),
 		CortexAPIScope:     env("CORTEX_API_SCOPE"),
@@ -82,6 +88,7 @@ func Load() Config {
 		ClusterName:          strings.TrimSpace(env("CLUSTER_NAME")),
 		ClusterResourceGroup: strings.TrimSpace(env("CLUSTER_RESOURCE_GROUP")),
 		ArgoCDVersion:        argocd,
+		IstioVersion:         istio,
 	}
 }
 

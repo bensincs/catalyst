@@ -25,21 +25,21 @@ type Identity struct {
 
 // Tenant is a customer tenant in the fleet (and, for the caller, their own).
 type Tenant struct {
-	ID               string     `json:"id"` // stable slug
-	Name             string     `json:"name"`
-	TenantID         string     `json:"tenantId"` // Entra directory (tid)
-	Region           string     `json:"region"`
-	Plan             string     `json:"plan"`
-	Enrollment       string     `json:"enrollment"`
-	Lifecycle        string     `json:"lifecycle"` // enrolling | live | degraded | suspended (derived)
-	Enabled          bool       `json:"enabled"`   // access gate: may sign in / run a reconciler
-	Cluster          ClusterInfo `json:"cluster"`  // Kubernetes/GitOps status (reconciler-reported)
-	AgentCount       int        `json:"agentCount"`
-	ReconcilingCount int        `json:"reconcilingCount"`
-	Version          string     `json:"version"`
-	LastHeartbeat    *time.Time `json:"lastHeartbeat"`
-	MonthlyCalls     int64      `json:"monthlyCalls"`
-	Drift            int        `json:"drift"`
+	ID               string      `json:"id"` // stable slug
+	Name             string      `json:"name"`
+	TenantID         string      `json:"tenantId"` // Entra directory (tid)
+	Region           string      `json:"region"`
+	Plan             string      `json:"plan"`
+	Enrollment       string      `json:"enrollment"`
+	Lifecycle        string      `json:"lifecycle"` // enrolling | live | degraded | suspended (derived)
+	Enabled          bool        `json:"enabled"`   // access gate: may sign in / run a reconciler
+	Cluster          ClusterInfo `json:"cluster"`   // Kubernetes/GitOps status (reconciler-reported)
+	AgentCount       int         `json:"agentCount"`
+	ReconcilingCount int         `json:"reconcilingCount"`
+	Version          string      `json:"version"`
+	LastHeartbeat    *time.Time  `json:"lastHeartbeat"`
+	MonthlyCalls     int64       `json:"monthlyCalls"`
+	Drift            int         `json:"drift"`
 
 	// Install / identity — populated for a single tenant's context view.
 	SubscriptionID     string  `json:"subscriptionId,omitempty"`
@@ -149,11 +149,11 @@ type MemoryStore struct {
 	CreatedAt   time.Time                    `json:"createdAt"`
 
 	// Populated in the tenant view:
-	Platform bool   `json:"platform"` // platform-authored (vs tenant-owned)
-	Owned    bool   `json:"owned"`    // owned by the viewing tenant
-	Entitled bool   `json:"entitled"` // entitled to the viewing tenant
-	Enabled  bool   `json:"enabled"`  // explicitly enabled (reconciled) in the viewing tenant
-	Health   string `json:"health,omitempty"`  // per-tenant lifecycle: reconciling | live | blocked
+	Platform bool   `json:"platform"`         // platform-authored (vs tenant-owned)
+	Owned    bool   `json:"owned"`            // owned by the viewing tenant
+	Entitled bool   `json:"entitled"`         // entitled to the viewing tenant
+	Enabled  bool   `json:"enabled"`          // explicitly enabled (reconciled) in the viewing tenant
+	Health   string `json:"health,omitempty"` // per-tenant lifecycle: reconciling | live | blocked
 	// Populated in the platform view:
 	OwnerName string `json:"ownerName,omitempty"` // owning tenant's display name
 }
@@ -165,6 +165,8 @@ type ClusterInfo struct {
 	Phase         string `json:"phase"` // provisioning | ready | unreachable | "" (none)
 	K8sVersion    string `json:"kubernetesVersion,omitempty"`
 	ArgoInstalled bool   `json:"argoInstalled"`
+	MeshInstalled bool   `json:"meshInstalled"`
+	GatewayIP     string `json:"gatewayIP,omitempty"`
 	NodeCount     int    `json:"nodeCount"`
 	Detail        string `json:"detail,omitempty"`
 }

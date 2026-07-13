@@ -94,6 +94,9 @@ param nodeCount int = 2
 @description('Argo CD version the reconciler bootstraps into the cluster.')
 param argocdVersion string = 'v2.13.2'
 
+@description('Istio version the reconciler installs for the service mesh + ingress gateway.')
+param istioVersion string = '1.24.2'
+
 @description('Reconciler container image (published by Cortex, or your own registry).')
 param reconcilerImage string = 'ghcr.io/inception42/cortex-reconciler:latest'
 
@@ -369,6 +372,7 @@ resource reconciler 'Microsoft.App/containerApps@2024-03-01' = if (deployReconci
             { name: 'CLUSTER_NAME', value: clusterName }
             { name: 'CLUSTER_RESOURCE_GROUP', value: resourceGroup().name }
             { name: 'ARGOCD_VERSION', value: argocdVersion }
+            { name: 'ISTIO_VERSION', value: istioVersion }
           ]
         }
       ]

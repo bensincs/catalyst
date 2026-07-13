@@ -89,6 +89,8 @@ export interface ClusterInfo {
   phase: string; // provisioning | ready | unreachable | "" (none)
   kubernetesVersion?: string;
   argoInstalled: boolean;
+  meshInstalled: boolean;
+  gatewayIP?: string;
   nodeCount: number;
   detail?: string;
 }

@@ -149,9 +149,11 @@ const (
 // bootstrap (reconciler → control plane).
 type ClusterStatus struct {
 	Name          string `json:"name"`
-	Phase         string `json:"phase"`                   // provisioning | ready | unreachable
+	Phase         string `json:"phase"` // provisioning | ready | unreachable
 	KubernetesVer string `json:"kubernetesVersion,omitempty"`
 	ArgoInstalled bool   `json:"argoInstalled"`
+	MeshInstalled bool   `json:"meshInstalled"`       // Istio control plane present
+	GatewayIP     string `json:"gatewayIP,omitempty"` // public ingress gateway address (LB IP/hostname)
 	NodeCount     int    `json:"nodeCount,omitempty"`
 	Detail        string `json:"detail,omitempty"` // human-readable note when not ready
 }
