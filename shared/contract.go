@@ -97,6 +97,24 @@ type DesiredApplication struct {
 	Values         string `json:"values,omitempty"`
 }
 
+// IngressJWTRule is one accepted token issuer for the cluster's ingress gateway:
+// a fully-formed Entra endpoint (so the reconciler stays cloud-agnostic) whose
+// tokens must be addressed to one of Audiences. The control plane emits one rule
+// per token version (v2 + v1) for the requesting tenant only.
+type IngressJWTRule struct {
+	Issuer    string   `json:"issuer"`              // e.g. https://login.microsoftonline.com/{tid}/v2.0
+	JWKSURI   string   `json:"jwksUri"`             // Entra signing-key endpoint for that issuer
+	Audiences []string `json:"audiences,omitempty"` // accepted aud values (the Cortex app registration)
+}
+
+// IngressAuth makes the tenant's ingress gateway require an Entra token from THIS
+// tenant's directory, addressed to the (multi-tenant) Cortex app registration.
+// Because the issuers are pinned to the tenant's own tid, a user from any other
+// tenant consented to the same app is rejected — "the app, but just this tenant".
+type IngressAuth struct {
+	Rules []IngressJWTRule `json:"rules"`
+}
+
 // DesiredState is what a tenant's reconciler should converge to.
 type DesiredState struct {
 	TenantID string         `json:"tenantId"`
@@ -108,6 +126,9 @@ type DesiredState struct {
 	// Applications are the Helm deployments the reconciler should stamp into the
 	// tenant's cluster as Argo CD Applications.
 	Applications []DesiredApplication `json:"applications,omitempty"`
+	// IngressAuth pins the cluster's ingress gateway to accept only this tenant's
+	// Entra tokens (nil ⇒ the control plane has no app registration configured).
+	IngressAuth *IngressAuth `json:"ingressAuth,omitempty"`
 }
 
 // Lifecycle status values shared by agents and memory stores (reconciler →
@@ -152,8 +173,9 @@ type ClusterStatus struct {
 	Phase         string `json:"phase"` // provisioning | ready | unreachable
 	KubernetesVer string `json:"kubernetesVersion,omitempty"`
 	ArgoInstalled bool   `json:"argoInstalled"`
-	MeshInstalled bool   `json:"meshInstalled"`       // Istio control plane present
-	GatewayIP     string `json:"gatewayIP,omitempty"` // public ingress gateway address (LB IP/hostname)
+	MeshInstalled bool   `json:"meshInstalled"`           // Istio control plane present
+	GatewayIP     string `json:"gatewayIP,omitempty"`     // public ingress gateway address (LB IP/hostname)
+	IngressIssuer string `json:"ingressIssuer,omitempty"` // Entra issuer the ingress enforces ("" ⇒ open)
 	NodeCount     int    `json:"nodeCount,omitempty"`
 	Detail        string `json:"detail,omitempty"` // human-readable note when not ready
 }

@@ -56,6 +56,7 @@ interface ApiCluster {
   argoInstalled?: boolean;
   meshInstalled?: boolean;
   gatewayIP?: string;
+  ingressIssuer?: string;
   nodeCount?: number;
   detail?: string;
 }
@@ -224,6 +225,7 @@ function toCluster(c?: ApiCluster | null): ClusterInfo {
     argoInstalled: Boolean(c?.argoInstalled),
     meshInstalled: Boolean(c?.meshInstalled),
     gatewayIP: c?.gatewayIP,
+    ingressIssuer: c?.ingressIssuer,
     nodeCount: c?.nodeCount ?? 0,
     detail: c?.detail,
   };

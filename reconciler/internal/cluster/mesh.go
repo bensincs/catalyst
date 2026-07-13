@@ -3,6 +3,8 @@ package cluster
 import (
 	"strconv"
 
+	"github.com/inception42/cortex/shared"
+
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -86,4 +88,75 @@ func defaultGateway() *unstructured.Unstructured {
 			},
 		},
 	}}
+}
+
+// Names of the ingress auth CRs (both target the ingress gateway workload).
+const (
+	requestAuthName = "cortex-jwt"
+	authPolicyName  = "cortex-require-jwt"
+)
+
+// requestAuthentication validates Entra JWTs presented at the ingress gateway
+// against the supplied issuer rules. It does NOT by itself reject tokenless
+// requests — requireJWTPolicy does that.
+func requestAuthentication(auth *shared.IngressAuth) *unstructured.Unstructured {
+	rules := make([]any, 0, len(auth.Rules))
+	for _, r := range auth.Rules {
+		jr := map[string]any{"issuer": r.Issuer, "jwksUri": r.JWKSURI}
+		if len(r.Audiences) > 0 {
+			jr["audiences"] = toAny(r.Audiences)
+		}
+		rules = append(rules, jr)
+	}
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "security.istio.io/v1",
+		"kind":       "RequestAuthentication",
+		"metadata": map[string]any{
+			"name":      requestAuthName,
+			"namespace": istioIngressNS,
+			"labels":    map[string]any{labelManaged: "true", labelSystem: "true"},
+		},
+		"spec": map[string]any{
+			"selector": map[string]any{"matchLabels": map[string]any{"istio": ingressGWLabel}},
+			"jwtRules": rules,
+		},
+	}}
+}
+
+// requireJWTPolicy makes a valid token from one of the pinned issuers mandatory:
+// requests whose principal (iss/sub) doesn't match any issuer — including
+// tokenless requests, which have no principal — are denied at the gateway.
+func requireJWTPolicy(auth *shared.IngressAuth) *unstructured.Unstructured {
+	principals := make([]any, 0, len(auth.Rules))
+	for _, r := range auth.Rules {
+		principals = append(principals, r.Issuer+"/*")
+	}
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "security.istio.io/v1",
+		"kind":       "AuthorizationPolicy",
+		"metadata": map[string]any{
+			"name":      authPolicyName,
+			"namespace": istioIngressNS,
+			"labels":    map[string]any{labelManaged: "true", labelSystem: "true"},
+		},
+		"spec": map[string]any{
+			"selector": map[string]any{"matchLabels": map[string]any{"istio": ingressGWLabel}},
+			"action":   "ALLOW",
+			"rules": []any{
+				map[string]any{
+					"from": []any{
+						map[string]any{"source": map[string]any{"requestPrincipals": principals}},
+					},
+				},
+			},
+		},
+	}}
+}
+
+func toAny(ss []string) []any {
+	out := make([]any, len(ss))
+	for i, s := range ss {
+		out[i] = s
+	}
+	return out
 }

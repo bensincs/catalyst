@@ -17,14 +17,23 @@ import (
 )
 
 type Server struct {
-	store      *store.Store
-	auth       *auth.Authenticator
-	recon      *auth.ReconAuthenticator
-	corsOrigin string
+	store           *store.Store
+	auth            *auth.Authenticator
+	recon           *auth.ReconAuthenticator
+	corsOrigin      string
+	entraClientID   string // Cortex app registration — the audience clusters pin to
+	entraIssuerHost string // Entra issuer host (cloud-specific), for per-tenant issuers
 }
 
-func NewServer(st *store.Store, a *auth.Authenticator, recon *auth.ReconAuthenticator, corsOrigin string) *Server {
-	return &Server{store: st, auth: a, recon: recon, corsOrigin: corsOrigin}
+func NewServer(st *store.Store, a *auth.Authenticator, recon *auth.ReconAuthenticator, corsOrigin, entraClientID, entraIssuerHost string) *Server {
+	return &Server{
+		store:           st,
+		auth:            a,
+		recon:           recon,
+		corsOrigin:      corsOrigin,
+		entraClientID:   entraClientID,
+		entraIssuerHost: entraIssuerHost,
+	}
 }
 
 func (s *Server) Router() http.Handler {
@@ -807,6 +816,10 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
+	// Pin this tenant's cluster ingress to accept only its own Entra tokens,
+	// addressed to the Cortex app registration (issuer derived from the token's
+	// tenant, so a token can't be reused across tenants).
+	ds.IngressAuth = s.ingressAuthForTenant(id.TID)
 	writeJSON(w, http.StatusOK, ds)
 }
 

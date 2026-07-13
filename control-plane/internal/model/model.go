@@ -167,6 +167,7 @@ type ClusterInfo struct {
 	ArgoInstalled bool   `json:"argoInstalled"`
 	MeshInstalled bool   `json:"meshInstalled"`
 	GatewayIP     string `json:"gatewayIP,omitempty"`
+	IngressIssuer string `json:"ingressIssuer,omitempty"`
 	NodeCount     int    `json:"nodeCount"`
 	Detail        string `json:"detail,omitempty"`
 }

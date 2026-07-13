@@ -91,6 +91,7 @@ export interface ClusterInfo {
   argoInstalled: boolean;
   meshInstalled: boolean;
   gatewayIP?: string;
+  ingressIssuer?: string; // Entra issuer the ingress enforces ("" ⇒ open)
   nodeCount: number;
   detail?: string;
 }

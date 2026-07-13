@@ -57,6 +57,8 @@ var (
 	depGVR = schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
 	svcGVR = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "services"}
 	gwGVR  = schema.GroupVersionResource{Group: "networking.istio.io", Version: "v1", Resource: "gateways"}
+	raGVR  = schema.GroupVersionResource{Group: "security.istio.io", Version: "v1", Resource: "requestauthentications"}
+	apGVR  = schema.GroupVersionResource{Group: "security.istio.io", Version: "v1", Resource: "authorizationpolicies"}
 )
 
 // Client drives one tenant's cluster (one reconciler → one cluster).
@@ -84,7 +86,7 @@ func New(cred azcore.TokenCredential, sub, rg, clusterName, argoVersion, istioVe
 
 // Reconcile ensures Argo CD is installed and the desired Helm deployments are
 // stamped as Argo Applications, then returns cluster + per-app status.
-func (c *Client) Reconcile(ctx context.Context, apps []shared.DesiredApplication) (shared.ClusterStatus, []shared.ApplicationStatus) {
+func (c *Client) Reconcile(ctx context.Context, apps []shared.DesiredApplication, auth *shared.IngressAuth) (shared.ClusterStatus, []shared.ApplicationStatus) {
 	status := shared.ClusterStatus{Name: c.clusterName, Phase: shared.ClusterProvisioning}
 
 	m, err := c.getCluster(ctx)
@@ -130,6 +132,10 @@ func (c *Client) Reconcile(ctx context.Context, apps []shared.DesiredApplication
 	// Bootstrap the service mesh + default public ingress gateway (as Argo
 	// "system" Applications), and report mesh/gateway status.
 	status.MeshInstalled, status.GatewayIP = k.reconcileMesh(ctx, c.istioVersion)
+
+	// Pin the ingress gateway to this tenant's Entra directory (the multi-tenant
+	// Cortex app, but only tokens issued for this tenant).
+	status.IngressIssuer = k.reconcileIngressAuth(ctx, auth)
 
 	return status, k.reconcileApplications(ctx, apps)
 }

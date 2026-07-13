@@ -184,6 +184,7 @@ ALTER TABLE tenants ADD COLUMN IF NOT EXISTS cluster_node_count     int     NOT 
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS cluster_detail         text    NOT NULL DEFAULT '';
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS cluster_mesh_installed boolean NOT NULL DEFAULT false;
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS cluster_gateway_ip     text    NOT NULL DEFAULT '';
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS cluster_ingress_issuer text    NOT NULL DEFAULT '';
 
 -- A Helm deployment a tenant runs in its cluster. The reconciler stamps each as
 -- an Argo CD Application (Helm source); Argo CD installs the chart and keeps it

@@ -158,6 +158,20 @@ func (k *kube) reconcileMesh(ctx context.Context, istioVersion string) (meshInst
 	return meshInstalled, k.ingressIP(ctx)
 }
 
+// reconcileIngressAuth pins the ingress gateway to accept only the tenant's own
+// Entra tokens (RequestAuthentication) and requires one on every request
+// (AuthorizationPolicy). It returns the primary enforced issuer for status, or
+// "" when no auth is configured. Best-effort: the CRs need Istio's security CRDs,
+// which land with istiod over a few cycles, so errors are tolerated and retried.
+func (k *kube) reconcileIngressAuth(ctx context.Context, auth *shared.IngressAuth) string {
+	if auth == nil || len(auth.Rules) == 0 {
+		return ""
+	}
+	_, _ = k.dyn.Resource(raGVR).Namespace(istioIngressNS).Apply(ctx, requestAuthName, requestAuthentication(auth), metav1.ApplyOptions{FieldManager: fieldManager, Force: true})
+	_, _ = k.dyn.Resource(apGVR).Namespace(istioIngressNS).Apply(ctx, authPolicyName, requireJWTPolicy(auth), metav1.ApplyOptions{FieldManager: fieldManager, Force: true})
+	return auth.Rules[0].Issuer
+}
+
 // ingressIP returns the public address (IP or hostname) of the ingress gateway's
 // LoadBalancer Service, or "" until Azure has assigned one.
 func (k *kube) ingressIP(ctx context.Context) string {

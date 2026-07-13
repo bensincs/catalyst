@@ -120,6 +120,13 @@ export function DeploymentsView({
         <span className={styles.chip} data-off={!cluster.meshInstalled}>
           Istio
         </span>
+        <span
+          className={styles.chip}
+          data-off={!cluster.ingressIssuer}
+          title={cluster.ingressIssuer ? `Ingress requires an Entra token from ${cluster.ingressIssuer}` : undefined}
+        >
+          Entra auth
+        </span>
         {cluster.gatewayIP && (
           <span className={styles.chip}>
             gateway <span className="mono">{cluster.gatewayIP}</span>

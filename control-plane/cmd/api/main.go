@@ -70,7 +70,7 @@ func main() {
 		cfg.EntraExtraAud,
 		cfg.EntraIssuerHost,
 	)
-	srv := httpapi.NewServer(st, authn, recon, cfg.CORSOrigin)
+	srv := httpapi.NewServer(st, authn, recon, cfg.CORSOrigin, cfg.EntraClientID, cfg.EntraIssuerHost)
 
 	httpServer := &http.Server{
 		Addr:              ":" + cfg.Port,
