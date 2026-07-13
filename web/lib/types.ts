@@ -90,6 +90,8 @@ export interface ClusterInfo {
   kubernetesVersion?: string;
   argoInstalled: boolean;
   meshInstalled: boolean;
+  mtlsStrict: boolean;
+  otelInstalled: boolean;
   gatewayIP?: string;
   ingressIssuer?: string; // Entra issuer the ingress enforces ("" ⇒ open)
   nodeCount: number;

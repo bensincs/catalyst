@@ -174,6 +174,8 @@ type ClusterStatus struct {
 	KubernetesVer string `json:"kubernetesVersion,omitempty"`
 	ArgoInstalled bool   `json:"argoInstalled"`
 	MeshInstalled bool   `json:"meshInstalled"`           // Istio control plane present
+	MTLSStrict    bool   `json:"mtlsStrict"`              // mesh-wide STRICT mTLS active
+	OTelInstalled bool   `json:"otelInstalled"`           // Alloy OTel collector present
 	GatewayIP     string `json:"gatewayIP,omitempty"`     // public ingress gateway address (LB IP/hostname)
 	IngressIssuer string `json:"ingressIssuer,omitempty"` // Entra issuer the ingress enforces ("" ⇒ open)
 	NodeCount     int    `json:"nodeCount,omitempty"`

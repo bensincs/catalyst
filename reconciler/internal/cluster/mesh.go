@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"fmt"
 	"strconv"
 
 	"github.com/inception42/cortex/shared"
@@ -17,24 +18,26 @@ const (
 	istioIngressNS = "istio-ingress"
 	ingressGWLabel = "ingressgateway" // istio: ingressgateway
 	defaultGWName  = "cortex-gateway"
+
+	// otelProviderName is the mesh extensionProvider (declared in istiod's
+	// meshConfig) that points at the in-cluster Alloy collector, so Istio ships
+	// traces + access logs for every meshed workload to it.
+	otelProviderName = "cortex-otel"
 )
 
-// gatewayValues make the ingress gateway a public LoadBalancer with a stable
-// `istio: ingressgateway` label the default Gateway CR selects.
-const gatewayValues = "service:\n  type: LoadBalancer\nlabels:\n  istio: ingressgateway\n"
-
 // systemApps are the mesh's Argo Applications, ordered by sync-wave so Istio CRDs
-// (base) land before the control plane (istiod) before the gateway.
-func systemApps(istioVersion string) []*unstructured.Unstructured {
+// (base) land before the control plane (istiod) before the gateway + collector.
+func systemApps(o Options) []*unstructured.Unstructured {
 	return []*unstructured.Unstructured{
-		meshApp("mesh-istio-base", istioSystemNS, "base", istioVersion, "", -2),
-		meshApp("mesh-istiod", istioSystemNS, "istiod", istioVersion, "", -1),
-		meshApp("mesh-gateway", istioIngressNS, "gateway", istioVersion, gatewayValues, 0),
+		meshApp("mesh-istio-base", istioSystemNS, istioRepo, "base", o.IstioVersion, "", -3),
+		meshApp("mesh-istiod", istioSystemNS, istioRepo, "istiod", o.IstioVersion, istiodValues(o), -2),
+		meshApp("mesh-alloy", observabilityNS, alloyRepo, "alloy", o.AlloyChartVersion, alloyValues(o.OTelExporterEndpoint), -1),
+		meshApp("mesh-gateway", istioIngressNS, istioRepo, "gateway", o.IstioVersion, gatewayValues(), 0),
 	}
 }
 
-func meshApp(name, namespace, chart, version, values string, wave int) *unstructured.Unstructured {
-	source := map[string]any{"repoURL": istioRepo, "chart": chart}
+func meshApp(name, namespace, repo, chart, version, values string, wave int) *unstructured.Unstructured {
+	source := map[string]any{"repoURL": repo, "chart": chart}
 	if version != "" {
 		source["targetRevision"] = version
 	}
@@ -67,9 +70,96 @@ func meshApp(name, namespace, chart, version, values string, wave int) *unstruct
 	}}
 }
 
-// defaultGateway is an Istio Gateway on the public ingress gateway (wildcard host,
-// HTTP :80) that all tenant applications can bind VirtualServices to.
-func defaultGateway() *unstructured.Unstructured {
+// istiodValues hardens the mesh: STRICT mTLS is auto-enabled per workload, all
+// proxies emit access logs, egress is deny-by-default (REGISTRY_ONLY), apps hold
+// startup until their proxy is ready (no unencrypted early traffic), and an OTel
+// extensionProvider wires mesh traces/logs to the Alloy collector.
+func istiodValues(o Options) string {
+	return fmt.Sprintf(`meshConfig:
+  accessLogFile: /dev/stdout
+  enableTracing: true
+  outboundTrafficPolicy:
+    mode: %s
+  defaultConfig:
+    holdApplicationUntilProxyStarts: true
+  extensionProviders:
+  - name: %s
+    opentelemetry:
+      service: %s.%s.svc.cluster.local
+      port: %d
+`, o.OutboundTrafficPolicy, otelProviderName, alloyServiceName, observabilityNS, otlpGRPCPort)
+}
+
+// gatewayValues run the ingress gateway as a public LoadBalancer with a stable
+// `istio: ingressgateway` label (selected by the Gateway + auth policies), plus a
+// locked-down pod: non-root, no privilege escalation, read-only root filesystem,
+// all Linux capabilities dropped, seccomp on, HA with resource bounds.
+func gatewayValues() string {
+	return `service:
+  type: LoadBalancer
+  externalTrafficPolicy: Local
+labels:
+  istio: ingressgateway
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 5
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: "2"
+    memory: 1024Mi
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1337
+  runAsGroup: 1337
+  fsGroup: 1337
+  seccompProfile:
+    type: RuntimeDefault
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  privileged: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  capabilities:
+    drop:
+    - ALL
+`
+}
+
+// defaultGateway is an Istio Gateway on the public ingress gateway that all
+// tenant applications bind VirtualServices to. With a TLS cert secret it
+// terminates HTTPS (min TLS 1.2) and 301-redirects plain HTTP to it; without
+// one it serves HTTP :80 (auth is still enforced by the JWT policy).
+func defaultGateway(tlsSecret string) *unstructured.Unstructured {
+	var servers []any
+	if tlsSecret != "" {
+		servers = []any{
+			map[string]any{
+				"port":  map[string]any{"number": int64(443), "name": "https", "protocol": "HTTPS"},
+				"hosts": []any{"*"},
+				"tls": map[string]any{
+					"mode":               "SIMPLE",
+					"credentialName":     tlsSecret,
+					"minProtocolVersion": "TLSV1_2",
+				},
+			},
+			map[string]any{
+				"port":  map[string]any{"number": int64(80), "name": "http", "protocol": "HTTP"},
+				"hosts": []any{"*"},
+				"tls":   map[string]any{"httpsRedirect": true},
+			},
+		}
+	} else {
+		servers = []any{
+			map[string]any{
+				"port":  map[string]any{"number": int64(80), "name": "http", "protocol": "HTTP"},
+				"hosts": []any{"*"},
+			},
+		}
+	}
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "networking.istio.io/v1",
 		"kind":       "Gateway",
@@ -80,11 +170,101 @@ func defaultGateway() *unstructured.Unstructured {
 		},
 		"spec": map[string]any{
 			"selector": map[string]any{"istio": ingressGWLabel},
-			"servers": []any{
+			"servers":  servers,
+		},
+	}}
+}
+
+// peerAuthentication enforces mesh-wide STRICT mTLS: named "default" in the root
+// namespace, it requires mutual TLS between every meshed workload, so plaintext
+// service-to-service traffic is refused.
+func peerAuthentication() *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "security.istio.io/v1",
+		"kind":       "PeerAuthentication",
+		"metadata": map[string]any{
+			"name":      "default",
+			"namespace": istioSystemNS,
+			"labels":    map[string]any{labelManaged: "true", labelSystem: "true"},
+		},
+		"spec": map[string]any{"mtls": map[string]any{"mode": "STRICT"}},
+	}}
+}
+
+// securityHeadersFilter adds hardened response headers (HSTS, no-sniff,
+// frame-deny, strict referrer + CSP) and strips server-fingerprint headers on
+// everything leaving the ingress gateway.
+func securityHeadersFilter() *unstructured.Unstructured {
+	lua := `function envoy_on_response(handle)
+  local h = handle:headers()
+  h:replace("strict-transport-security", "max-age=63072000; includeSubDomains; preload")
+  h:replace("x-content-type-options", "nosniff")
+  h:replace("x-frame-options", "DENY")
+  h:replace("referrer-policy", "no-referrer")
+  h:replace("content-security-policy", "default-src 'none'; frame-ancestors 'none'; base-uri 'none'")
+  h:remove("server")
+  h:remove("x-powered-by")
+end`
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "networking.istio.io/v1alpha3",
+		"kind":       "EnvoyFilter",
+		"metadata": map[string]any{
+			"name":      "cortex-security-headers",
+			"namespace": istioIngressNS,
+			"labels":    map[string]any{labelManaged: "true", labelSystem: "true"},
+		},
+		"spec": map[string]any{
+			"workloadSelector": map[string]any{"labels": map[string]any{"istio": ingressGWLabel}},
+			"configPatches": []any{
 				map[string]any{
-					"port":  map[string]any{"number": int64(80), "name": "http", "protocol": "HTTP"},
-					"hosts": []any{"*"},
+					"applyTo": "HTTP_FILTER",
+					"match": map[string]any{
+						"context": "GATEWAY",
+						"listener": map[string]any{
+							"filterChain": map[string]any{
+								"filter": map[string]any{
+									"name":      "envoy.filters.network.http_connection_manager",
+									"subFilter": map[string]any{"name": "envoy.filters.http.router"},
+								},
+							},
+						},
+					},
+					"patch": map[string]any{
+						"operation": "INSERT_BEFORE",
+						"value": map[string]any{
+							"name": "envoy.filters.http.lua",
+							"typed_config": map[string]any{
+								"@type":      "type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua",
+								"inlineCode": lua,
+							},
+						},
+					},
 				},
+			},
+		},
+	}}
+}
+
+// meshTelemetry ships traces + access logs for every meshed workload to the OTel
+// collector via the extensionProvider declared in istiod's meshConfig.
+func meshTelemetry() *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "telemetry.istio.io/v1",
+		"kind":       "Telemetry",
+		"metadata": map[string]any{
+			"name":      "default",
+			"namespace": istioSystemNS,
+			"labels":    map[string]any{labelManaged: "true", labelSystem: "true"},
+		},
+		"spec": map[string]any{
+			"tracing": []any{
+				map[string]any{
+					"providers":                []any{map[string]any{"name": otelProviderName}},
+					"randomSamplingPercentage": int64(10),
+				},
+			},
+			"accessLogging": []any{
+				map[string]any{"providers": []any{map[string]any{"name": otelProviderName}}},
 			},
 		},
 	}}

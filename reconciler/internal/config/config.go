@@ -16,7 +16,13 @@ const (
 	defaultFoundryScope      = "https://ai.azure.com/.default" // Entra resource for Foundry
 	defaultArgoCDVersion     = "v2.13.2"                       // Argo CD the reconciler bootstraps
 	defaultIstioVersion      = "1.24.2"                        // Istio service mesh + gateway charts
+	defaultAlloyChartVersion = "1.0.1"                         // Grafana Alloy Helm chart (verify/pin before enabling)
+	defaultOutboundPolicy    = "REGISTRY_ONLY"                 // deny-by-default egress from meshed workloads
 )
+
+// meshOutboundPolicies is the closed set the mesh accepts, so a typo can't
+// silently widen the cluster's egress posture.
+var meshOutboundPolicies = map[string]bool{"REGISTRY_ONLY": true, "ALLOW_ANY": true}
 
 type Config struct {
 	ControlPlaneURL    string
@@ -41,6 +47,16 @@ type Config struct {
 	ClusterResourceGroup string
 	ArgoCDVersion        string
 	IstioVersion         string
+
+	// Mesh security + observability. AlloyChartVersion pins the OTel collector
+	// every cluster runs; OTelExporterEndpoint is where it ships telemetry (empty
+	// ⇒ collect only, log locally). OutboundTrafficPolicy is the mesh egress mode
+	// (REGISTRY_ONLY = deny-by-default). IngressTLSSecret, when set, makes the
+	// gateway terminate HTTPS from that cert secret and redirect HTTP → HTTPS.
+	AlloyChartVersion     string
+	OTelExporterEndpoint  string
+	OutboundTrafficPolicy string
+	IngressTLSSecret      string
 }
 
 // Load reads .env then the environment. Nothing is defaulted or derived — every
@@ -68,6 +84,14 @@ func Load() Config {
 	if istio == "" {
 		istio = defaultIstioVersion
 	}
+	alloy := strings.TrimSpace(env("ALLOY_CHART_VERSION"))
+	if alloy == "" {
+		alloy = defaultAlloyChartVersion
+	}
+	outbound := strings.ToUpper(strings.TrimSpace(env("ISTIO_OUTBOUND_TRAFFIC_POLICY")))
+	if !meshOutboundPolicies[outbound] {
+		outbound = defaultOutboundPolicy
+	}
 	return Config{
 		ControlPlaneURL:    strings.TrimRight(env("CONTROL_PLANE_URL"), "/"),
 		CortexAPIScope:     env("CORTEX_API_SCOPE"),
@@ -89,6 +113,11 @@ func Load() Config {
 		ClusterResourceGroup: strings.TrimSpace(env("CLUSTER_RESOURCE_GROUP")),
 		ArgoCDVersion:        argocd,
 		IstioVersion:         istio,
+
+		AlloyChartVersion:     alloy,
+		OTelExporterEndpoint:  strings.TrimSpace(env("OTEL_EXPORTER_OTLP_ENDPOINT")),
+		OutboundTrafficPolicy: outbound,
+		IngressTLSSecret:      strings.TrimSpace(env("INGRESS_TLS_SECRET")),
 	}
 }
 

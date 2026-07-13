@@ -59,35 +59,44 @@ var (
 	gwGVR  = schema.GroupVersionResource{Group: "networking.istio.io", Version: "v1", Resource: "gateways"}
 	raGVR  = schema.GroupVersionResource{Group: "security.istio.io", Version: "v1", Resource: "requestauthentications"}
 	apGVR  = schema.GroupVersionResource{Group: "security.istio.io", Version: "v1", Resource: "authorizationpolicies"}
+	paGVR  = schema.GroupVersionResource{Group: "security.istio.io", Version: "v1", Resource: "peerauthentications"}
+	efGVR  = schema.GroupVersionResource{Group: "networking.istio.io", Version: "v1alpha3", Resource: "envoyfilters"}
+	telGVR = schema.GroupVersionResource{Group: "telemetry.istio.io", Version: "v1", Resource: "telemetries"}
 )
+
+// Options is the full address + policy for one tenant's cluster. Grouping them
+// keeps the constructor stable as the mesh/observability surface grows.
+type Options struct {
+	SubscriptionID        string
+	ResourceGroup         string
+	ClusterName           string
+	ArgoVersion           string
+	IstioVersion          string
+	AlloyChartVersion     string
+	OTelExporterEndpoint  string // where the in-cluster collector ships telemetry ("" ⇒ log locally)
+	OutboundTrafficPolicy string // mesh egress mode: REGISTRY_ONLY | ALLOW_ANY
+	IngressTLSSecret      string // cert secret ⇒ gateway terminates HTTPS + redirects HTTP
+}
 
 // Client drives one tenant's cluster (one reconciler → one cluster).
 type Client struct {
-	cred          azcore.TokenCredential
-	http          *http.Client
-	sub           string
-	resourceGroup string
-	clusterName   string
-	argoVersion   string
-	istioVersion  string
+	cred azcore.TokenCredential
+	http *http.Client
+	o    Options
 }
 
-func New(cred azcore.TokenCredential, sub, rg, clusterName, argoVersion, istioVersion string) *Client {
+func New(cred azcore.TokenCredential, o Options) *Client {
 	return &Client{
-		cred:          cred,
-		http:          &http.Client{Timeout: 60 * time.Second},
-		sub:           sub,
-		resourceGroup: rg,
-		clusterName:   clusterName,
-		argoVersion:   argoVersion,
-		istioVersion:  istioVersion,
+		cred: cred,
+		http: &http.Client{Timeout: 60 * time.Second},
+		o:    o,
 	}
 }
 
 // Reconcile ensures Argo CD is installed and the desired Helm deployments are
 // stamped as Argo Applications, then returns cluster + per-app status.
 func (c *Client) Reconcile(ctx context.Context, apps []shared.DesiredApplication, auth *shared.IngressAuth) (shared.ClusterStatus, []shared.ApplicationStatus) {
-	status := shared.ClusterStatus{Name: c.clusterName, Phase: shared.ClusterProvisioning}
+	status := shared.ClusterStatus{Name: c.o.ClusterName, Phase: shared.ClusterProvisioning}
 
 	m, err := c.getCluster(ctx)
 	if err != nil {
@@ -120,7 +129,7 @@ func (c *Client) Reconcile(ctx context.Context, apps []shared.DesiredApplication
 			status.Detail = "installing Argo CD: " + trunc(err.Error())
 			return status, pending(apps)
 		}
-		slog.Info("cluster: applied Argo CD install manifest", "version", c.argoVersion)
+		slog.Info("cluster: applied Argo CD install manifest", "version", c.o.ArgoVersion)
 		// CRDs need a moment to establish; converge Applications next cycle.
 		status.ArgoInstalled = true
 		status.Detail = "Argo CD installing"
@@ -129,9 +138,14 @@ func (c *Client) Reconcile(ctx context.Context, apps []shared.DesiredApplication
 	status.ArgoInstalled = true
 	status.Phase = shared.ClusterReady
 
-	// Bootstrap the service mesh + default public ingress gateway (as Argo
-	// "system" Applications), and report mesh/gateway status.
-	status.MeshInstalled, status.GatewayIP = k.reconcileMesh(ctx, c.istioVersion)
+	// Bootstrap the service mesh: Istio + a hardened public ingress gateway,
+	// mesh-wide STRICT mTLS, an OTel collector (Alloy) every workload can emit
+	// to, and mesh telemetry — all as Argo "system" Applications / CRs.
+	mr := k.reconcileMesh(ctx, c.o)
+	status.MeshInstalled = mr.meshInstalled
+	status.GatewayIP = mr.gatewayIP
+	status.MTLSStrict = mr.mtlsStrict
+	status.OTelInstalled = mr.otelInstalled
 
 	// Pin the ingress gateway to this tenant's Entra directory (the multi-tenant
 	// Cortex app, but only tokens issued for this tenant).
@@ -216,7 +230,7 @@ func (c *Client) kubeClient(ctx context.Context) (*kube, error) {
 func (c *Client) armURL(suffix string) string {
 	return fmt.Sprintf(
 		"https://management.azure.com/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ContainerService/managedClusters/%s%s?api-version=%s",
-		c.sub, c.resourceGroup, c.clusterName, suffix, armAPIVersion)
+		c.o.SubscriptionID, c.o.ResourceGroup, c.o.ClusterName, suffix, armAPIVersion)
 }
 
 func (c *Client) arm(ctx context.Context, method, url string, out any) error {
@@ -255,7 +269,7 @@ func (c *Client) installArgo(ctx context.Context, k *kube) error {
 }
 
 func (c *Client) fetchArgoManifest(ctx context.Context) ([]byte, error) {
-	url := fmt.Sprintf(argoManifestFmt, c.argoVersion)
+	url := fmt.Sprintf(argoManifestFmt, c.o.ArgoVersion)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err

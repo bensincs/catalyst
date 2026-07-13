@@ -37,7 +37,17 @@ func main() {
 	// into the tenant's AKS cluster and stamps its Helm deployments in.
 	var clusterClient *cluster.Client
 	if cfg.ClusterEnabled {
-		clusterClient = cluster.New(cred, cfg.SubscriptionID, cfg.ClusterResourceGroup, cfg.ClusterName, cfg.ArgoCDVersion, cfg.IstioVersion)
+		clusterClient = cluster.New(cred, cluster.Options{
+			SubscriptionID:        cfg.SubscriptionID,
+			ResourceGroup:         cfg.ClusterResourceGroup,
+			ClusterName:           cfg.ClusterName,
+			ArgoVersion:           cfg.ArgoCDVersion,
+			IstioVersion:          cfg.IstioVersion,
+			AlloyChartVersion:     cfg.AlloyChartVersion,
+			OTelExporterEndpoint:  cfg.OTelExporterEndpoint,
+			OutboundTrafficPolicy: cfg.OutboundTrafficPolicy,
+			IngressTLSSecret:      cfg.IngressTLSSecret,
+		})
 	}
 
 	slog.Info("cortex reconciler starting",

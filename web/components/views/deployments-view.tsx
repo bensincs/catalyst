@@ -120,6 +120,12 @@ export function DeploymentsView({
         <span className={styles.chip} data-off={!cluster.meshInstalled}>
           Istio
         </span>
+        <span className={styles.chip} data-off={!cluster.mtlsStrict} title="Mesh-wide STRICT mutual TLS">
+          mTLS
+        </span>
+        <span className={styles.chip} data-off={!cluster.otelInstalled} title="Grafana Alloy OpenTelemetry collector">
+          OTel
+        </span>
         <span
           className={styles.chip}
           data-off={!cluster.ingressIssuer}

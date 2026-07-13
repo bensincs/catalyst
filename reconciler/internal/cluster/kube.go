@@ -139,23 +139,46 @@ func (k *kube) reconcileApplications(ctx context.Context, apps []shared.DesiredA
 	return out
 }
 
-// reconcileMesh installs the Istio service mesh + a default public ingress
-// gateway (as Argo "system" Applications) and applies the default Gateway CR.
-// It reports whether the mesh control plane is up and the gateway's public
-// address. Best-effort: the Gateway CR needs Istio CRDs, which land over a few
-// cycles, so errors are tolerated and retried.
-func (k *kube) reconcileMesh(ctx context.Context, istioVersion string) (meshInstalled bool, gatewayIP string) {
-	ri := k.dyn.Resource(appGVR).Namespace(argoNamespace)
-	for _, app := range systemApps(istioVersion) {
-		_, _ = ri.Apply(ctx, app.GetName(), app, metav1.ApplyOptions{FieldManager: fieldManager, Force: true})
-	}
-	// The Gateway CR depends on Istio's CRDs — tolerate absence (retried).
-	_, _ = k.dyn.Resource(gwGVR).Namespace(istioIngressNS).Apply(ctx, defaultGWName, defaultGateway(), metav1.ApplyOptions{FieldManager: fieldManager, Force: true})
+// meshResult is what reconcileMesh reports back for the heartbeat.
+type meshResult struct {
+	meshInstalled bool
+	gatewayIP     string
+	mtlsStrict    bool
+	otelInstalled bool
+}
 
-	if _, err := k.dyn.Resource(depGVR).Namespace(istioSystemNS).Get(ctx, "istiod", metav1.GetOptions{}); err == nil {
-		meshInstalled = true
+// ssaOpts is the server-side-apply option every mesh CR apply uses.
+var ssaOpts = metav1.ApplyOptions{FieldManager: fieldManager, Force: true}
+
+// reconcileMesh installs the mesh as Argo "system" Applications (Istio base +
+// istiod, a hardened ingress gateway, the Alloy OTel collector) and applies the
+// mesh-wide CRs: STRICT mTLS, the default Gateway, security-header EnvoyFilter,
+// and Telemetry. It reports mesh + collector presence and the gateway's public
+// address. Best-effort: the CRs need Istio CRDs, which land over a few cycles,
+// so errors are tolerated and retried.
+func (k *kube) reconcileMesh(ctx context.Context, o Options) meshResult {
+	ri := k.dyn.Resource(appGVR).Namespace(argoNamespace)
+	for _, app := range systemApps(o) {
+		_, _ = ri.Apply(ctx, app.GetName(), app, ssaOpts)
 	}
-	return meshInstalled, k.ingressIP(ctx)
+
+	// Mesh-wide CRs (depend on Istio CRDs — tolerated + retried until established).
+	_, mtlsErr := k.dyn.Resource(paGVR).Namespace(istioSystemNS).Apply(ctx, "default", peerAuthentication(), ssaOpts)
+	_, _ = k.dyn.Resource(gwGVR).Namespace(istioIngressNS).Apply(ctx, defaultGWName, defaultGateway(o.IngressTLSSecret), ssaOpts)
+	_, _ = k.dyn.Resource(efGVR).Namespace(istioIngressNS).Apply(ctx, "cortex-security-headers", securityHeadersFilter(), ssaOpts)
+	_, _ = k.dyn.Resource(telGVR).Namespace(istioSystemNS).Apply(ctx, "default", meshTelemetry(), ssaOpts)
+
+	res := meshResult{gatewayIP: k.ingressIP(ctx)}
+	if _, err := k.dyn.Resource(depGVR).Namespace(istioSystemNS).Get(ctx, "istiod", metav1.GetOptions{}); err == nil {
+		res.meshInstalled = true
+	}
+	// STRICT mTLS is "active" only when the policy applied and the control plane
+	// that enforces it is present.
+	res.mtlsStrict = mtlsErr == nil && res.meshInstalled
+	if _, err := k.dyn.Resource(depGVR).Namespace(observabilityNS).Get(ctx, alloyServiceName, metav1.GetOptions{}); err == nil {
+		res.otelInstalled = true
+	}
+	return res
 }
 
 // reconcileIngressAuth pins the ingress gateway to accept only the tenant's own
@@ -167,8 +190,8 @@ func (k *kube) reconcileIngressAuth(ctx context.Context, auth *shared.IngressAut
 	if auth == nil || len(auth.Rules) == 0 {
 		return ""
 	}
-	_, _ = k.dyn.Resource(raGVR).Namespace(istioIngressNS).Apply(ctx, requestAuthName, requestAuthentication(auth), metav1.ApplyOptions{FieldManager: fieldManager, Force: true})
-	_, _ = k.dyn.Resource(apGVR).Namespace(istioIngressNS).Apply(ctx, authPolicyName, requireJWTPolicy(auth), metav1.ApplyOptions{FieldManager: fieldManager, Force: true})
+	_, _ = k.dyn.Resource(raGVR).Namespace(istioIngressNS).Apply(ctx, requestAuthName, requestAuthentication(auth), ssaOpts)
+	_, _ = k.dyn.Resource(apGVR).Namespace(istioIngressNS).Apply(ctx, authPolicyName, requireJWTPolicy(auth), ssaOpts)
 	return auth.Rules[0].Issuer
 }
 

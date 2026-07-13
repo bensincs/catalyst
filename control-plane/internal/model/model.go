@@ -166,6 +166,8 @@ type ClusterInfo struct {
 	K8sVersion    string `json:"kubernetesVersion,omitempty"`
 	ArgoInstalled bool   `json:"argoInstalled"`
 	MeshInstalled bool   `json:"meshInstalled"`
+	MTLSStrict    bool   `json:"mtlsStrict"`
+	OTelInstalled bool   `json:"otelInstalled"`
 	GatewayIP     string `json:"gatewayIP,omitempty"`
 	IngressIssuer string `json:"ingressIssuer,omitempty"`
 	NodeCount     int    `json:"nodeCount"`
