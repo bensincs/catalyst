@@ -33,6 +33,7 @@ type Tenant struct {
 	Enrollment       string     `json:"enrollment"`
 	Lifecycle        string     `json:"lifecycle"` // enrolling | live | degraded | suspended (derived)
 	Enabled          bool       `json:"enabled"`   // access gate: may sign in / run a reconciler
+	Cluster          ClusterInfo `json:"cluster"`  // Kubernetes/GitOps status (reconciler-reported)
 	AgentCount       int        `json:"agentCount"`
 	ReconcilingCount int        `json:"reconcilingCount"`
 	Version          string     `json:"version"`
@@ -155,4 +156,31 @@ type MemoryStore struct {
 	Health   string `json:"health,omitempty"`  // per-tenant lifecycle: reconciling | live | blocked
 	// Populated in the platform view:
 	OwnerName string `json:"ownerName,omitempty"` // owning tenant's display name
+}
+
+// ClusterInfo is a tenant's Kubernetes/GitOps status, reported by the reconciler
+// via the heartbeat (never client-supplied).
+type ClusterInfo struct {
+	Name          string `json:"name"`
+	Phase         string `json:"phase"` // provisioning | ready | unreachable | "" (none)
+	K8sVersion    string `json:"kubernetesVersion,omitempty"`
+	ArgoInstalled bool   `json:"argoInstalled"`
+	NodeCount     int    `json:"nodeCount"`
+	Detail        string `json:"detail,omitempty"`
+}
+
+// Application is a Helm deployment a tenant runs in its cluster, realized as an
+// Argo CD Application. sync/health are reported back by the reconciler.
+type Application struct {
+	ID             string    `json:"id"`
+	Name           string    `json:"name"`
+	Namespace      string    `json:"namespace"`
+	RepoURL        string    `json:"repoURL"`
+	Chart          string    `json:"chart"`
+	TargetRevision string    `json:"targetRevision"`
+	Values         string    `json:"values,omitempty"`
+	SyncStatus     string    `json:"syncStatus"`
+	HealthStatus   string    `json:"healthStatus"`
+	CreatedBy      string    `json:"createdBy,omitempty"`
+	CreatedAt      time.Time `json:"createdAt"`
 }

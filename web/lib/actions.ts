@@ -139,3 +139,22 @@ export async function disableStore(storeId: string): Promise<ActionResult> {
   );
 }
 
+/* ── Applications (Helm deployments → Argo CD) ────────────────────────────── */
+
+export async function createApplication(input: {
+  name: string;
+  namespace: string;
+  repoURL: string;
+  chart: string;
+  targetRevision: string;
+  values: string;
+}): Promise<ActionResult> {
+  return run(() => apiSend("POST", "/api/applications", input), ["/deployments"]);
+}
+
+export async function deleteApplication(id: string): Promise<ActionResult> {
+  return run(
+    () => apiSend("DELETE", `/api/applications/${encodeURIComponent(id)}`),
+    ["/deployments"],
+  );
+}

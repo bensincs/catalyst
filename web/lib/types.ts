@@ -84,6 +84,30 @@ export interface EnabledAgent {
   memoryStore?: string; // effective connected memory store (override or catalog default)
 }
 
+export interface ClusterInfo {
+  name: string;
+  phase: string; // provisioning | ready | unreachable | "" (none)
+  kubernetesVersion?: string;
+  argoInstalled: boolean;
+  nodeCount: number;
+  detail?: string;
+}
+
+/** A Helm deployment a tenant runs in its cluster (realized as an Argo CD
+ * Application). sync/health are reported by the reconciler. */
+export interface Application {
+  id: string;
+  name: string;
+  namespace: string;
+  repoURL: string;
+  chart: string;
+  targetRevision: string;
+  values?: string;
+  syncStatus: string; // Synced | OutOfSync | Unknown | pending
+  healthStatus: string; // Healthy | Progressing | Degraded | pending
+  createdAt: string;
+}
+
 export interface TenantContextInfo {
   id: string;
   name: string;
@@ -99,6 +123,7 @@ export interface TenantContextInfo {
   lastHeartbeatMs: number;
   lifecycle: Lifecycle;
   enabled: boolean;
+  cluster: ClusterInfo;
 }
 
 export interface FleetStats {

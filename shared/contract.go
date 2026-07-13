@@ -83,6 +83,20 @@ type DesiredAgent struct {
 	PublishTo  []string        `json:"publishTo"`
 }
 
+// DesiredApplication is a Helm deployment a tenant wants running in its cluster
+// (control plane → reconciler). The reconciler realizes it by stamping an Argo
+// CD Application CR (Helm source) into the cluster; Argo CD then installs the
+// chart and keeps it converged.
+type DesiredApplication struct {
+	ID             string `json:"id"`
+	Name           string `json:"name"`           // Argo Application name (also the release)
+	Namespace      string `json:"namespace"`      // destination namespace in the cluster
+	RepoURL        string `json:"repoURL"`        // Helm repo (https) or OCI registry (oci://)
+	Chart          string `json:"chart"`          // chart name
+	TargetRevision string `json:"targetRevision"` // chart version
+	Values         string `json:"values,omitempty"`
+}
+
 // DesiredState is what a tenant's reconciler should converge to.
 type DesiredState struct {
 	TenantID string         `json:"tenantId"`
@@ -91,6 +105,9 @@ type DesiredState struct {
 	// an enabled agent references one), with their typed definitions — so the
 	// reconciler provisions each as a Foundry memory_store and binds agents to it.
 	MemoryStores []DesiredMemoryStore `json:"memoryStores,omitempty"`
+	// Applications are the Helm deployments the reconciler should stamp into the
+	// tenant's cluster as Argo CD Applications.
+	Applications []DesiredApplication `json:"applications,omitempty"`
 }
 
 // Lifecycle status values shared by agents and memory stores (reconciler →
@@ -120,6 +137,34 @@ type MemoryStoreStatus struct {
 	Health  string `json:"health"` // live | reconciling | blocked
 }
 
+// Cluster lifecycle phases (Cluster.Phase). The AKS cluster is provisioned by the
+// managed-app Bicep; the reconciler bootstraps Argo CD into it and reports here.
+const (
+	ClusterProvisioning = "provisioning" // reachable but Argo CD not yet installed
+	ClusterReady        = "ready"        // Argo CD installed + reconciling
+	ClusterUnreachable  = "unreachable"  // couldn't reach / authenticate to the cluster
+)
+
+// ClusterStatus is the actual state of a tenant's Kubernetes cluster + its GitOps
+// bootstrap (reconciler → control plane).
+type ClusterStatus struct {
+	Name          string `json:"name"`
+	Phase         string `json:"phase"`                   // provisioning | ready | unreachable
+	KubernetesVer string `json:"kubernetesVersion,omitempty"`
+	ArgoInstalled bool   `json:"argoInstalled"`
+	NodeCount     int    `json:"nodeCount,omitempty"`
+	Detail        string `json:"detail,omitempty"` // human-readable note when not ready
+}
+
+// ApplicationStatus is the actual state of one Argo CD Application the reconciler
+// stamped into the cluster (reconciler → control plane). SyncStatus/HealthStatus
+// mirror Argo's own vocabulary (Synced/OutOfSync; Healthy/Progressing/Degraded).
+type ApplicationStatus struct {
+	ID           string `json:"id"`
+	SyncStatus   string `json:"syncStatus"`   // Synced | OutOfSync | Unknown | pending
+	HealthStatus string `json:"healthStatus"` // Healthy | Progressing | Degraded | Missing | pending
+}
+
 // Heartbeat is the reconciler's periodic report: the in-tenant install identity
 // (subscription, region, reconciler identity, Foundry project — the authoritative
 // source for these) plus the actual state of every managed agent and memory store.
@@ -134,4 +179,7 @@ type Heartbeat struct {
 	ReconcilerVersion  string              `json:"reconcilerVersion"`
 	Agents             []AgentStatus       `json:"agents"`
 	MemoryStores       []MemoryStoreStatus `json:"memoryStores,omitempty"`
+	// Cluster + Applications report the tenant's Kubernetes/GitOps layer.
+	Cluster      *ClusterStatus      `json:"cluster,omitempty"`
+	Applications []ApplicationStatus `json:"applications,omitempty"`
 }

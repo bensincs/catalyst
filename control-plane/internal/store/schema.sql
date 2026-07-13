@@ -173,4 +173,35 @@ WHERE sid.store_id IS NOT NULL AND sid.store_id <> ''
   AND EXISTS (SELECT 1 FROM memory_stores m WHERE m.id = sid.store_id)
 ON CONFLICT (tenant_slug, store_id) DO NOTHING;
 
+-- ── Kubernetes / GitOps ────────────────────────────────────────────────────
+-- The reconciler provisions (via the managed-app Bicep) an AKS cluster per
+-- tenant, bootstraps Argo CD into it, and reports the cluster's status here.
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS cluster_name           text    NOT NULL DEFAULT '';
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS cluster_phase          text    NOT NULL DEFAULT '';   -- provisioning | ready | unreachable
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS cluster_k8s_version    text    NOT NULL DEFAULT '';
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS cluster_argo_installed boolean NOT NULL DEFAULT false;
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS cluster_node_count     int     NOT NULL DEFAULT 0;
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS cluster_detail         text    NOT NULL DEFAULT '';
+
+-- A Helm deployment a tenant runs in its cluster. The reconciler stamps each as
+-- an Argo CD Application (Helm source); Argo CD installs the chart and keeps it
+-- converged. sync_status/health_status mirror Argo's own vocabulary, reported
+-- back via the heartbeat.
+CREATE TABLE IF NOT EXISTS applications (
+  id              text PRIMARY KEY,                     -- slug: <tenant>-<name>
+  tenant_slug     text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  name            text NOT NULL,
+  namespace       text NOT NULL DEFAULT 'default',
+  repo_url        text NOT NULL DEFAULT '',              -- Helm repo (https) or OCI (oci://)
+  chart           text NOT NULL DEFAULT '',
+  target_revision text NOT NULL DEFAULT '',              -- chart version
+  values          text NOT NULL DEFAULT '',              -- inline Helm values (YAML)
+  sync_status     text NOT NULL DEFAULT 'pending',       -- Synced | OutOfSync | Unknown | pending
+  health_status   text NOT NULL DEFAULT 'pending',       -- Healthy | Progressing | Degraded | pending
+  sort_order      int  NOT NULL DEFAULT 0,
+  created_by      text NOT NULL DEFAULT '',
+  created_at      timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS applications_tenant_idx ON applications(tenant_slug);
+
 

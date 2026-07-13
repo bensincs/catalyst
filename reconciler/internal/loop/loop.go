@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"time"
 
+	"github.com/inception42/cortex/reconciler/internal/cluster"
 	"github.com/inception42/cortex/reconciler/internal/config"
 	"github.com/inception42/cortex/reconciler/internal/controlplane"
 	"github.com/inception42/cortex/reconciler/internal/foundry"
@@ -20,13 +21,15 @@ type Reconciler struct {
 	cfg     config.Config
 	cp      *controlplane.Client
 	foundry *foundry.Foundry
+	cluster *cluster.Client // nil when the cluster feature is disabled
 }
 
-func New(cfg config.Config, apiSrc tokens.Source, foundrySrc tokens.Source) *Reconciler {
+func New(cfg config.Config, apiSrc tokens.Source, foundrySrc tokens.Source, clusterClient *cluster.Client) *Reconciler {
 	return &Reconciler{
 		cfg:     cfg,
 		cp:      controlplane.New(cfg.ControlPlaneURL, apiSrc),
 		foundry: foundry.New(cfg, foundrySrc),
+		cluster: clusterClient,
 	}
 }
 
@@ -55,13 +58,25 @@ func (r *Reconciler) once(ctx context.Context) {
 	}
 	statuses, storeStatuses := r.foundry.Reconcile(ctx, desired.Agents, desired.MemoryStores)
 	hb := r.heartbeat(statuses, storeStatuses)
+
+	// Kubernetes/GitOps layer: bootstrap Argo CD + stamp the tenant's Helm
+	// deployments into its cluster, and report cluster + app status.
+	clusterPhase := "disabled"
+	if r.cluster != nil {
+		cs, appStatuses := r.cluster.Reconcile(ctx, desired.Applications)
+		hb.Cluster = &cs
+		hb.Applications = appStatuses
+		clusterPhase = cs.Phase
+	}
+
 	if err := r.cp.Heartbeat(ctx, hb); err != nil {
 		slog.Warn("heartbeat failed", "err", err)
 		return
 	}
 	slog.Info("reconciled",
 		"agents", len(desired.Agents), "agentsLive", countLive(statuses),
-		"stores", len(desired.MemoryStores), "storesLive", countStoresLive(storeStatuses))
+		"stores", len(desired.MemoryStores), "storesLive", countStoresLive(storeStatuses),
+		"apps", len(desired.Applications), "cluster", clusterPhase)
 }
 
 func (r *Reconciler) heartbeat(statuses []shared.AgentStatus, storeStatuses []shared.MemoryStoreStatus) shared.Heartbeat {

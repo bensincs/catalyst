@@ -141,6 +141,14 @@ export function TenantOverview({
           <Fact label="Reconciler identity" value={tenant.reconcilerIdentity || "—"} mono />
           <Fact label="Foundry project" value={tenant.foundryProject || "—"} mono />
           <Fact label="Reconciler" value={tenant.reconcilerVersion ? `v${tenant.reconcilerVersion}` : "—"} mono />
+          <Fact
+            label="Cluster"
+            value={
+              tenant.cluster.phase
+                ? `${tenant.cluster.name || "cluster"} · ${tenant.cluster.phase}${tenant.cluster.argoInstalled ? " · Argo CD" : ""}`
+                : "—"
+            }
+          />
         </dl>
 
         <div className={styles.installFoot}>

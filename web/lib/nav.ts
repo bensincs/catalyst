@@ -6,6 +6,7 @@ import {
   Gauge,
   LayoutDashboard,
   Radar,
+  Rocket,
   ServerCog,
   Settings,
   type LucideIcon,
@@ -98,6 +99,12 @@ const TENANT_NAV: NavGroup[] = [
         href: "/memory-stores",
         icon: Database,
         hint: "Create memory stores and connect your agents to them",
+      },
+      {
+        label: "Deployments",
+        href: "/deployments",
+        icon: Rocket,
+        hint: "Deploy Helm charts into your cluster via Argo CD",
       },
       {
         label: "Install",

@@ -14,6 +14,7 @@ import (
 const (
 	defaultFoundryAPIVersion = "v1"                            // Foundry Agents API (new /agents surface)
 	defaultFoundryScope      = "https://ai.azure.com/.default" // Entra resource for Foundry
+	defaultArgoCDVersion     = "v2.13.2"                       // Argo CD the reconciler bootstraps
 )
 
 type Config struct {
@@ -31,6 +32,13 @@ type Config struct {
 	ReconcilerIdentity string
 	ReconcilerVersion  string
 	PollInterval       time.Duration
+
+	// Kubernetes/GitOps (opt-in). When ClusterEnabled, the reconciler bootstraps
+	// Argo CD into the tenant's AKS cluster and stamps Helm deployments into it.
+	ClusterEnabled       bool
+	ClusterName          string
+	ClusterResourceGroup string
+	ArgoCDVersion        string
 }
 
 // Load reads .env then the environment. Nothing is defaulted or derived — every
@@ -50,6 +58,10 @@ func Load() Config {
 	if foundryScope == "" {
 		foundryScope = defaultFoundryScope
 	}
+	argocd := strings.TrimSpace(env("ARGOCD_VERSION"))
+	if argocd == "" {
+		argocd = defaultArgoCDVersion
+	}
 	return Config{
 		ControlPlaneURL:    strings.TrimRight(env("CONTROL_PLANE_URL"), "/"),
 		CortexAPIScope:     env("CORTEX_API_SCOPE"),
@@ -65,6 +77,11 @@ func Load() Config {
 		ReconcilerIdentity: env("RECONCILER_IDENTITY"),
 		ReconcilerVersion:  env("RECONCILER_VERSION"),
 		PollInterval:       time.Duration(poll) * time.Second,
+
+		ClusterEnabled:       strings.EqualFold(strings.TrimSpace(env("CLUSTER_ENABLED")), "true"),
+		ClusterName:          strings.TrimSpace(env("CLUSTER_NAME")),
+		ClusterResourceGroup: strings.TrimSpace(env("CLUSTER_RESOURCE_GROUP")),
+		ArgoCDVersion:        argocd,
 	}
 }
 
@@ -92,6 +109,15 @@ func (c Config) Missing() []string {
 	}
 	if c.PollInterval <= 0 {
 		missing = append(missing, "POLL_INTERVAL_SECONDS")
+	}
+	// The cluster is opt-in; if enabled, its address must be complete.
+	if c.ClusterEnabled {
+		if strings.TrimSpace(c.ClusterName) == "" {
+			missing = append(missing, "CLUSTER_NAME")
+		}
+		if strings.TrimSpace(c.ClusterResourceGroup) == "" {
+			missing = append(missing, "CLUSTER_RESOURCE_GROUP")
+		}
 	}
 	return missing
 }

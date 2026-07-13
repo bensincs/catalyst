@@ -74,6 +74,11 @@ func (s *Server) Router() http.Handler {
 			r.Post("/tenant/agents/{agentId}/store", s.handleConnectAgentStore)
 			r.Post("/tenant/stores/{storeId}", s.handleEnableStore)
 			r.Delete("/tenant/stores/{storeId}", s.handleDisableStore)
+
+			// Applications (Helm deployments → Argo CD) in the tenant's cluster
+			r.Get("/applications", s.handleApplications)
+			r.Post("/applications", s.handleCreateApplication)
+			r.Delete("/applications/{id}", s.handleDeleteApplication)
 		})
 	})
 
@@ -705,6 +710,88 @@ func (s *Server) handleDisableStore(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeJSON(w, http.StatusOK, map[string]string{"status": "disabled"})
 	}
+}
+
+/* ── Applications (Helm deployments → Argo CD, tenant cluster) ────────────── */
+
+func (s *Server) handleApplications(w http.ResponseWriter, r *http.Request) {
+	t, ok := s.callerTenant(w, r)
+	if !ok {
+		return
+	}
+	list, err := s.store.ApplicationsForTenant(r.Context(), t.ID)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"applications": list})
+}
+
+func (s *Server) handleCreateApplication(w http.ResponseWriter, r *http.Request) {
+	id, _ := auth.IdentityFrom(r.Context())
+	t, ok := s.callerTenant(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Name           string `json:"name"`
+		Namespace      string `json:"namespace"`
+		RepoURL        string `json:"repoURL"`
+		Chart          string `json:"chart"`
+		TargetRevision string `json:"targetRevision"`
+		Values         string `json:"values"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	name := strings.TrimSpace(body.Name)
+	slug := slugify(name)
+	if slug == "" {
+		writeErr(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	if strings.TrimSpace(body.RepoURL) == "" || strings.TrimSpace(body.Chart) == "" {
+		writeErr(w, http.StatusBadRequest, "repoURL and chart are required")
+		return
+	}
+	ns := strings.TrimSpace(body.Namespace)
+	if ns == "" {
+		ns = "default"
+	}
+	app := model.Application{
+		ID:             t.ID + "-" + slug,
+		Name:           name,
+		Namespace:      ns,
+		RepoURL:        strings.TrimSpace(body.RepoURL),
+		Chart:          strings.TrimSpace(body.Chart),
+		TargetRevision: strings.TrimSpace(body.TargetRevision),
+		Values:         body.Values,
+	}
+	if err := s.store.CreateApplication(r.Context(), t.ID, app, id.OID); err != nil {
+		if isDup(err) {
+			writeErr(w, http.StatusConflict, "a deployment with that name already exists")
+			return
+		}
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]string{"id": app.ID})
+}
+
+func (s *Server) handleDeleteApplication(w http.ResponseWriter, r *http.Request) {
+	t, ok := s.callerTenant(w, r)
+	if !ok {
+		return
+	}
+	if err := s.store.DeleteApplication(r.Context(), t.ID, chi.URLParam(r, "id")); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "deployment not found")
+			return
+		}
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
 /* ── Reconciler (in-tenant, Entra-token auth; tenant = token tid) ─────────── */

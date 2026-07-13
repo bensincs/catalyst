@@ -5,7 +5,9 @@ import { decode } from "next-auth/jwt";
 import type {
   AgentDefinition,
   AgentType,
+  Application,
   CatalogAgent,
+  ClusterInfo,
   EnabledAgent,
   FleetStats,
   MemoryStore,
@@ -45,6 +47,15 @@ interface ApiTenant {
   reconcilerVersion?: string;
   installedAt?: string;
   enabled?: boolean;
+  cluster?: ApiCluster | null;
+}
+interface ApiCluster {
+  name?: string;
+  phase?: string;
+  kubernetesVersion?: string;
+  argoInstalled?: boolean;
+  nodeCount?: number;
+  detail?: string;
 }
 interface ApiAgent {
   id: string;
@@ -199,6 +210,18 @@ function toContext(t: ApiTenant): TenantContextInfo {
     lastHeartbeatMs: ms(t.lastHeartbeat),
     lifecycle: (t.lifecycle ?? "enrolling") as Lifecycle,
     enabled: t.enabled ?? true,
+    cluster: toCluster(t.cluster),
+  };
+}
+
+function toCluster(c?: ApiCluster | null): ClusterInfo {
+  return {
+    name: c?.name ?? "",
+    phase: c?.phase ?? "",
+    kubernetesVersion: c?.kubernetesVersion,
+    argoInstalled: Boolean(c?.argoInstalled),
+    nodeCount: c?.nodeCount ?? 0,
+    detail: c?.detail,
   };
 }
 
@@ -331,6 +354,37 @@ export const getTenantsRegistry = cache(async (): Promise<TenantRegistryRow[]> =
     entitledStores: t.entitledStores ?? [],
     lifecycle: (t.lifecycle ?? "enrolling") as Lifecycle,
     enabled: t.enabled ?? true,
+  }));
+});
+
+/* ── Applications (Helm deployments → Argo CD) ────────────────────────────── */
+
+interface ApiApplication {
+  id: string;
+  name: string;
+  namespace: string;
+  repoURL: string;
+  chart: string;
+  targetRevision: string;
+  values?: string;
+  syncStatus: string;
+  healthStatus: string;
+  createdAt: string;
+}
+
+export const getApplications = cache(async (): Promise<Application[]> => {
+  const c = await apiGet<{ applications: ApiApplication[] }>("/api/applications");
+  return (c.applications ?? []).map((a) => ({
+    id: a.id,
+    name: a.name,
+    namespace: a.namespace,
+    repoURL: a.repoURL,
+    chart: a.chart,
+    targetRevision: a.targetRevision,
+    values: a.values,
+    syncStatus: a.syncStatus || "pending",
+    healthStatus: a.healthStatus || "pending",
+    createdAt: a.createdAt,
   }));
 });
 

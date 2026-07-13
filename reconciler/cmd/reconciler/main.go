@@ -8,6 +8,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/inception42/cortex/reconciler/internal/cluster"
 	"github.com/inception42/cortex/reconciler/internal/config"
 	"github.com/inception42/cortex/reconciler/internal/loop"
 	"github.com/inception42/cortex/reconciler/internal/tokens"
@@ -32,6 +33,13 @@ func main() {
 	apiSrc := tokens.SourceFor(cred, cfg.CortexAPIScope)
 	foundrySrc := tokens.SourceFor(cred, cfg.FoundryScope)
 
+	// Cluster/GitOps is opt-in: when enabled, the reconciler bootstraps Argo CD
+	// into the tenant's AKS cluster and stamps its Helm deployments in.
+	var clusterClient *cluster.Client
+	if cfg.ClusterEnabled {
+		clusterClient = cluster.New(cred, cfg.SubscriptionID, cfg.ClusterResourceGroup, cfg.ClusterName, cfg.ArgoCDVersion)
+	}
+
 	slog.Info("cortex reconciler starting",
 		"controlPlane", cfg.ControlPlaneURL,
 		"tenant", cfg.TenantID,
@@ -43,12 +51,14 @@ func main() {
 		"reconcilerIdentity", cfg.ReconcilerIdentity,
 		"reconcilerVersion", cfg.ReconcilerVersion,
 		"authScope", cfg.CortexAPIScope,
+		"clusterEnabled", cfg.ClusterEnabled,
+		"cluster", cfg.ClusterName,
 		"poll", cfg.PollInterval.String(),
 	)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	loop.New(cfg, apiSrc, foundrySrc).Run(ctx)
+	loop.New(cfg, apiSrc, foundrySrc, clusterClient).Run(ctx)
 	slog.Info("cortex reconciler stopped")
 }

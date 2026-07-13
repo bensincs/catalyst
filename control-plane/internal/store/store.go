@@ -73,14 +73,16 @@ func (s *Store) Seed(ctx context.Context) error {
 
 const tenantCols = `id, name, coalesce(tenant_id,''), region, plan, enrollment, version,
 	agent_count, reconciling_count, monthly_calls, drift, last_heartbeat,
-	subscription_id, reconciler_identity, foundry_project, reconciler_version, installed_at, enabled`
+	subscription_id, reconciler_identity, foundry_project, reconciler_version, installed_at, enabled,
+	cluster_name, cluster_phase, cluster_k8s_version, cluster_argo_installed, cluster_node_count, cluster_detail`
 
 func scanTenant(row pgx.Row) (model.Tenant, error) {
 	var t model.Tenant
 	var installedAt string
 	err := row.Scan(&t.ID, &t.Name, &t.TenantID, &t.Region, &t.Plan, &t.Enrollment,
 		&t.Version, &t.AgentCount, &t.ReconcilingCount, &t.MonthlyCalls, &t.Drift, &t.LastHeartbeat,
-		&t.SubscriptionID, &t.ReconcilerIdentity, &t.FoundryProject, &t.ReconcilerVersion, &installedAt, &t.Enabled)
+		&t.SubscriptionID, &t.ReconcilerIdentity, &t.FoundryProject, &t.ReconcilerVersion, &installedAt, &t.Enabled,
+		&t.Cluster.Name, &t.Cluster.Phase, &t.Cluster.K8sVersion, &t.Cluster.ArgoInstalled, &t.Cluster.NodeCount, &t.Cluster.Detail)
 	if installedAt != "" {
 		t.InstalledAt = &installedAt
 	}
@@ -844,6 +846,7 @@ func (s *Store) TenantsRegistry(ctx context.Context) ([]model.TenantRegistryRow,
 		if err := rows.Scan(&r.ID, &r.Name, &r.TenantID, &r.Region, &r.Plan, &r.Enrollment,
 			&r.Version, &r.AgentCount, &r.ReconcilingCount, &r.MonthlyCalls, &r.Drift, &r.LastHeartbeat,
 			&r.SubscriptionID, &r.ReconcilerIdentity, &r.FoundryProject, &r.ReconcilerVersion, &installedAt, &r.Enabled,
+			&r.Cluster.Name, &r.Cluster.Phase, &r.Cluster.K8sVersion, &r.Cluster.ArgoInstalled, &r.Cluster.NodeCount, &r.Cluster.Detail,
 			&r.EntitledAgents, &r.EntitledStores); err != nil {
 			return nil, err
 		}
@@ -1038,6 +1041,26 @@ func (s *Store) SyncDesired(ctx context.Context, tid string) (shared.DesiredStat
 	if err := srows.Err(); err != nil {
 		return out, err
 	}
+
+	// Applications (Helm deployments) the tenant wants in its cluster — the
+	// reconciler stamps each as an Argo CD Application.
+	arows, err := s.pool.Query(ctx,
+		`SELECT id, name, namespace, repo_url, chart, target_revision, values
+		 FROM applications WHERE tenant_slug = $1 ORDER BY sort_order`, t.ID)
+	if err != nil {
+		return out, err
+	}
+	defer arows.Close()
+	for arows.Next() {
+		var da shared.DesiredApplication
+		if err := arows.Scan(&da.ID, &da.Name, &da.Namespace, &da.RepoURL, &da.Chart, &da.TargetRevision, &da.Values); err != nil {
+			return out, err
+		}
+		out.Applications = append(out.Applications, da)
+	}
+	if err := arows.Err(); err != nil {
+		return out, err
+	}
 	return out, nil
 }
 
@@ -1098,5 +1121,76 @@ func (s *Store) ApplyHeartbeat(ctx context.Context, hb shared.Heartbeat) error {
 			return err
 		}
 	}
+	// Record the tenant's cluster/GitOps status.
+	if c := hb.Cluster; c != nil {
+		if _, err := s.pool.Exec(ctx,
+			`UPDATE tenants SET cluster_name = $2, cluster_phase = $3, cluster_k8s_version = $4,
+			   cluster_argo_installed = $5, cluster_node_count = $6, cluster_detail = $7
+			 WHERE id = $1`,
+			t.ID, c.Name, c.Phase, c.KubernetesVer, c.ArgoInstalled, c.NodeCount, c.Detail); err != nil {
+			return err
+		}
+	}
+	// Record each Argo Application's sync/health (a deployment removed between
+	// sync and heartbeat is a harmless no-op).
+	for _, a := range hb.Applications {
+		if _, err := s.pool.Exec(ctx,
+			`UPDATE applications SET sync_status = $3, health_status = $4 WHERE tenant_slug = $1 AND id = $2`,
+			t.ID, a.ID, a.SyncStatus, a.HealthStatus); err != nil {
+			return err
+		}
+	}
 	return s.recountAgents(ctx, t.ID)
+}
+
+/* ── Applications (Helm deployments → Argo CD Applications) ──────────────── */
+
+const applicationCols = `id, name, namespace, repo_url, chart, target_revision, values,
+	sync_status, health_status, created_by, created_at`
+
+func scanApplication(row pgx.Row) (model.Application, error) {
+	var a model.Application
+	err := row.Scan(&a.ID, &a.Name, &a.Namespace, &a.RepoURL, &a.Chart, &a.TargetRevision, &a.Values,
+		&a.SyncStatus, &a.HealthStatus, &a.CreatedBy, &a.CreatedAt)
+	return a, err
+}
+
+// ApplicationsForTenant returns a tenant's deployments (its own cluster only).
+func (s *Store) ApplicationsForTenant(ctx context.Context, slug string) ([]model.Application, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT `+applicationCols+` FROM applications WHERE tenant_slug = $1 ORDER BY sort_order, name`, slug)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []model.Application{}
+	for rows.Next() {
+		a, err := scanApplication(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) CreateApplication(ctx context.Context, slug string, a model.Application, createdBy string) error {
+	_, err := s.pool.Exec(ctx,
+		`INSERT INTO applications (id, tenant_slug, name, namespace, repo_url, chart, target_revision, values, created_by, sort_order)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,
+		         coalesce((SELECT max(sort_order)+1 FROM applications WHERE tenant_slug=$2),1))`,
+		a.ID, slug, a.Name, a.Namespace, a.RepoURL, a.Chart, a.TargetRevision, a.Values, createdBy)
+	return err
+}
+
+// DeleteApplication removes a tenant's deployment (scoped to the owning tenant).
+func (s *Store) DeleteApplication(ctx context.Context, slug, id string) error {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM applications WHERE tenant_slug = $1 AND id = $2`, slug, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }

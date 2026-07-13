@@ -75,6 +75,25 @@ param embeddingSkuName string = 'Standard'
 @description('Embedding capacity, in thousands of tokens-per-minute.')
 param embeddingCapacity int = 30
 
+@description('Deploy an AKS cluster for the tenant so the reconciler can bootstrap Argo CD and run Helm/GitOps workloads.')
+param deployCluster bool = true
+
+@description('AKS cluster name.')
+param clusterName string = 'cortex-aks'
+
+@description('Kubernetes version (blank = the AKS default for the region).')
+param kubernetesVersion string = ''
+
+@description('AKS system node pool VM size.')
+param nodeVmSize string = 'Standard_D2s_v5'
+
+@description('AKS system node count.')
+@minValue(1)
+param nodeCount int = 2
+
+@description('Argo CD version the reconciler bootstraps into the cluster.')
+param argocdVersion string = 'v2.13.2'
+
 @description('Reconciler container image (published by Cortex, or your own registry).')
 param reconcilerImage string = 'ghcr.io/inception42/cortex-reconciler:latest'
 
@@ -221,6 +240,65 @@ resource projectFoundryRoleAssignment 'Microsoft.Authorization/roleAssignments@2
   }
 }
 
+// --- Kubernetes: AKS cluster the reconciler bootstraps Argo CD into ----------
+// AAD-integrated + Azure RBAC, local accounts disabled: the reconciler's own
+// managed identity authenticates with an Entra token and is authorized by the
+// two role assignments below — no cluster admin kubeconfig secret anywhere.
+resource aks 'Microsoft.ContainerService/managedClusters@2024-09-01' = if (deployCluster) {
+  name: clusterName
+  location: location
+  identity: { type: 'SystemAssigned' }
+  properties: {
+    dnsPrefix: clusterName
+    kubernetesVersion: empty(kubernetesVersion) ? null : kubernetesVersion
+    enableRBAC: true
+    disableLocalAccounts: true
+    aadProfile: {
+      managed: true
+      enableAzureRBAC: true
+      tenantID: tenantId
+    }
+    agentPoolProfiles: [
+      {
+        name: 'system'
+        mode: 'System'
+        count: nodeCount
+        vmSize: nodeVmSize
+        osType: 'Linux'
+        osSKU: 'AzureLinux'
+        type: 'VirtualMachineScaleSets'
+      }
+    ]
+  }
+}
+
+// Azure Kubernetes Service RBAC Cluster Admin — data-plane cluster-admin, so the
+// reconciler can install Argo CD and apply Application CRs.
+var aksRbacClusterAdminRoleId = 'b1ff04bb-8a4e-4dc4-8eb5-8693973ce19b'
+// Azure Kubernetes Service Cluster User Role — the ARM action to list the AAD
+// (user) kubeconfig the reconciler builds its client from.
+var aksClusterUserRoleId = '4abbcc35-e782-43d8-92c5-2d3f1bd2253f'
+
+resource aksAdminAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (deployCluster) {
+  name: guid(clusterName, reconIdentity.id, aksRbacClusterAdminRoleId)
+  scope: aks
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', aksRbacClusterAdminRoleId)
+    principalId: reconIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource aksUserAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (deployCluster) {
+  name: guid(clusterName, reconIdentity.id, aksClusterUserRoleId)
+  scope: aks
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', aksClusterUserRoleId)
+    principalId: reconIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
 // --- Reconciler runtime -------------------------------------------------------
 
 resource env 'Microsoft.App/managedEnvironments@2024-03-01' = if (deployReconcilerApp) {
@@ -285,6 +363,12 @@ resource reconciler 'Microsoft.App/containerApps@2024-03-01' = if (deployReconci
             { name: 'RECONCILER_VERSION', value: reconcilerVersion }
             { name: 'PLAN', value: plan }
             { name: 'POLL_INTERVAL_SECONDS', value: string(pollIntervalSeconds) }
+            // Kubernetes/GitOps: the reconciler bootstraps Argo CD into this AKS
+            // cluster and stamps Argo Applications for the tenant's Helm deploys.
+            { name: 'CLUSTER_ENABLED', value: string(deployCluster) }
+            { name: 'CLUSTER_NAME', value: clusterName }
+            { name: 'CLUSTER_RESOURCE_GROUP', value: resourceGroup().name }
+            { name: 'ARGOCD_VERSION', value: argocdVersion }
           ]
         }
       ]
