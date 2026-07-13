@@ -47,6 +47,26 @@ func (k *kube) ensureNamespace(ctx context.Context, name string) error {
 	return err
 }
 
+// ensureMeshNamespace enrolls a tenant workload namespace into the mesh
+// (istio-injection=enabled) so STRICT mTLS, deny-by-default egress, and
+// telemetry actually cover the workloads Argo deploys there. Best-effort: it
+// only adds the label (server-side apply), never fighting Argo for the rest of
+// the namespace.
+func (k *kube) ensureMeshNamespace(ctx context.Context, name string) {
+	if name == "" || name == argoNamespace || name == istioSystemNS || name == istioIngressNS || name == observabilityNS {
+		return
+	}
+	ns := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "v1",
+		"kind":       "Namespace",
+		"metadata": map[string]any{
+			"name":   name,
+			"labels": map[string]any{"istio-injection": "enabled"},
+		},
+	}}
+	_, _ = k.dyn.Resource(nsGVR).Apply(ctx, name, ns, ssaOpts)
+}
+
 // applyYAML server-side-applies every document in a multi-doc manifest. Objects
 // whose CRD isn't established yet are skipped (the reconcile loop retries), so a
 // fresh Argo install converges over a couple of cycles.
@@ -111,6 +131,7 @@ func (k *kube) reconcileApplications(ctx context.Context, apps []shared.DesiredA
 	for _, a := range apps {
 		name := appName(a.ID)
 		desired[name] = true
+		k.ensureMeshNamespace(ctx, a.Namespace) // enroll the workload's namespace in the mesh
 		st := shared.ApplicationStatus{ID: a.ID, SyncStatus: "pending", HealthStatus: "pending"}
 		if _, err := ri.Apply(ctx, name, buildApplication(a, name), metav1.ApplyOptions{FieldManager: fieldManager, Force: true}); err != nil {
 			st.SyncStatus, st.HealthStatus = "Unknown", "Unknown"
@@ -164,7 +185,7 @@ func (k *kube) reconcileMesh(ctx context.Context, o Options) meshResult {
 
 	// Mesh-wide CRs (depend on Istio CRDs — tolerated + retried until established).
 	_, mtlsErr := k.dyn.Resource(paGVR).Namespace(istioSystemNS).Apply(ctx, "default", peerAuthentication(), ssaOpts)
-	_, _ = k.dyn.Resource(gwGVR).Namespace(istioIngressNS).Apply(ctx, defaultGWName, defaultGateway(o.IngressTLSSecret), ssaOpts)
+	_, _ = k.dyn.Resource(gwGVR).Namespace(istioIngressNS).Apply(ctx, defaultGWName, defaultGateway(o.IngressTLSCredentialName), ssaOpts)
 	_, _ = k.dyn.Resource(efGVR).Namespace(istioIngressNS).Apply(ctx, "cortex-security-headers", securityHeadersFilter(), ssaOpts)
 	_, _ = k.dyn.Resource(telGVR).Namespace(istioSystemNS).Apply(ctx, "default", meshTelemetry(), ssaOpts)
 
@@ -183,15 +204,21 @@ func (k *kube) reconcileMesh(ctx context.Context, o Options) meshResult {
 
 // reconcileIngressAuth pins the ingress gateway to accept only the tenant's own
 // Entra tokens (RequestAuthentication) and requires one on every request
-// (AuthorizationPolicy). It returns the primary enforced issuer for status, or
-// "" when no auth is configured. Best-effort: the CRs need Istio's security CRDs,
-// which land with istiod over a few cycles, so errors are tolerated and retried.
+// (AuthorizationPolicy). With no identity configured it fails the gateway CLOSED
+// (deny-all) rather than serving open. It returns the enforced issuer, or "" when
+// none is configured. Best-effort: the CRs need Istio's security CRDs, which land
+// with istiod over a few cycles, so errors are tolerated and retried.
 func (k *kube) reconcileIngressAuth(ctx context.Context, auth *shared.IngressAuth) string {
+	ap := k.dyn.Resource(apGVR).Namespace(istioIngressNS)
+	ra := k.dyn.Resource(raGVR).Namespace(istioIngressNS)
 	if auth == nil || len(auth.Rules) == 0 {
+		// Fail closed: deny all ingress and drop any stale JWT rule.
+		_, _ = ap.Apply(ctx, authPolicyName, denyAllPolicy(), ssaOpts)
+		_ = ra.Delete(ctx, requestAuthName, metav1.DeleteOptions{})
 		return ""
 	}
-	_, _ = k.dyn.Resource(raGVR).Namespace(istioIngressNS).Apply(ctx, requestAuthName, requestAuthentication(auth), ssaOpts)
-	_, _ = k.dyn.Resource(apGVR).Namespace(istioIngressNS).Apply(ctx, authPolicyName, requireJWTPolicy(auth), ssaOpts)
+	_, _ = ra.Apply(ctx, requestAuthName, requestAuthentication(auth), ssaOpts)
+	_, _ = ap.Apply(ctx, authPolicyName, requireJWTPolicy(auth), ssaOpts)
 	return auth.Rules[0].Issuer
 }
 

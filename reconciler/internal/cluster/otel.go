@@ -34,10 +34,12 @@ controller:
     seccompProfile:
       type: RuntimeDefault
 rbac:
-  create: true
+  create: false
 serviceAccount:
   create: true
+  automountServiceAccountToken: false
 alloy:
+  storagePath: /tmp/alloy
   configMap:
     content: |-
 %s

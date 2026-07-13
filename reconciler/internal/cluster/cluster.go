@@ -67,15 +67,15 @@ var (
 // Options is the full address + policy for one tenant's cluster. Grouping them
 // keeps the constructor stable as the mesh/observability surface grows.
 type Options struct {
-	SubscriptionID        string
-	ResourceGroup         string
-	ClusterName           string
-	ArgoVersion           string
-	IstioVersion          string
-	AlloyChartVersion     string
-	OTelExporterEndpoint  string // where the in-cluster collector ships telemetry ("" ⇒ log locally)
-	OutboundTrafficPolicy string // mesh egress mode: REGISTRY_ONLY | ALLOW_ANY
-	IngressTLSSecret      string // cert secret ⇒ gateway terminates HTTPS + redirects HTTP
+	SubscriptionID           string
+	ResourceGroup            string
+	ClusterName              string
+	ArgoVersion              string
+	IstioVersion             string
+	AlloyChartVersion        string
+	OTelExporterEndpoint     string // where the in-cluster collector ships telemetry ("" ⇒ log locally)
+	OutboundTrafficPolicy    string // mesh egress mode: REGISTRY_ONLY | ALLOW_ANY
+	IngressTLSCredentialName string // cert secret name ⇒ gateway terminates HTTPS + redirects HTTP
 }
 
 // Client drives one tenant's cluster (one reconciler → one cluster).

@@ -110,8 +110,8 @@ param otelExporterEndpoint string = ''
 ])
 param outboundTrafficPolicy string = 'REGISTRY_ONLY'
 
-@description('Kubernetes TLS secret (in the istio-ingress namespace) the gateway terminates HTTPS from. Empty = HTTP only (JWT auth still enforced).')
-param ingressTlsSecret string = ''
+@description('Name of the Kubernetes TLS secret (in the istio-ingress namespace) the gateway terminates HTTPS from. Empty = HTTP only (JWT auth still enforced).')
+param ingressTlsCredentialName string = ''
 
 @description('Reconciler container image (published by Cortex, or your own registry).')
 param reconcilerImage string = 'ghcr.io/inception42/cortex-reconciler:latest'
@@ -392,7 +392,7 @@ resource reconciler 'Microsoft.App/containerApps@2024-03-01' = if (deployReconci
             { name: 'ALLOY_CHART_VERSION', value: alloyChartVersion }
             { name: 'OTEL_EXPORTER_OTLP_ENDPOINT', value: otelExporterEndpoint }
             { name: 'ISTIO_OUTBOUND_TRAFFIC_POLICY', value: outboundTrafficPolicy }
-            { name: 'INGRESS_TLS_SECRET', value: ingressTlsSecret }
+            { name: 'INGRESS_TLS_CREDENTIAL_NAME', value: ingressTlsCredentialName }
           ]
         }
       ]

@@ -51,12 +51,12 @@ type Config struct {
 	// Mesh security + observability. AlloyChartVersion pins the OTel collector
 	// every cluster runs; OTelExporterEndpoint is where it ships telemetry (empty
 	// ⇒ collect only, log locally). OutboundTrafficPolicy is the mesh egress mode
-	// (REGISTRY_ONLY = deny-by-default). IngressTLSSecret, when set, makes the
-	// gateway terminate HTTPS from that cert secret and redirect HTTP → HTTPS.
-	AlloyChartVersion     string
-	OTelExporterEndpoint  string
-	OutboundTrafficPolicy string
-	IngressTLSSecret      string
+	// (REGISTRY_ONLY = deny-by-default). IngressTLSCredentialName, when set, names
+	// the cert secret the gateway terminates HTTPS from (redirecting HTTP → HTTPS).
+	AlloyChartVersion        string
+	OTelExporterEndpoint     string
+	OutboundTrafficPolicy    string
+	IngressTLSCredentialName string
 }
 
 // Load reads .env then the environment. Nothing is defaulted or derived — every
@@ -114,10 +114,10 @@ func Load() Config {
 		ArgoCDVersion:        argocd,
 		IstioVersion:         istio,
 
-		AlloyChartVersion:     alloy,
-		OTelExporterEndpoint:  strings.TrimSpace(env("OTEL_EXPORTER_OTLP_ENDPOINT")),
-		OutboundTrafficPolicy: outbound,
-		IngressTLSSecret:      strings.TrimSpace(env("INGRESS_TLS_SECRET")),
+		AlloyChartVersion:        alloy,
+		OTelExporterEndpoint:     strings.TrimSpace(env("OTEL_EXPORTER_OTLP_ENDPOINT")),
+		OutboundTrafficPolicy:    outbound,
+		IngressTLSCredentialName: strings.TrimSpace(env("INGRESS_TLS_CREDENTIAL_NAME")),
 	}
 }
 

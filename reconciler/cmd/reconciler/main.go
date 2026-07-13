@@ -38,15 +38,15 @@ func main() {
 	var clusterClient *cluster.Client
 	if cfg.ClusterEnabled {
 		clusterClient = cluster.New(cred, cluster.Options{
-			SubscriptionID:        cfg.SubscriptionID,
-			ResourceGroup:         cfg.ClusterResourceGroup,
-			ClusterName:           cfg.ClusterName,
-			ArgoVersion:           cfg.ArgoCDVersion,
-			IstioVersion:          cfg.IstioVersion,
-			AlloyChartVersion:     cfg.AlloyChartVersion,
-			OTelExporterEndpoint:  cfg.OTelExporterEndpoint,
-			OutboundTrafficPolicy: cfg.OutboundTrafficPolicy,
-			IngressTLSSecret:      cfg.IngressTLSSecret,
+			SubscriptionID:           cfg.SubscriptionID,
+			ResourceGroup:            cfg.ClusterResourceGroup,
+			ClusterName:              cfg.ClusterName,
+			ArgoVersion:              cfg.ArgoCDVersion,
+			IstioVersion:             cfg.IstioVersion,
+			AlloyChartVersion:        cfg.AlloyChartVersion,
+			OTelExporterEndpoint:     cfg.OTelExporterEndpoint,
+			OutboundTrafficPolicy:    cfg.OutboundTrafficPolicy,
+			IngressTLSCredentialName: cfg.IngressTLSCredentialName,
 		})
 	}
 

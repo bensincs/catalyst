@@ -133,16 +133,16 @@ containerSecurityContext:
 // tenant applications bind VirtualServices to. With a TLS cert secret it
 // terminates HTTPS (min TLS 1.2) and 301-redirects plain HTTP to it; without
 // one it serves HTTP :80 (auth is still enforced by the JWT policy).
-func defaultGateway(tlsSecret string) *unstructured.Unstructured {
+func defaultGateway(credentialName string) *unstructured.Unstructured {
 	var servers []any
-	if tlsSecret != "" {
+	if credentialName != "" {
 		servers = []any{
 			map[string]any{
 				"port":  map[string]any{"number": int64(443), "name": "https", "protocol": "HTTPS"},
 				"hosts": []any{"*"},
 				"tls": map[string]any{
 					"mode":               "SIMPLE",
-					"credentialName":     tlsSecret,
+					"credentialName":     credentialName,
 					"minProtocolVersion": "TLSV1_2",
 				},
 			},
@@ -191,17 +191,26 @@ func peerAuthentication() *unstructured.Unstructured {
 	}}
 }
 
-// securityHeadersFilter adds hardened response headers (HSTS, no-sniff,
-// frame-deny, strict referrer + CSP) and strips server-fingerprint headers on
-// everything leaving the ingress gateway.
+// securityHeadersFilter adds hardened response headers on everything leaving the
+// ingress gateway. Transport-security headers are always enforced; content
+// headers are only defaulted when the app didn't set its own (so we harden bare
+// apps without clobbering ones that ship a deliberate policy), and no blanket CSP
+// is imposed (that would break most real apps). Server-fingerprint headers are
+// stripped.
 func securityHeadersFilter() *unstructured.Unstructured {
 	lua := `function envoy_on_response(handle)
   local h = handle:headers()
+  -- Always enforce transport hardening (independent of app content).
   h:replace("strict-transport-security", "max-age=63072000; includeSubDomains; preload")
   h:replace("x-content-type-options", "nosniff")
-  h:replace("x-frame-options", "DENY")
-  h:replace("referrer-policy", "no-referrer")
-  h:replace("content-security-policy", "default-src 'none'; frame-ancestors 'none'; base-uri 'none'")
+  -- Safe defaults only when the app has not set its own.
+  if h:get("x-frame-options") == nil and h:get("content-security-policy") == nil then
+    h:replace("x-frame-options", "SAMEORIGIN")
+  end
+  if h:get("referrer-policy") == nil then
+    h:replace("referrer-policy", "strict-origin-when-cross-origin")
+  end
+  -- Don't advertise the server implementation.
   h:remove("server")
   h:remove("x-powered-by")
 end`
@@ -329,6 +338,26 @@ func requireJWTPolicy(auth *shared.IngressAuth) *unstructured.Unstructured {
 					},
 				},
 			},
+		},
+	}}
+}
+
+// denyAllPolicy fails the gateway closed: it selects the ingress gateway with an
+// ALLOW action and no rules, which admits nothing — so with no identity
+// configured the gateway rejects all ingress instead of serving open.
+func denyAllPolicy() *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "security.istio.io/v1",
+		"kind":       "AuthorizationPolicy",
+		"metadata": map[string]any{
+			"name":      authPolicyName,
+			"namespace": istioIngressNS,
+			"labels":    map[string]any{labelManaged: "true", labelSystem: "true"},
+		},
+		"spec": map[string]any{
+			"selector": map[string]any{"matchLabels": map[string]any{"istio": ingressGWLabel}},
+			"action":   "ALLOW",
+			// No rules ⇒ nothing matches ⇒ all ingress denied (fail closed).
 		},
 	}}
 }
