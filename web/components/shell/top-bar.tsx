@@ -5,7 +5,6 @@ import { useConsole } from "@/components/providers/console-provider";
 import { TenantSwitcher } from "./tenant-switcher";
 import { EnvBadge } from "./env-badge";
 import { ThemeToggle } from "./theme-toggle";
-import { AccountMenu } from "./account-menu";
 import { CommandTrigger } from "./command-trigger";
 import styles from "./top-bar.module.css";
 
@@ -31,7 +30,6 @@ export function TopBar() {
         <div className={styles.divider} aria-hidden />
         <EnvBadge />
         <ThemeToggle />
-        <AccountMenu />
       </div>
     </header>
   );

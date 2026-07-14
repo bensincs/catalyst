@@ -106,12 +106,12 @@
   justify-content: center;
   gap: 10px;
   width: 100%;
-  height: 44px;
-  border-radius: var(--radius-lg);
-  background: var(--text);
-  color: var(--canvas);
-  font-size: var(--text-body);
-  font-weight: 560;
+  height: 52px;
+  border-radius: var(--radius-full);
+  background: var(--primary);
+  color: var(--on-primary);
+  font-size: var(--text-body-lg);
+  font-weight: 500;
   transition:
     opacity var(--dur-fast) var(--ease-out-quart),
     transform var(--dur-fast) var(--ease-out-quart);

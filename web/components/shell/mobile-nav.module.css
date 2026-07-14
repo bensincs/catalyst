@@ -59,6 +59,12 @@
   padding: var(--space-sm) 12px var(--space-base);
 }
 
+.foot {
+  flex: none;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+}
+
 @keyframes drawer-in {
   from {
     transform: translateX(-100%);

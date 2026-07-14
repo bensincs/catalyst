@@ -6,7 +6,7 @@ import { X } from "lucide-react";
 import { useConsole } from "@/components/providers/console-provider";
 import { homeForRole } from "@/lib/nav";
 import { BrandMark } from "./brand-mark";
-import { RailNav } from "./side-rail";
+import { RailNav, UserPanel } from "./side-rail";
 import styles from "./mobile-nav.module.css";
 
 export function MobileNav() {
@@ -50,6 +50,9 @@ export function MobileNav() {
         <nav className={styles.nav} aria-label="Primary navigation">
           <RailNav collapsed={false} onNavigate={close} />
         </nav>
+        <div className={styles.foot}>
+          <UserPanel collapsed={false} />
+        </div>
       </div>
     </dialog>
   );

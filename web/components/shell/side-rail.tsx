@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { signOut } from "next-auth/react";
+import { LogOut, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { useConsole } from "@/components/providers/console-provider";
 import { navForRole, homeForRole } from "@/lib/nav";
 import { BrandMark } from "./brand-mark";
@@ -89,6 +90,7 @@ export function SideRail() {
       </nav>
 
       <div className={styles.foot}>
+        <UserPanel collapsed={railCollapsed} />
         <button
           type="button"
           className={styles.collapseBtn}
@@ -107,5 +109,33 @@ export function SideRail() {
         </button>
       </div>
     </aside>
+  );
+}
+
+/** Reference-style user panel pinned to the sidebar foot: identity + a direct
+ *  sign-out. Reused in the mobile nav drawer. */
+export function UserPanel({ collapsed }: { collapsed: boolean }) {
+  const { user, role } = useConsole();
+  return (
+    <div className={styles.userPanel} data-collapsed={collapsed || undefined}>
+      <span className={styles.userAvatar} aria-hidden title={collapsed ? user.name : undefined}>
+        {user.initials}
+      </span>
+      <span className={styles.userWho}>
+        <span className={styles.userName}>{user.name}</span>
+        <span className={styles.userRole}>
+          {role === "platform" ? "Platform Admin" : "Tenant Admin"}
+        </span>
+      </span>
+      <button
+        type="button"
+        className={styles.userLogout}
+        onClick={() => void signOut({ callbackUrl: "/signin" })}
+        aria-label="Sign out"
+        title="Sign out"
+      >
+        <LogOut size={16} strokeWidth={2} />
+      </button>
+    </div>
   );
 }
