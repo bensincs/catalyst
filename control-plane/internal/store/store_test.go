@@ -462,3 +462,28 @@ func TestDeploymentLifecycle(t *testing.T) {
 		t.Fatalf("disabled deployment still desired: %+v", ds.Applications)
 	}
 }
+
+// assignWaves is pure (no DB): a deployment's wave is 1 + the deepest enabled
+// dependency chain; non-app deps are ignored and cycles must not hang.
+func TestAssignWaves(t *testing.T) {
+	apps := []shared.DesiredApplication{
+		{ID: "a"},
+		{ID: "b", DependsOn: []string{"a"}},
+		{ID: "c", DependsOn: []string{"b", "a"}},
+		{ID: "d", DependsOn: []string{"agent-x"}}, // non-app dep is ignored
+	}
+	assignWaves(apps)
+	want := map[string]int{"a": 0, "b": 1, "c": 2, "d": 0}
+	for _, a := range apps {
+		if a.Wave != want[a.ID] {
+			t.Fatalf("wave(%s) = %d, want %d", a.ID, a.Wave, want[a.ID])
+		}
+	}
+
+	// A cycle must terminate (waves stay bounded, no infinite recursion).
+	cyc := []shared.DesiredApplication{
+		{ID: "x", DependsOn: []string{"y"}},
+		{ID: "y", DependsOn: []string{"x"}},
+	}
+	assignWaves(cyc)
+}

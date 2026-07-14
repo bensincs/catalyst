@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Rocket, Plus, Trash2, Pencil, Power } from "lucide-react";
+import { Rocket, Plus, Trash2, Pencil, Power, Cloud, GitBranch, Bot } from "lucide-react";
 import { PageHeader } from "@/components/ui/page-header";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
@@ -10,6 +10,7 @@ import { Field, TextInput, Textarea } from "@/components/ui/form";
 import { EmptyState } from "@/components/ui/empty-state";
 import { StatusBadge } from "@/components/ui/status";
 import { useToast } from "@/components/providers/toast-provider";
+import { WiringEditor } from "./wiring-editor";
 import {
   createApplication,
   updateApplication,
@@ -18,7 +19,15 @@ import {
   disableDeployment,
   type ActionResult,
 } from "@/lib/actions";
-import { HEALTH_META, type Application, type ClusterInfo, type HealthMeta, type Role } from "@/lib/types";
+import {
+  HEALTH_META,
+  type Application,
+  type ClusterInfo,
+  type DepOption,
+  type HealthMeta,
+  type Role,
+  type WireLink,
+} from "@/lib/types";
 import styles from "./memory-stores-view.module.css";
 
 type Tone = HealthMeta["tone"];
@@ -41,10 +50,12 @@ export function DeploymentsView({
   role,
   applications,
   cluster,
+  depOptions = [],
 }: {
   role: Role;
   applications: Application[];
   cluster?: ClusterInfo;
+  depOptions?: DepOption[];
 }) {
   const router = useRouter();
   const { toast } = useToast();
@@ -188,15 +199,12 @@ export function DeploymentsView({
         <DeploymentModal
           key={modal.mode === "edit" ? modal.app.id : "new"}
           app={modal.mode === "edit" ? modal.app : null}
+          depOptions={depOptions.filter((d) => modal.mode !== "edit" || d.id !== modal.app.id)}
           pending={pending}
           onClose={() => setModal(null)}
           onSubmit={(input) =>
             modal.mode === "edit"
-              ? runAction(
-                  () => updateApplication(modal.app.id, { name: input.name, description: input.description }),
-                  `Updated ${input.name}`,
-                  () => setModal(null),
-                )
+              ? runAction(() => updateApplication(modal.app.id, input), `Updated ${input.name}`, () => setModal(null))
               : runAction(() => createApplication(input), `Created ${input.name}`, () => setModal(null))
           }
         />
@@ -217,9 +225,18 @@ function DefinitionChips({ app, showRuntime }: { app: Application; showRuntime: 
       <span className={styles.chip}>
         ns <span className="mono">{app.namespace}</span>
       </span>
-      <span className={styles.chip} title={app.repoURL}>
-        <span className="mono">{app.repoURL}</span>
-      </span>
+      {app.bicep ? (
+        <span className={styles.chip} title="Backed by an Azure Bicep module">
+          <Cloud size={12} strokeWidth={2.2} /> Azure infra
+          {app.wiring.length > 0 ? ` · ${app.wiring.length} wired` : ""}
+        </span>
+      ) : null}
+      {app.dependsOn.length > 0 && (
+        <span className={styles.chip} title="Deploys after its dependencies">
+          <GitBranch size={12} strokeWidth={2.2} /> {app.dependsOn.length} dep
+          {app.dependsOn.length === 1 ? "" : "s"}
+        </span>
+      )}
       {showRuntime && app.syncStatus && (
         <span className={styles.chip} title="Argo CD sync / health">
           {app.syncStatus}
@@ -281,11 +298,13 @@ function ClusterStrip({ cluster }: { cluster: ClusterInfo }) {
 
 function DeploymentModal({
   app,
+  depOptions,
   pending,
   onClose,
   onSubmit,
 }: {
   app: Application | null;
+  depOptions: DepOption[];
   pending: boolean;
   onClose: () => void;
   onSubmit: (input: {
@@ -296,6 +315,9 @@ function DeploymentModal({
     chart: string;
     targetRevision: string;
     values: string;
+    bicep: string;
+    wiring: WireLink[];
+    dependsOn: string[];
   }) => void;
 }) {
   const editing = app !== null;
@@ -306,10 +328,11 @@ function DeploymentModal({
   const [targetRevision, setTargetRevision] = useState(app?.targetRevision ?? "");
   const [namespace, setNamespace] = useState(app?.namespace ?? "");
   const [values, setValues] = useState(app?.values ?? "");
+  const [bicep, setBicep] = useState(app?.bicep ?? "");
+  const [wiring, setWiring] = useState<WireLink[]>(app?.wiring ?? []);
+  const [dependsOn, setDependsOn] = useState<string[]>(app?.dependsOn ?? []);
 
-  const valid = editing
-    ? name.trim().length >= 2
-    : name.trim().length >= 2 && repoURL.trim() !== "" && chart.trim() !== "";
+  const valid = name.trim().length >= 2 && repoURL.trim() !== "" && chart.trim() !== "";
 
   const submit = () =>
     onSubmit({
@@ -320,101 +343,118 @@ function DeploymentModal({
       chart: chart.trim(),
       targetRevision: targetRevision.trim(),
       values,
+      bicep,
+      wiring,
+      dependsOn,
     });
+
+  const toggleDep = (id: string) =>
+    setDependsOn((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
 
   return (
     <Modal
       open
       onClose={onClose}
+      width={960}
       title={editing ? "Edit deployment" : "New deployment"}
-      description={
-        editing
-          ? "Rename or redescribe this deployment. Its chart, repo, values, and namespace are fixed once created."
-          : "A deployable Helm chart. Tenants enable it to install it into their own cluster via Argo CD."
-      }
+      description="A deployable Helm chart, optionally backed by Azure infra (Bicep). Wire the infra's outputs into the chart, and set what it must deploy after."
       footer={
         <>
           <Button onClick={onClose}>Cancel</Button>
           <Button variant="primary" loading={pending} disabled={!valid} onClick={submit}>
-            {editing ? "Save" : "Create deployment"}
+            {editing ? "Save deployment" : "Create deployment"}
           </Button>
         </>
       }
     >
-      <Field label="Name" htmlFor="dep-name" hint="A short name — becomes the Argo Application + release.">
-        <TextInput id="dep-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="ingress-nginx" autoFocus />
-      </Field>
+      <div className={styles.grid2}>
+        <Field label="Name" htmlFor="dep-name" hint="Becomes the Argo Application + release.">
+          <TextInput id="dep-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="ingress-nginx" autoFocus />
+        </Field>
+        <Field label="Namespace" htmlFor="dep-ns" hint="Destination namespace (created if missing).">
+          <TextInput id="dep-ns" value={namespace} onChange={(e) => setNamespace(e.target.value)} placeholder="default" spellCheck={false} />
+        </Field>
+      </div>
       <Field label="Description" htmlFor="dep-desc">
+        <Textarea id="dep-desc" value={description} onChange={(e) => setDescription(e.target.value)} placeholder="What this deployment is for." />
+      </Field>
+
+      <p className={styles.groupLabel}>Helm chart</p>
+      <datalist id="dep-repos">
+        <option value="https://charts.bitnami.com/bitnami" />
+        <option value="https://kubernetes.github.io/ingress-nginx" />
+        <option value="https://prometheus-community.github.io/helm-charts" />
+      </datalist>
+      <Field label="Helm repo / OCI URL" htmlFor="dep-repo" hint="A Helm repository (https://…) or OCI registry (oci://…).">
+        <TextInput
+          id="dep-repo"
+          list="dep-repos"
+          value={repoURL}
+          onChange={(e) => setRepoURL(e.target.value)}
+          placeholder="https://charts.bitnami.com/bitnami"
+          spellCheck={false}
+        />
+      </Field>
+      <div className={styles.grid2}>
+        <Field label="Chart" htmlFor="dep-chart">
+          <TextInput id="dep-chart" value={chart} onChange={(e) => setChart(e.target.value)} placeholder="nginx" spellCheck={false} />
+        </Field>
+        <Field label="Version" htmlFor="dep-ver" hint="Chart version (blank = latest).">
+          <TextInput id="dep-ver" value={targetRevision} onChange={(e) => setTargetRevision(e.target.value)} placeholder="15.14.0" spellCheck={false} />
+        </Field>
+      </div>
+      <Field label="Values (YAML)" htmlFor="dep-values" hint="Base Helm values — wired Bicep outputs are merged in on deploy.">
+        <Textarea id="dep-values" value={values} onChange={(e) => setValues(e.target.value)} spellCheck={false} placeholder={"replicaCount: 2"} />
+      </Field>
+
+      <p className={styles.groupLabel}>Azure infrastructure (Bicep)</p>
+      <Field
+        label="Bicep module"
+        htmlFor="dep-bicep"
+        hint="Provisioned in the tenant's resource group before the chart. Declare output values to wire into Helm."
+      >
         <Textarea
-          id="dep-desc"
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-          placeholder="What this deployment is for."
+          id="dep-bicep"
+          value={bicep}
+          onChange={(e) => setBicep(e.target.value)}
+          spellCheck={false}
+          className={styles.codeArea}
+          placeholder={
+            "param location string = resourceGroup().location\n\nresource db 'Microsoft.DBforPostgreSQL/flexibleServers@2023-03-01-preview' = {\n  name: 'app-db'\n  location: location\n  // …\n}\n\noutput host string = db.properties.fullyQualifiedDomainName"
+          }
         />
       </Field>
 
-      {editing ? (
-        <ReadonlyDefinition app={app} />
-      ) : (
+      {bicep.trim() !== "" && (
         <>
-          <datalist id="dep-repos">
-            <option value="https://charts.bitnami.com/bitnami" />
-            <option value="https://kubernetes.github.io/ingress-nginx" />
-            <option value="https://prometheus-community.github.io/helm-charts" />
-          </datalist>
-          <Field label="Helm repo / OCI URL" htmlFor="dep-repo" hint="A Helm repository (https://…) or OCI registry (oci://…).">
-            <TextInput
-              id="dep-repo"
-              list="dep-repos"
-              value={repoURL}
-              onChange={(e) => setRepoURL(e.target.value)}
-              placeholder="https://charts.bitnami.com/bitnami"
-              spellCheck={false}
-            />
-          </Field>
-          <div className={styles.grid2}>
-            <Field label="Chart" htmlFor="dep-chart">
-              <TextInput id="dep-chart" value={chart} onChange={(e) => setChart(e.target.value)} placeholder="nginx" spellCheck={false} />
-            </Field>
-            <Field label="Version" htmlFor="dep-ver" hint="Chart version (blank = latest).">
-              <TextInput id="dep-ver" value={targetRevision} onChange={(e) => setTargetRevision(e.target.value)} placeholder="15.14.0" spellCheck={false} />
-            </Field>
+          <p className={styles.groupLabel}>Wire outputs → Helm values</p>
+          <WiringEditor bicep={bicep} wiring={wiring} onChange={setWiring} />
+        </>
+      )}
+
+      {depOptions.length > 0 && (
+        <>
+          <p className={styles.groupLabel}>Deploy after</p>
+          <p className={styles.groupHint}>Dependencies converge first — Argo sync-waves order the deploy.</p>
+          <div className={styles.depGrid}>
+            {depOptions.map((o) => {
+              const on = dependsOn.includes(o.id);
+              return (
+                <button
+                  type="button"
+                  key={o.id}
+                  className={styles.depChip}
+                  data-on={on || undefined}
+                  onClick={() => toggleDep(o.id)}
+                >
+                  {o.kind === "agent" ? <Bot size={14} strokeWidth={2.2} /> : <Rocket size={14} strokeWidth={2.2} />}
+                  <span>{o.name}</span>
+                </button>
+              );
+            })}
           </div>
-          <Field label="Namespace" htmlFor="dep-ns" hint="Destination namespace (created if missing).">
-            <TextInput id="dep-ns" value={namespace} onChange={(e) => setNamespace(e.target.value)} placeholder="default" spellCheck={false} />
-          </Field>
-          <Field label="Values (YAML)" htmlFor="dep-values" hint="Optional Helm values overrides.">
-            <Textarea id="dep-values" value={values} onChange={(e) => setValues(e.target.value)} spellCheck={false} placeholder={"replicaCount: 2"} />
-          </Field>
         </>
       )}
     </Modal>
-  );
-}
-
-function ReadonlyDefinition({ app }: { app: Application }) {
-  return (
-    <Field label="Definition">
-      <div className={styles.readonlyDef}>
-        <div className={styles.defFact}>
-          <span className={styles.defFactKey}>Chart</span>
-          <span className={`${styles.defFactVal} mono`}>
-            {app.chart}
-            {app.targetRevision ? `@${app.targetRevision}` : ""}
-          </span>
-        </div>
-        <div className={styles.defFact}>
-          <span className={styles.defFactKey}>Repo</span>
-          <span className={`${styles.defFactVal} mono`}>{app.repoURL}</span>
-        </div>
-        <div className={styles.defFact}>
-          <span className={styles.defFactKey}>Namespace</span>
-          <span className={`${styles.defFactVal} mono`}>{app.namespace}</span>
-        </div>
-      </div>
-      <p className={styles.readonlyNote}>
-        Chart, repo, values, and namespace are fixed once created. To change them, create a new deployment.
-      </p>
-    </Field>
   );
 }

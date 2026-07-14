@@ -780,13 +780,16 @@ func (s *Server) appWriteAllowed(w http.ResponseWriter, r *http.Request, id mode
 func (s *Server) handleCreateApplication(w http.ResponseWriter, r *http.Request) {
 	id, _ := auth.IdentityFrom(r.Context())
 	var body struct {
-		Name           string `json:"name"`
-		Description    string `json:"description"`
-		Namespace      string `json:"namespace"`
-		RepoURL        string `json:"repoURL"`
-		Chart          string `json:"chart"`
-		TargetRevision string `json:"targetRevision"`
-		Values         string `json:"values"`
+		Name           string            `json:"name"`
+		Description    string            `json:"description"`
+		Namespace      string            `json:"namespace"`
+		RepoURL        string            `json:"repoURL"`
+		Chart          string            `json:"chart"`
+		TargetRevision string            `json:"targetRevision"`
+		Values         string            `json:"values"`
+		Bicep          string            `json:"bicep"`
+		Wiring         []shared.WireLink `json:"wiring"`
+		DependsOn      []string          `json:"dependsOn"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
@@ -824,6 +827,9 @@ func (s *Server) handleCreateApplication(w http.ResponseWriter, r *http.Request)
 		Chart:          strings.TrimSpace(body.Chart),
 		TargetRevision: strings.TrimSpace(body.TargetRevision),
 		Values:         body.Values,
+		Bicep:          body.Bicep,
+		Wiring:         body.Wiring,
+		DependsOn:      body.DependsOn,
 	}
 	if err := s.store.CreateApplication(r.Context(), app, id.OID); err != nil {
 		if isDup(err) {
@@ -843,8 +849,16 @@ func (s *Server) handleUpdateApplication(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var body struct {
-		Name        string `json:"name"`
-		Description string `json:"description"`
+		Name           string            `json:"name"`
+		Description    string            `json:"description"`
+		Namespace      string            `json:"namespace"`
+		RepoURL        string            `json:"repoURL"`
+		Chart          string            `json:"chart"`
+		TargetRevision string            `json:"targetRevision"`
+		Values         string            `json:"values"`
+		Bicep          string            `json:"bicep"`
+		Wiring         []shared.WireLink `json:"wiring"`
+		DependsOn      []string          `json:"dependsOn"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
@@ -853,8 +867,27 @@ func (s *Server) handleUpdateApplication(w http.ResponseWriter, r *http.Request)
 		writeErr(w, http.StatusBadRequest, "name is required")
 		return
 	}
-	if err := s.store.UpdateApplication(r.Context(), appID, strings.TrimSpace(body.Name),
-		strings.TrimSpace(body.Description)); err != nil {
+	if strings.TrimSpace(body.RepoURL) == "" || strings.TrimSpace(body.Chart) == "" {
+		writeErr(w, http.StatusBadRequest, "repoURL and chart are required")
+		return
+	}
+	ns := strings.TrimSpace(body.Namespace)
+	if ns == "" {
+		ns = "default"
+	}
+	if err := s.store.UpdateApplication(r.Context(), model.Application{
+		ID:             appID,
+		Name:           strings.TrimSpace(body.Name),
+		Description:    strings.TrimSpace(body.Description),
+		Namespace:      ns,
+		RepoURL:        strings.TrimSpace(body.RepoURL),
+		Chart:          strings.TrimSpace(body.Chart),
+		TargetRevision: strings.TrimSpace(body.TargetRevision),
+		Values:         body.Values,
+		Bicep:          body.Bicep,
+		Wiring:         body.Wiring,
+		DependsOn:      body.DependsOn,
+	}); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			writeErr(w, http.StatusNotFound, "deployment not found")
 			return

@@ -98,9 +98,24 @@ export interface ClusterInfo {
   detail?: string;
 }
 
+/** Maps a Bicep deployment output to a Helm values path (the wiring). */
+export interface WireLink {
+  bicepOutput: string;
+  helmPath: string;
+}
+
+/** A dependency candidate (another deployment or agent) a deployment can wait on. */
+export interface DepOption {
+  id: string;
+  name: string;
+  kind: "app" | "agent";
+}
+
 /** A deployment defined as a catalog entity (like an agent or memory store):
  *  authored by the platform or a tenant, entitled to tenants, and enabled per
- *  tenant — then realized as an Argo CD Application in that tenant's cluster. */
+ *  tenant — then realized as an Argo CD Application in that tenant's cluster.
+ *  It may carry an Azure infra module (Bicep) whose outputs are wired into the
+ *  Helm values, and dependencies that must deploy first. */
 export interface Application {
   id: string;
   name: string;
@@ -111,6 +126,9 @@ export interface Application {
   chart: string;
   targetRevision: string;
   values?: string;
+  bicep?: string; // Azure infra module, provisioned before the chart
+  wiring: WireLink[]; // Bicep output → Helm values path
+  dependsOn: string[]; // ids of apps/agents that must converge first
   createdAt: string;
   // platform view
   ownerName?: string;

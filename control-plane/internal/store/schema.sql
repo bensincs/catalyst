@@ -217,6 +217,11 @@ CREATE TABLE IF NOT EXISTS applications (
 -- back via the heartbeat.
 ALTER TABLE applications ADD COLUMN IF NOT EXISTS owner_tenant text NOT NULL DEFAULT '';
 ALTER TABLE applications ADD COLUMN IF NOT EXISTS description  text NOT NULL DEFAULT '';
+-- Azure infra + wiring + dependencies. bicep is provisioned before the chart;
+-- wiring maps Bicep outputs → Helm values paths; depends_on gates deploy order.
+ALTER TABLE applications ADD COLUMN IF NOT EXISTS bicep        text    NOT NULL DEFAULT '';
+ALTER TABLE applications ADD COLUMN IF NOT EXISTS wiring       jsonb   NOT NULL DEFAULT '[]';
+ALTER TABLE applications ADD COLUMN IF NOT EXISTS depends_on   text[]  NOT NULL DEFAULT '{}';
 ALTER TABLE tenants      ADD COLUMN IF NOT EXISTS entitled_deployments text[] NOT NULL DEFAULT '{}';
 
 CREATE TABLE IF NOT EXISTS tenant_deployments (

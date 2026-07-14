@@ -83,10 +83,18 @@ type DesiredAgent struct {
 	PublishTo  []string        `json:"publishTo"`
 }
 
-// DesiredApplication is a Helm deployment a tenant wants running in its cluster
-// (control plane → reconciler). The reconciler realizes it by stamping an Argo
-// CD Application CR (Helm source) into the cluster; Argo CD then installs the
-// chart and keeps it converged.
+// WireLink maps one Bicep deployment output to a Helm values path, so the chart
+// is configured with the address/secret of the Azure infra that backs it.
+type WireLink struct {
+	BicepOutput string `json:"bicepOutput"` // name of a Bicep `output`
+	HelmPath    string `json:"helmPath"`    // dotted Helm values path, e.g. database.host
+}
+
+// DesiredApplication is a deployment a tenant wants running in its cluster
+// (control plane → reconciler). It is realized in two steps: the reconciler
+// provisions the app's Bicep infra (Azure) if any, wires those outputs into the
+// Helm values, then stamps an Argo CD Application (Helm source) — ordered by Wave
+// so dependencies converge first.
 type DesiredApplication struct {
 	ID             string `json:"id"`
 	Name           string `json:"name"`           // Argo Application name (also the release)
@@ -95,6 +103,14 @@ type DesiredApplication struct {
 	Chart          string `json:"chart"`          // chart name
 	TargetRevision string `json:"targetRevision"` // chart version
 	Values         string `json:"values,omitempty"`
+	// Azure infra + wiring. Bicep is provisioned before the chart; its outputs are
+	// injected into the Helm values per Wiring.
+	Bicep  string     `json:"bicep,omitempty"`
+	Wiring []WireLink `json:"wiring,omitempty"`
+	// DependsOn are ids of other entities (apps/agents) that must converge first;
+	// Wave is the derived Argo sync-wave (0 = no deps) that enforces the order.
+	DependsOn []string `json:"dependsOn,omitempty"`
+	Wave      int      `json:"wave,omitempty"`
 }
 
 // IngressJWTRule is one accepted token issuer for the cluster's ingress gateway:

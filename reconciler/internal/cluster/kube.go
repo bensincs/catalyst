@@ -3,6 +3,7 @@ package cluster
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/inception42/cortex/shared"
@@ -288,6 +289,11 @@ func buildApplication(a shared.DesiredApplication, name string) *unstructured.Un
 			"labels": map[string]any{
 				labelManaged: "true",
 				labelAppID:   a.ID,
+			},
+			// Sync-wave orders deploys so a deployment's dependencies converge
+			// before it (the control plane derives Wave from the dependency graph).
+			"annotations": map[string]any{
+				"argocd.argoproj.io/sync-wave": strconv.Itoa(a.Wave),
 			},
 			// Cascade-delete the app's workloads when the Application is pruned,
 			// so a removed deployment actually stops running (no orphans).

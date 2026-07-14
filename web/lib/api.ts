@@ -6,6 +6,7 @@ import type {
   AgentDefinition,
   AgentType,
   Application,
+  WireLink,
   CatalogAgent,
   ClusterInfo,
   EnabledAgent,
@@ -381,6 +382,9 @@ interface ApiApplication {
   chart: string;
   targetRevision: string;
   values?: string;
+  bicep?: string;
+  wiring?: WireLink[] | null;
+  dependsOn?: string[] | null;
   createdAt: string;
   ownerName?: string;
   platform?: boolean;
@@ -404,6 +408,9 @@ export const getApplications = cache(async (): Promise<Application[]> => {
     chart: a.chart,
     targetRevision: a.targetRevision,
     values: a.values,
+    bicep: a.bicep ?? "",
+    wiring: a.wiring ?? [],
+    dependsOn: a.dependsOn ?? [],
     createdAt: a.createdAt,
     ownerName: a.ownerName,
     platform: a.platform ?? a.owner === "",

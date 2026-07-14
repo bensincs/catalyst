@@ -1048,10 +1048,12 @@ func (s *Store) SyncDesired(ctx context.Context, tid string) (shared.DesiredStat
 		return out, err
 	}
 
-	// Deployments ENABLED in this tenant — the reconciler stamps each as an Argo
-	// CD Application in the tenant's cluster (mirrors the enabled-stores join).
+	// Deployments ENABLED in this tenant — the reconciler provisions each app's
+	// Bicep infra, wires its outputs into the Helm values, and stamps an Argo CD
+	// Application. Wave (below) orders them so dependencies converge first.
 	arows, err := s.pool.Query(ctx,
-		`SELECT a.id, a.name, a.namespace, a.repo_url, a.chart, a.target_revision, a.values
+		`SELECT a.id, a.name, a.namespace, a.repo_url, a.chart, a.target_revision, a.values,
+		        a.bicep, a.wiring, a.depends_on
 		 FROM applications a JOIN tenant_deployments td ON td.app_id = a.id AND td.tenant_slug = $1
 		 ORDER BY td.sort_order`, t.ID)
 	if err != nil {
@@ -1060,14 +1062,20 @@ func (s *Store) SyncDesired(ctx context.Context, tid string) (shared.DesiredStat
 	defer arows.Close()
 	for arows.Next() {
 		var da shared.DesiredApplication
-		if err := arows.Scan(&da.ID, &da.Name, &da.Namespace, &da.RepoURL, &da.Chart, &da.TargetRevision, &da.Values); err != nil {
+		var wraw []byte
+		if err := arows.Scan(&da.ID, &da.Name, &da.Namespace, &da.RepoURL, &da.Chart, &da.TargetRevision, &da.Values,
+			&da.Bicep, &wraw, &da.DependsOn); err != nil {
 			return out, err
 		}
+		da.Wiring = wiringFromRaw(wraw)
 		out.Applications = append(out.Applications, da)
 	}
 	if err := arows.Err(); err != nil {
 		return out, err
 	}
+	// Order deploys: a deployment's Wave is 1 + the max Wave of its enabled
+	// dependencies, so Argo sync-waves converge dependencies first.
+	assignWaves(out.Applications)
 	return out, nil
 }
 
@@ -1161,11 +1169,76 @@ func (s *Store) ApplyHeartbeat(ctx context.Context, hb shared.Heartbeat) error {
 var ErrDeploymentNotAccessible = errors.New("deployment not accessible to tenant")
 
 const applicationCols = `a.id, a.name, a.description, a.owner_tenant, a.namespace,
-	a.repo_url, a.chart, a.target_revision, a.values, a.created_by, a.created_at`
+	a.repo_url, a.chart, a.target_revision, a.values, a.bicep, a.wiring, a.depends_on, a.created_by, a.created_at`
 
-func appScanDest(a *model.Application) []any {
+// appScanDest scans the fixed columns; wiring (jsonb) is captured raw and
+// unmarshalled by the caller via wiringFromRaw.
+func appScanDest(a *model.Application, wiringRaw *[]byte) []any {
 	return []any{&a.ID, &a.Name, &a.Description, &a.Owner, &a.Namespace,
-		&a.RepoURL, &a.Chart, &a.TargetRevision, &a.Values, &a.CreatedBy, &a.CreatedAt}
+		&a.RepoURL, &a.Chart, &a.TargetRevision, &a.Values, &a.Bicep, wiringRaw, &a.DependsOn, &a.CreatedBy, &a.CreatedAt}
+}
+
+func wiringFromRaw(raw []byte) []shared.WireLink {
+	out := []shared.WireLink{}
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &out)
+	}
+	return out
+}
+
+func wiringJSON(w []shared.WireLink) []byte {
+	if len(w) == 0 {
+		return []byte("[]")
+	}
+	b, err := json.Marshal(w)
+	if err != nil {
+		return []byte("[]")
+	}
+	return b
+}
+
+func depsArray(d []string) []string {
+	if d == nil {
+		return []string{}
+	}
+	return d
+}
+
+// assignWaves sets each application's Wave to 1 + the max Wave of its enabled
+// dependencies (app → app edges only), so Argo sync-waves converge dependencies
+// first. Dependencies that aren't enabled applications here (e.g. agents, which
+// provision into Foundry in parallel) don't gate cluster ordering. Cycles are
+// broken defensively so a bad graph can't hang the sync.
+func assignWaves(apps []shared.DesiredApplication) {
+	idx := make(map[string]int, len(apps))
+	for i, a := range apps {
+		idx[a.ID] = i
+	}
+	wave := make([]int, len(apps))
+	state := make([]int, len(apps)) // 0=unvisited, 1=in-progress, 2=done
+	var visit func(i int) int
+	visit = func(i int) int {
+		switch state[i] {
+		case 2:
+			return wave[i]
+		case 1:
+			return 0 // cycle back-edge — don't count it
+		}
+		state[i] = 1
+		w := 0
+		for _, dep := range apps[i].DependsOn {
+			if j, ok := idx[dep]; ok {
+				if dw := visit(j) + 1; dw > w {
+					w = dw
+				}
+			}
+		}
+		wave[i], state[i] = w, 2
+		return w
+	}
+	for i := range apps {
+		apps[i].Wave = visit(i)
+	}
 }
 
 // deriveDeploymentHealth maps Argo's sync/health vocabulary onto the shared
@@ -1194,9 +1267,11 @@ func (s *Store) ApplicationList(ctx context.Context) ([]model.Application, error
 	out := []model.Application{}
 	for rows.Next() {
 		var a model.Application
-		if err := rows.Scan(append(appScanDest(&a), &a.OwnerName)...); err != nil {
+		var wraw []byte
+		if err := rows.Scan(append(appScanDest(&a, &wraw), &a.OwnerName)...); err != nil {
 			return nil, err
 		}
+		a.Wiring = wiringFromRaw(wraw)
 		a.Platform = a.Owner == ""
 		out = append(out, a)
 	}
@@ -1232,11 +1307,13 @@ func (s *Store) ApplicationsForTenant(ctx context.Context, slug string) ([]model
 	out := []model.Application{}
 	for rows.Next() {
 		var a model.Application
+		var wraw []byte
 		var enabled bool
 		var sync, health string
-		if err := rows.Scan(append(appScanDest(&a), &enabled, &sync, &health)...); err != nil {
+		if err := rows.Scan(append(appScanDest(&a, &wraw), &enabled, &sync, &health)...); err != nil {
 			return nil, err
 		}
+		a.Wiring = wiringFromRaw(wraw)
 		a.Platform = a.Owner == ""
 		a.Owned = a.Owner == slug
 		a.Entitled = entitledSet[a.ID]
@@ -1252,10 +1329,12 @@ func (s *Store) ApplicationsForTenant(ctx context.Context, slug string) ([]model
 
 func (s *Store) ApplicationByID(ctx context.Context, id string) (model.Application, error) {
 	var a model.Application
-	err := s.pool.QueryRow(ctx, `SELECT `+applicationCols+` FROM applications a WHERE a.id = $1`, id).Scan(appScanDest(&a)...)
+	var wraw []byte
+	err := s.pool.QueryRow(ctx, `SELECT `+applicationCols+` FROM applications a WHERE a.id = $1`, id).Scan(appScanDest(&a, &wraw)...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return a, ErrNotFound
 	}
+	a.Wiring = wiringFromRaw(wraw)
 	a.Platform = a.Owner == ""
 	return a, err
 }
@@ -1263,17 +1342,23 @@ func (s *Store) ApplicationByID(ctx context.Context, id string) (model.Applicati
 // CreateApplication inserts a deployment definition (Owner "" = platform-authored).
 func (s *Store) CreateApplication(ctx context.Context, a model.Application, createdBy string) error {
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO applications (id, name, description, owner_tenant, namespace, repo_url, chart, target_revision, values, created_by)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-		a.ID, a.Name, a.Description, a.Owner, a.Namespace, a.RepoURL, a.Chart, a.TargetRevision, a.Values, createdBy)
+		`INSERT INTO applications (id, name, description, owner_tenant, namespace, repo_url, chart, target_revision, values, bicep, wiring, depends_on, created_by)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+		a.ID, a.Name, a.Description, a.Owner, a.Namespace, a.RepoURL, a.Chart, a.TargetRevision, a.Values,
+		a.Bicep, wiringJSON(a.Wiring), depsArray(a.DependsOn), createdBy)
 	return err
 }
 
-// UpdateApplication changes only name + description; the deployment definition
-// (chart/repo/values/namespace) is immutable, like a memory store's.
-func (s *Store) UpdateApplication(ctx context.Context, id, name, description string) error {
+// UpdateApplication updates the full deployment definition. Unlike a memory
+// store, a deployment's chart/infra/wiring/deps are tunable — Argo re-syncs and
+// the Bicep re-deploys on the next reconcile.
+func (s *Store) UpdateApplication(ctx context.Context, a model.Application) error {
 	tag, err := s.pool.Exec(ctx,
-		`UPDATE applications SET name = $2, description = $3 WHERE id = $1`, id, name, description)
+		`UPDATE applications SET name = $2, description = $3, namespace = $4, repo_url = $5,
+		   chart = $6, target_revision = $7, values = $8, bicep = $9, wiring = $10, depends_on = $11
+		 WHERE id = $1`,
+		a.ID, a.Name, a.Description, a.Namespace, a.RepoURL, a.Chart, a.TargetRevision, a.Values,
+		a.Bicep, wiringJSON(a.Wiring), depsArray(a.DependsOn))
 	if err != nil {
 		return err
 	}

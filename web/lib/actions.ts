@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { apiSend, ApiError } from "@/lib/api";
-import type { AgentDefinition, AgentType, MemoryStoreDefinition } from "@/lib/types";
+import type { AgentDefinition, AgentType, MemoryStoreDefinition, WireLink } from "@/lib/types";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
 
@@ -149,17 +149,31 @@ export async function createApplication(input: {
   chart: string;
   targetRevision: string;
   values: string;
+  bicep: string;
+  wiring: WireLink[];
+  dependsOn: string[];
 }): Promise<ActionResult> {
-  return run(() => apiSend("POST", "/api/applications", input), ["/deployments"]);
+  return run(() => apiSend("POST", "/api/applications", input), ["/deployments", "/catalog"]);
 }
 
 export async function updateApplication(
   id: string,
-  input: { name: string; description: string },
+  input: {
+    name: string;
+    description: string;
+    namespace: string;
+    repoURL: string;
+    chart: string;
+    targetRevision: string;
+    values: string;
+    bicep: string;
+    wiring: WireLink[];
+    dependsOn: string[];
+  },
 ): Promise<ActionResult> {
   return run(
     () => apiSend("PATCH", `/api/applications/${encodeURIComponent(id)}`, input),
-    ["/deployments"],
+    ["/deployments", "/catalog"],
   );
 }
 

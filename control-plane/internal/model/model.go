@@ -182,17 +182,20 @@ type ClusterInfo struct {
 // entitled to tenants, and explicitly enabled per tenant — then realized as an
 // Argo CD Application in that tenant's cluster.
 type Application struct {
-	ID             string    `json:"id"`
-	Name           string    `json:"name"`
-	Description    string    `json:"description"`
-	Owner          string    `json:"owner"` // "" = platform-authored; else tenant slug
-	Namespace      string    `json:"namespace"`
-	RepoURL        string    `json:"repoURL"`
-	Chart          string    `json:"chart"`
-	TargetRevision string    `json:"targetRevision"`
-	Values         string    `json:"values,omitempty"`
-	CreatedBy      string    `json:"createdBy,omitempty"`
-	CreatedAt      time.Time `json:"createdAt"`
+	ID             string            `json:"id"`
+	Name           string            `json:"name"`
+	Description    string            `json:"description"`
+	Owner          string            `json:"owner"` // "" = platform-authored; else tenant slug
+	Namespace      string            `json:"namespace"`
+	RepoURL        string            `json:"repoURL"`
+	Chart          string            `json:"chart"`
+	TargetRevision string            `json:"targetRevision"`
+	Values         string            `json:"values,omitempty"`
+	Bicep          string            `json:"bicep,omitempty"` // Azure infra module (provisioned before the chart)
+	Wiring         []shared.WireLink `json:"wiring"`          // Bicep output → Helm values path
+	DependsOn      []string          `json:"dependsOn"`       // ids of apps/agents that must converge first
+	CreatedBy      string            `json:"createdBy,omitempty"`
+	CreatedAt      time.Time         `json:"createdAt"`
 
 	// Populated in the tenant view (per-tenant enablement + runtime status):
 	Platform     bool   `json:"platform"`               // platform-authored (vs tenant-owned)

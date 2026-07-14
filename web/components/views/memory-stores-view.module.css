@@ -142,7 +142,61 @@
   font-size: var(--text-body-sm);
   font-weight: 600;
   color: var(--text);
-  margin: 4px 0 2px;
+  margin: 12px 0 2px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.groupHint {
+  font-size: var(--text-caption);
+  color: var(--text-muted);
+  margin: -2px 0 4px;
+}
+
+/* Monospace code editor (Bicep / YAML) */
+.codeArea {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: var(--text-body-sm);
+  line-height: 1.55;
+  min-height: 168px;
+  tab-size: 2;
+}
+
+/* Dependency picker — toggleable pills of other apps/agents */
+.depGrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.depChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 13px;
+  border-radius: var(--radius-full);
+  border: 1.5px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: var(--text-body-sm);
+  font-weight: 500;
+  transition: border-color var(--dur-fast) var(--ease-out-quart),
+    background-color var(--dur-fast) var(--ease-out-quart),
+    color var(--dur-fast) var(--ease-out-quart);
+}
+.depChip svg {
+  color: var(--text-muted);
+  flex: none;
+}
+.depChip:hover {
+  border-color: var(--text-disabled);
+  color: var(--text);
+}
+.depChip[data-on] {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--on-primary);
+}
+.depChip[data-on] svg {
+  color: var(--on-primary);
 }
 
 /* Read-only definition shown when editing (definition is immutable) */
