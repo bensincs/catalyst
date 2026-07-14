@@ -69,6 +69,7 @@ func (s *Server) Router() http.Handler {
 			r.Get("/tenants", s.handleTenantsRegistry)
 			r.Patch("/tenants/{slug}/entitlements", s.handleSetEntitlements)
 			r.Patch("/tenants/{slug}/store-entitlements", s.handleSetStoreEntitlements)
+			r.Patch("/tenants/{slug}/deployment-entitlements", s.handleSetDeploymentEntitlements)
 			r.Patch("/tenants/{slug}/enabled", s.handleSetTenantEnabled)
 
 			// Memory stores (platform-authored + tenant-created)
@@ -77,17 +78,20 @@ func (s *Server) Router() http.Handler {
 			r.Patch("/memory-stores/{id}", s.handleUpdateMemoryStore)
 			r.Delete("/memory-stores/{id}", s.handleDeleteMemoryStore)
 
+			// Deployments — catalog entities (platform-authored + tenant-created)
+			r.Get("/applications", s.handleApplications)
+			r.Post("/applications", s.handleCreateApplication)
+			r.Patch("/applications/{id}", s.handleUpdateApplication)
+			r.Delete("/applications/{id}", s.handleDeleteApplication)
+
 			// Tenant desired state
 			r.Post("/tenant/agents", s.handleEnableAgent)
 			r.Delete("/tenant/agents/{agentId}", s.handleDisableAgent)
 			r.Post("/tenant/agents/{agentId}/store", s.handleConnectAgentStore)
 			r.Post("/tenant/stores/{storeId}", s.handleEnableStore)
 			r.Delete("/tenant/stores/{storeId}", s.handleDisableStore)
-
-			// Applications (Helm deployments → Argo CD) in the tenant's cluster
-			r.Get("/applications", s.handleApplications)
-			r.Post("/applications", s.handleCreateApplication)
-			r.Delete("/applications/{id}", s.handleDeleteApplication)
+			r.Post("/tenant/deployments/{id}", s.handleEnableDeployment)
+			r.Delete("/tenant/deployments/{id}", s.handleDisableDeployment)
 		})
 	})
 
@@ -721,9 +725,19 @@ func (s *Server) handleDisableStore(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-/* ── Applications (Helm deployments → Argo CD, tenant cluster) ────────────── */
+/* ── Deployments — catalog entities (like memory stores) ─────────────────── */
 
 func (s *Server) handleApplications(w http.ResponseWriter, r *http.Request) {
+	id, _ := auth.IdentityFrom(r.Context())
+	if id.Role == model.RolePlatform {
+		list, err := s.store.ApplicationList(r.Context())
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"applications": list})
+		return
+	}
 	t, ok := s.callerTenant(w, r)
 	if !ok {
 		return
@@ -736,14 +750,38 @@ func (s *Server) handleApplications(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"applications": list})
 }
 
+// appWriteAllowed loads a deployment and checks the caller may modify it:
+// platform admins any, a tenant only its own.
+func (s *Server) appWriteAllowed(w http.ResponseWriter, r *http.Request, id model.Identity, appID string) bool {
+	a, err := s.store.ApplicationByID(r.Context(), appID)
+	if errors.Is(err, store.ErrNotFound) {
+		writeErr(w, http.StatusNotFound, "deployment not found")
+		return false
+	}
+	if err != nil {
+		s.fail(w, r, err)
+		return false
+	}
+	if id.Role == model.RolePlatform {
+		return true
+	}
+	t, err := s.store.EnsureTenantForTID(r.Context(), id.TID, orgNameFromEmail(id.Email))
+	if err != nil {
+		s.fail(w, r, err)
+		return false
+	}
+	if a.Owner != t.ID {
+		writeErr(w, http.StatusForbidden, "not your deployment")
+		return false
+	}
+	return true
+}
+
 func (s *Server) handleCreateApplication(w http.ResponseWriter, r *http.Request) {
 	id, _ := auth.IdentityFrom(r.Context())
-	t, ok := s.callerTenant(w, r)
-	if !ok {
-		return
-	}
 	var body struct {
 		Name           string `json:"name"`
+		Description    string `json:"description"`
 		Namespace      string `json:"namespace"`
 		RepoURL        string `json:"repoURL"`
 		Chart          string `json:"chart"`
@@ -767,16 +805,27 @@ func (s *Server) handleCreateApplication(w http.ResponseWriter, r *http.Request)
 	if ns == "" {
 		ns = "default"
 	}
+	owner := "" // platform-authored by default
+	if id.Role == model.RoleTenant {
+		t, ok := s.callerTenant(w, r)
+		if !ok {
+			return
+		}
+		owner = t.ID
+		slug = t.ID + "-" + slug // namespace tenant deployments to avoid slug collisions
+	}
 	app := model.Application{
-		ID:             t.ID + "-" + slug,
+		ID:             slug,
 		Name:           name,
+		Description:    strings.TrimSpace(body.Description),
+		Owner:          owner,
 		Namespace:      ns,
 		RepoURL:        strings.TrimSpace(body.RepoURL),
 		Chart:          strings.TrimSpace(body.Chart),
 		TargetRevision: strings.TrimSpace(body.TargetRevision),
 		Values:         body.Values,
 	}
-	if err := s.store.CreateApplication(r.Context(), t.ID, app, id.OID); err != nil {
+	if err := s.store.CreateApplication(r.Context(), app, id.OID); err != nil {
 		if isDup(err) {
 			writeErr(w, http.StatusConflict, "a deployment with that name already exists")
 			return
@@ -787,12 +836,42 @@ func (s *Server) handleCreateApplication(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusCreated, map[string]string{"id": app.ID})
 }
 
-func (s *Server) handleDeleteApplication(w http.ResponseWriter, r *http.Request) {
-	t, ok := s.callerTenant(w, r)
-	if !ok {
+func (s *Server) handleUpdateApplication(w http.ResponseWriter, r *http.Request) {
+	id, _ := auth.IdentityFrom(r.Context())
+	appID := chi.URLParam(r, "id")
+	if !s.appWriteAllowed(w, r, id, appID) {
 		return
 	}
-	if err := s.store.DeleteApplication(r.Context(), t.ID, chi.URLParam(r, "id")); err != nil {
+	var body struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if strings.TrimSpace(body.Name) == "" {
+		writeErr(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	if err := s.store.UpdateApplication(r.Context(), appID, strings.TrimSpace(body.Name),
+		strings.TrimSpace(body.Description)); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "deployment not found")
+			return
+		}
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
+func (s *Server) handleDeleteApplication(w http.ResponseWriter, r *http.Request) {
+	id, _ := auth.IdentityFrom(r.Context())
+	appID := chi.URLParam(r, "id")
+	if !s.appWriteAllowed(w, r, id, appID) {
+		return
+	}
+	if err := s.store.DeleteApplication(r.Context(), appID); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			writeErr(w, http.StatusNotFound, "deployment not found")
 			return
@@ -801,6 +880,61 @@ func (s *Server) handleDeleteApplication(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+func (s *Server) handleSetDeploymentEntitlements(w http.ResponseWriter, r *http.Request) {
+	id, _ := auth.IdentityFrom(r.Context())
+	if !s.requirePlatform(w, id) {
+		return
+	}
+	var body struct {
+		EntitledDeployments []string `json:"entitledDeployments"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if body.EntitledDeployments == nil {
+		body.EntitledDeployments = []string{}
+	}
+	if err := s.store.SetDeploymentEntitlements(r.Context(), chi.URLParam(r, "slug"), body.EntitledDeployments); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "tenant not found")
+			return
+		}
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
+func (s *Server) handleEnableDeployment(w http.ResponseWriter, r *http.Request) {
+	t, ok := s.callerTenant(w, r)
+	if !ok {
+		return
+	}
+	switch err := s.store.EnableDeployment(r.Context(), t.ID, chi.URLParam(r, "id")); {
+	case errors.Is(err, store.ErrDeploymentNotAccessible):
+		writeErr(w, http.StatusForbidden, "that deployment isn't available to your tenant")
+	case err != nil:
+		s.fail(w, r, err)
+	default:
+		writeJSON(w, http.StatusOK, map[string]string{"status": "enabled"})
+	}
+}
+
+func (s *Server) handleDisableDeployment(w http.ResponseWriter, r *http.Request) {
+	t, ok := s.callerTenant(w, r)
+	if !ok {
+		return
+	}
+	switch err := s.store.DisableDeployment(r.Context(), t.ID, chi.URLParam(r, "id")); {
+	case errors.Is(err, store.ErrNotFound):
+		writeErr(w, http.StatusNotFound, "deployment not enabled")
+	case err != nil:
+		s.fail(w, r, err)
+	default:
+		writeJSON(w, http.StatusOK, map[string]string{"status": "disabled"})
+	}
 }
 
 /* ── Reconciler (in-tenant, Entra-token auth; tenant = token tid) ─────────── */

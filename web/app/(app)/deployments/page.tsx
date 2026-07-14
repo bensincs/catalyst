@@ -1,23 +1,16 @@
-import { Rocket } from "lucide-react";
 import { getApplications, getMe, getMyContext } from "@/lib/api";
 import { DeploymentsView } from "@/components/views/deployments-view";
-import { PlaceholderPage } from "@/components/views/placeholder-page";
+import type { ClusterInfo } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
 export default async function DeploymentsPage() {
   const me = await getMe();
-  if (me.role !== "tenant") {
-    return (
-      <PlaceholderPage
-        title="Deployments"
-        description="Helm deployments run in each tenant's own cluster."
-        icon={Rocket}
-        emptyTitle="Deployments are per-tenant"
-        emptyBody="As a platform admin, drill into a tenant from the Fleet to see its cluster and deployments."
-      />
-    );
+  const apps = await getApplications();
+  // Tenants also see their own cluster status; the platform view is the catalog.
+  let cluster: ClusterInfo | undefined;
+  if (me.role === "tenant") {
+    cluster = (await getMyContext()).tenant.cluster;
   }
-  const [apps, ctx] = await Promise.all([getApplications(), getMyContext()]);
-  return <DeploymentsView cluster={ctx.tenant.cluster} applications={apps} />;
+  return <DeploymentsView role={me.role} applications={apps} cluster={cluster} />;
 }

@@ -130,9 +130,10 @@ type CatalogAgent struct {
 // TenantRegistryRow is a fleet tenant plus its entitlements (platform view).
 type TenantRegistryRow struct {
 	Tenant
-	EntitledAgents []string `json:"entitledAgents"`
-	EntitledCount  int      `json:"entitledCount"`
-	EntitledStores []string `json:"entitledStores"`
+	EntitledAgents      []string `json:"entitledAgents"`
+	EntitledCount       int      `json:"entitledCount"`
+	EntitledStores      []string `json:"entitledStores"`
+	EntitledDeployments []string `json:"entitledDeployments"`
 }
 
 // MemoryStore is a reusable Foundry memory configuration that agents connect to.
@@ -176,16 +177,31 @@ type ClusterInfo struct {
 
 // Application is a Helm deployment a tenant runs in its cluster, realized as an
 // Argo CD Application. sync/health are reported back by the reconciler.
+// Application is a Helm deployment defined as a catalog entity (like an agent or
+// memory store): authored by the platform (Owner "") or a tenant (Owner = slug),
+// entitled to tenants, and explicitly enabled per tenant — then realized as an
+// Argo CD Application in that tenant's cluster.
 type Application struct {
 	ID             string    `json:"id"`
 	Name           string    `json:"name"`
+	Description    string    `json:"description"`
+	Owner          string    `json:"owner"` // "" = platform-authored; else tenant slug
 	Namespace      string    `json:"namespace"`
 	RepoURL        string    `json:"repoURL"`
 	Chart          string    `json:"chart"`
 	TargetRevision string    `json:"targetRevision"`
 	Values         string    `json:"values,omitempty"`
-	SyncStatus     string    `json:"syncStatus"`
-	HealthStatus   string    `json:"healthStatus"`
 	CreatedBy      string    `json:"createdBy,omitempty"`
 	CreatedAt      time.Time `json:"createdAt"`
+
+	// Populated in the tenant view (per-tenant enablement + runtime status):
+	Platform     bool   `json:"platform"`               // platform-authored (vs tenant-owned)
+	Owned        bool   `json:"owned"`                  // owned by the viewing tenant
+	Entitled     bool   `json:"entitled"`               // entitled to the viewing tenant
+	Enabled      bool   `json:"enabled"`                // explicitly enabled (deployed) in the viewing tenant
+	Health       string `json:"health,omitempty"`       // per-tenant lifecycle: reconciling | live | blocked
+	SyncStatus   string `json:"syncStatus,omitempty"`   // Argo sync when enabled
+	HealthStatus string `json:"healthStatus,omitempty"` // Argo health when enabled
+	// Populated in the platform view:
+	OwnerName string `json:"ownerName,omitempty"` // owning tenant's display name
 }

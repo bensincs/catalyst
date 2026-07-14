@@ -98,19 +98,30 @@ export interface ClusterInfo {
   detail?: string;
 }
 
-/** A Helm deployment a tenant runs in its cluster (realized as an Argo CD
- * Application). sync/health are reported by the reconciler. */
+/** A deployment defined as a catalog entity (like an agent or memory store):
+ *  authored by the platform or a tenant, entitled to tenants, and enabled per
+ *  tenant — then realized as an Argo CD Application in that tenant's cluster. */
 export interface Application {
   id: string;
   name: string;
+  description: string;
+  owner: string; // "" = platform-authored; else tenant slug
   namespace: string;
   repoURL: string;
   chart: string;
   targetRevision: string;
   values?: string;
-  syncStatus: string; // Synced | OutOfSync | Unknown | pending
-  healthStatus: string; // Healthy | Progressing | Degraded | pending
   createdAt: string;
+  // platform view
+  ownerName?: string;
+  // tenant view flags
+  platform: boolean;
+  owned: boolean;
+  entitled: boolean;
+  enabled?: boolean; // explicitly enabled (deployed) in the viewing tenant
+  health?: Health; // per-tenant lifecycle when enabled: reconciling | live | blocked
+  syncStatus?: string; // Argo sync when enabled
+  healthStatus?: string; // Argo health when enabled
 }
 
 export interface TenantContextInfo {
@@ -182,6 +193,7 @@ export interface TenantRegistryRow {
   entitledAgents: string[];
   entitledCount: number;
   entitledStores: string[];
+  entitledDeployments: string[];
   lifecycle: Lifecycle;
   enabled: boolean;
 }

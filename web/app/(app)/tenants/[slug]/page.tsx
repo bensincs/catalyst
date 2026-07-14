@@ -1,9 +1,10 @@
 import { notFound } from "next/navigation";
-import { ApiError, getCatalog, getMe, getMemoryStores, getTenantContext, getTenantsRegistry } from "@/lib/api";
+import { ApiError, getApplications, getCatalog, getMe, getMemoryStores, getTenantContext, getTenantsRegistry } from "@/lib/api";
 import { TenantOverview } from "@/components/views/tenant-overview";
 import { TenantAccessPanel } from "@/components/views/tenant-access-panel";
 import { EntitlementsPanel } from "@/components/views/entitlements-panel";
 import { StoreEntitlementsPanel } from "@/components/views/store-entitlements-panel";
+import { DeploymentEntitlementsPanel } from "@/components/views/deployment-entitlements-panel";
 
 export default async function TenantDrillInPage({
   params,
@@ -18,10 +19,11 @@ export default async function TenantDrillInPage({
 
     let entitlements = null;
     if (platform) {
-      const [registry, catalog, stores] = await Promise.all([
+      const [registry, catalog, stores, deployments] = await Promise.all([
         getTenantsRegistry(),
         getCatalog(),
         getMemoryStores(),
+        getApplications(),
       ]);
       const row = registry.find((r) => r.id === slug);
       entitlements = (
@@ -38,6 +40,12 @@ export default async function TenantDrillInPage({
             name={ctx.tenant.name}
             entitled={row?.entitledStores ?? []}
             stores={stores.filter((s) => s.owner === "")}
+          />
+          <DeploymentEntitlementsPanel
+            slug={slug}
+            name={ctx.tenant.name}
+            entitled={row?.entitledDeployments ?? []}
+            deployments={deployments.filter((d) => d.owner === "")}
           />
         </>
       );

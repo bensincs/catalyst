@@ -51,6 +51,12 @@ const PLATFORM_NAV: NavGroup[] = [
         hint: "Author shared memory stores and entitle tenants to them",
       },
       {
+        label: "Deployments",
+        href: "/deployments",
+        icon: Rocket,
+        hint: "Author deployable Helm charts and entitle tenants to them",
+      },
+      {
         label: "Metering",
         href: "/metering",
         icon: Gauge,

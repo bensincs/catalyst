@@ -207,6 +207,47 @@ CREATE TABLE IF NOT EXISTS applications (
   created_by      text NOT NULL DEFAULT '',
   created_at      timestamptz NOT NULL DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS applications_tenant_idx ON applications(tenant_slug);
+
+-- ── Deployments as catalog entities (unified with agents ⇔ memory stores) ────
+-- A deployment (Helm chart) is authored by the platform (owner_tenant = '') or a
+-- tenant (owner_tenant = <slug>, private), entitled to tenants, and explicitly
+-- ENABLED per tenant (tenant_deployments) — exactly like an agent or memory
+-- store. Only then does the reconciler stamp it as an Argo CD Application and
+-- report the per-tenant sync/health lifecycle (reconciling → live → blocked)
+-- back via the heartbeat.
+ALTER TABLE applications ADD COLUMN IF NOT EXISTS owner_tenant text NOT NULL DEFAULT '';
+ALTER TABLE applications ADD COLUMN IF NOT EXISTS description  text NOT NULL DEFAULT '';
+ALTER TABLE tenants      ADD COLUMN IF NOT EXISTS entitled_deployments text[] NOT NULL DEFAULT '{}';
+
+CREATE TABLE IF NOT EXISTS tenant_deployments (
+  tenant_slug   text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  app_id        text NOT NULL,
+  health        text NOT NULL DEFAULT 'reconciling',   -- reconciling | live | blocked (derived)
+  sync_status   text NOT NULL DEFAULT 'pending',        -- Argo: Synced | OutOfSync | Unknown | pending
+  health_status text NOT NULL DEFAULT 'pending',        -- Argo: Healthy | Progressing | Degraded | pending
+  sort_order    int  NOT NULL DEFAULT 0,
+  PRIMARY KEY (tenant_slug, app_id)
+);
+CREATE INDEX IF NOT EXISTS tenant_deployments_tenant_idx ON tenant_deployments(tenant_slug);
+
+-- One-time migration from the legacy tenant-private applications model: adopt the
+-- old tenant_slug as the owner, enable the app for that tenant (carrying its
+-- runtime status), then retire the tenant_slug column + index.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns
+             WHERE table_name = 'applications' AND column_name = 'tenant_slug') THEN
+    UPDATE applications SET owner_tenant = tenant_slug
+      WHERE owner_tenant = '' AND tenant_slug <> '';
+    INSERT INTO tenant_deployments (tenant_slug, app_id, sync_status, health_status, sort_order)
+      SELECT tenant_slug, id,
+             coalesce(sync_status, 'pending'), coalesce(health_status, 'pending'), sort_order
+      FROM applications WHERE tenant_slug <> ''
+      ON CONFLICT DO NOTHING;
+    ALTER TABLE applications DROP COLUMN tenant_slug;
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS applications_owner_idx ON applications(owner_tenant);
 
 

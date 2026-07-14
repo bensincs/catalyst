@@ -5,6 +5,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/inception42/cortex/control-plane/internal/model"
 	"github.com/inception42/cortex/shared"
 )
 
@@ -365,5 +366,99 @@ func TestTenantAccessGate(t *testing.T) {
 
 	if err := st.SetTenantEnabled(ctx, "no-such-tenant", true); err != ErrNotFound {
 		t.Fatalf("expected ErrNotFound for unknown tenant, got %v", err)
+	}
+}
+
+// A deployment gets the same catalog → entitle → enable → lifecycle as a memory
+// store: platform-authored + entitled but not enabled → not desired; enabled →
+// desired + tenant view (reconciling); a Synced/Healthy heartbeat derives live;
+// disable removes it; an inaccessible enable is rejected.
+func TestDeploymentLifecycle(t *testing.T) {
+	st, ctx := testStore(t)
+	defer st.Close()
+
+	const (
+		appID = "zz-dep-app"
+		slug  = "zz-dep-tenant"
+		tid   = "zz-dep-tid-0003"
+	)
+	cleanup := func() {
+		st.pool.Exec(ctx, `DELETE FROM tenant_deployments WHERE tenant_slug = $1`, slug)
+		st.pool.Exec(ctx, `DELETE FROM applications WHERE id = $1 OR owner_tenant = $2`, appID, slug)
+		st.pool.Exec(ctx, `DELETE FROM tenants WHERE id = $1`, slug)
+	}
+	cleanup()
+	defer cleanup()
+
+	// Platform authors a deployable chart.
+	if err := st.CreateApplication(ctx, model.Application{
+		ID: appID, Name: "ZZ Nginx", Owner: "", Namespace: "web",
+		RepoURL: "https://charts.example/repo", Chart: "nginx", TargetRevision: "1.0.0",
+	}, "oid"); err != nil {
+		t.Fatalf("create deployment: %v", err)
+	}
+	if _, err := st.pool.Exec(ctx,
+		`INSERT INTO tenants (id, name, tenant_id, enrollment, entitled_deployments) VALUES ($1,'ZZ Dep Tenant',$2,'bound',ARRAY[$3])`,
+		slug, tid, appID); err != nil {
+		t.Fatalf("insert tenant: %v", err)
+	}
+
+	// Platform list shows it as platform-owned.
+	list, err := st.ApplicationList(ctx)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	foundPlatform := false
+	for _, a := range list {
+		if a.ID == appID {
+			foundPlatform = a.Platform
+		}
+	}
+	if !foundPlatform {
+		t.Fatalf("deployment not in platform list as platform-owned")
+	}
+
+	// Entitled but not enabled → not desired; tenant view shows entitled+disabled.
+	if ds, _ := st.SyncDesired(ctx, tid); len(ds.Applications) != 0 {
+		t.Fatalf("deployment should not be desired before enable: %+v", ds.Applications)
+	}
+	apps, _ := st.ApplicationsForTenant(ctx, slug)
+	if len(apps) != 1 || !apps[0].Entitled || apps[0].Enabled {
+		t.Fatalf("tenant deployment view before enable wrong: %+v", apps)
+	}
+
+	// Enable → desired + tenant view enabled/reconciling.
+	if err := st.EnableDeployment(ctx, slug, appID); err != nil {
+		t.Fatalf("enable deployment: %v", err)
+	}
+	ds, _ := st.SyncDesired(ctx, tid)
+	if len(ds.Applications) != 1 || ds.Applications[0].ID != appID ||
+		ds.Applications[0].Chart != "nginx" || ds.Applications[0].Namespace != "web" {
+		t.Fatalf("enabled deployment not desired correctly: %+v", ds.Applications)
+	}
+	if apps, _ := st.ApplicationsForTenant(ctx, slug); len(apps) != 1 || !apps[0].Enabled || apps[0].Health != shared.StatusReconciling {
+		t.Fatalf("tenant deployment view after enable wrong: %+v", apps)
+	}
+
+	// A Synced/Healthy heartbeat derives the live lifecycle.
+	if err := st.ApplyHeartbeat(ctx, shared.Heartbeat{TenantID: tid, TenantName: "ZZ Dep Tenant",
+		Applications: []shared.ApplicationStatus{{ID: appID, SyncStatus: "Synced", HealthStatus: "Healthy"}}}); err != nil {
+		t.Fatalf("heartbeat: %v", err)
+	}
+	if apps, _ := st.ApplicationsForTenant(ctx, slug); apps[0].Health != shared.StatusLive || apps[0].SyncStatus != "Synced" {
+		t.Fatalf("deployment health after heartbeat wrong: %+v", apps)
+	}
+
+	// Enabling an inaccessible deployment is rejected.
+	if err := st.EnableDeployment(ctx, slug, "no-such-app"); err != ErrDeploymentNotAccessible {
+		t.Fatalf("expected ErrDeploymentNotAccessible, got %v", err)
+	}
+
+	// Disable → gone from desired.
+	if err := st.DisableDeployment(ctx, slug, appID); err != nil {
+		t.Fatalf("disable deployment: %v", err)
+	}
+	if ds, _ := st.SyncDesired(ctx, tid); len(ds.Applications) != 0 {
+		t.Fatalf("disabled deployment still desired: %+v", ds.Applications)
 	}
 }

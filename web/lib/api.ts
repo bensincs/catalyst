@@ -344,6 +344,7 @@ interface ApiRegistryRow extends ApiTenant {
   entitledAgents: string[];
   entitledCount: number;
   entitledStores: string[];
+  entitledDeployments: string[];
 }
 
 export const getTenantsRegistry = cache(async (): Promise<TenantRegistryRow[]> => {
@@ -362,6 +363,7 @@ export const getTenantsRegistry = cache(async (): Promise<TenantRegistryRow[]> =
     entitledAgents: t.entitledAgents ?? [],
     entitledCount: t.entitledCount,
     entitledStores: t.entitledStores ?? [],
+    entitledDeployments: t.entitledDeployments ?? [],
     lifecycle: (t.lifecycle ?? "enrolling") as Lifecycle,
     enabled: t.enabled ?? true,
   }));
@@ -372,14 +374,22 @@ export const getTenantsRegistry = cache(async (): Promise<TenantRegistryRow[]> =
 interface ApiApplication {
   id: string;
   name: string;
+  description?: string;
+  owner?: string;
   namespace: string;
   repoURL: string;
   chart: string;
   targetRevision: string;
   values?: string;
-  syncStatus: string;
-  healthStatus: string;
   createdAt: string;
+  ownerName?: string;
+  platform?: boolean;
+  owned?: boolean;
+  entitled?: boolean;
+  enabled?: boolean;
+  health?: string;
+  syncStatus?: string;
+  healthStatus?: string;
 }
 
 export const getApplications = cache(async (): Promise<Application[]> => {
@@ -387,14 +397,22 @@ export const getApplications = cache(async (): Promise<Application[]> => {
   return (c.applications ?? []).map((a) => ({
     id: a.id,
     name: a.name,
+    description: a.description ?? "",
+    owner: a.owner ?? "",
     namespace: a.namespace,
     repoURL: a.repoURL,
     chart: a.chart,
     targetRevision: a.targetRevision,
     values: a.values,
-    syncStatus: a.syncStatus || "pending",
-    healthStatus: a.healthStatus || "pending",
     createdAt: a.createdAt,
+    ownerName: a.ownerName,
+    platform: a.platform ?? a.owner === "",
+    owned: Boolean(a.owned),
+    entitled: Boolean(a.entitled),
+    enabled: Boolean(a.enabled),
+    health: (a.health as Application["health"]) || undefined,
+    syncStatus: a.syncStatus || undefined,
+    healthStatus: a.healthStatus || undefined,
   }));
 });
 

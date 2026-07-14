@@ -835,7 +835,7 @@ func (s *Store) autoEntitleStores(ctx context.Context, slug string, agentIDs []s
 
 func (s *Store) TenantsRegistry(ctx context.Context) ([]model.TenantRegistryRow, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT `+tenantCols+`, entitled_agents, entitled_stores FROM tenants WHERE is_platform = false ORDER BY name`)
+		`SELECT `+tenantCols+`, entitled_agents, entitled_stores, entitled_deployments FROM tenants WHERE is_platform = false ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -850,7 +850,7 @@ func (s *Store) TenantsRegistry(ctx context.Context) ([]model.TenantRegistryRow,
 			&r.SubscriptionID, &r.ReconcilerIdentity, &r.FoundryProject, &r.ReconcilerVersion, &installedAt, &r.Enabled,
 			&r.Cluster.Name, &r.Cluster.Phase, &r.Cluster.K8sVersion, &r.Cluster.ArgoInstalled, &r.Cluster.NodeCount, &r.Cluster.Detail,
 			&r.Cluster.MeshInstalled, &r.Cluster.GatewayIP, &r.Cluster.IngressIssuer, &r.Cluster.MTLSStrict, &r.Cluster.OTelInstalled,
-			&r.EntitledAgents, &r.EntitledStores); err != nil {
+			&r.EntitledAgents, &r.EntitledStores, &r.EntitledDeployments); err != nil {
 			return nil, err
 		}
 		if installedAt != "" {
@@ -862,6 +862,9 @@ func (s *Store) TenantsRegistry(ctx context.Context) ([]model.TenantRegistryRow,
 		}
 		if r.EntitledStores == nil {
 			r.EntitledStores = []string{}
+		}
+		if r.EntitledDeployments == nil {
+			r.EntitledDeployments = []string{}
 		}
 		r.EntitledCount = len(r.EntitledAgents)
 		out = append(out, r)
@@ -1045,11 +1048,12 @@ func (s *Store) SyncDesired(ctx context.Context, tid string) (shared.DesiredStat
 		return out, err
 	}
 
-	// Applications (Helm deployments) the tenant wants in its cluster — the
-	// reconciler stamps each as an Argo CD Application.
+	// Deployments ENABLED in this tenant — the reconciler stamps each as an Argo
+	// CD Application in the tenant's cluster (mirrors the enabled-stores join).
 	arows, err := s.pool.Query(ctx,
-		`SELECT id, name, namespace, repo_url, chart, target_revision, values
-		 FROM applications WHERE tenant_slug = $1 ORDER BY sort_order`, t.ID)
+		`SELECT a.id, a.name, a.namespace, a.repo_url, a.chart, a.target_revision, a.values
+		 FROM applications a JOIN tenant_deployments td ON td.app_id = a.id AND td.tenant_slug = $1
+		 ORDER BY td.sort_order`, t.ID)
 	if err != nil {
 		return out, err
 	}
@@ -1137,61 +1141,207 @@ func (s *Store) ApplyHeartbeat(ctx context.Context, hb shared.Heartbeat) error {
 			return err
 		}
 	}
-	// Record each Argo Application's sync/health (a deployment removed between
-	// sync and heartbeat is a harmless no-op).
+	// Record each Argo Application's per-tenant sync/health + derived lifecycle
+	// (a deployment removed between sync and heartbeat is a harmless no-op).
 	for _, a := range hb.Applications {
 		if _, err := s.pool.Exec(ctx,
-			`UPDATE applications SET sync_status = $3, health_status = $4 WHERE tenant_slug = $1 AND id = $2`,
-			t.ID, a.ID, a.SyncStatus, a.HealthStatus); err != nil {
+			`UPDATE tenant_deployments SET sync_status = $3, health_status = $4, health = $5
+			 WHERE tenant_slug = $1 AND app_id = $2`,
+			t.ID, a.ID, a.SyncStatus, a.HealthStatus, deriveDeploymentHealth(a.SyncStatus, a.HealthStatus)); err != nil {
 			return err
 		}
 	}
 	return s.recountAgents(ctx, t.ID)
 }
 
-/* ── Applications (Helm deployments → Argo CD Applications) ──────────────── */
+/* ── Deployments (catalog entities → per-tenant Argo CD Applications) ─────── */
 
-const applicationCols = `id, name, namespace, repo_url, chart, target_revision, values,
-	sync_status, health_status, created_by, created_at`
+// ErrDeploymentNotAccessible is returned when a tenant tries to enable a
+// deployment it neither owns nor is entitled to.
+var ErrDeploymentNotAccessible = errors.New("deployment not accessible to tenant")
 
-func scanApplication(row pgx.Row) (model.Application, error) {
-	var a model.Application
-	err := row.Scan(&a.ID, &a.Name, &a.Namespace, &a.RepoURL, &a.Chart, &a.TargetRevision, &a.Values,
-		&a.SyncStatus, &a.HealthStatus, &a.CreatedBy, &a.CreatedAt)
-	return a, err
+const applicationCols = `a.id, a.name, a.description, a.owner_tenant, a.namespace,
+	a.repo_url, a.chart, a.target_revision, a.values, a.created_by, a.created_at`
+
+func appScanDest(a *model.Application) []any {
+	return []any{&a.ID, &a.Name, &a.Description, &a.Owner, &a.Namespace,
+		&a.RepoURL, &a.Chart, &a.TargetRevision, &a.Values, &a.CreatedBy, &a.CreatedAt}
 }
 
-// ApplicationsForTenant returns a tenant's deployments (its own cluster only).
-func (s *Store) ApplicationsForTenant(ctx context.Context, slug string) ([]model.Application, error) {
+// deriveDeploymentHealth maps Argo's sync/health vocabulary onto the shared
+// reconciling → live → blocked lifecycle that agents and memory stores use.
+func deriveDeploymentHealth(sync, health string) string {
+	switch {
+	case strings.EqualFold(health, "Degraded") || strings.EqualFold(health, "Missing") || strings.EqualFold(sync, "Unknown"):
+		return shared.StatusBlocked
+	case strings.EqualFold(sync, "Synced") && strings.EqualFold(health, "Healthy"):
+		return shared.StatusLive
+	default:
+		return shared.StatusReconciling
+	}
+}
+
+// ApplicationList is the platform view: every deployment definition + owner name.
+func (s *Store) ApplicationList(ctx context.Context) ([]model.Application, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT `+applicationCols+` FROM applications WHERE tenant_slug = $1 ORDER BY sort_order, name`, slug)
+		`SELECT `+applicationCols+`, coalesce(t.name,'')
+		 FROM applications a LEFT JOIN tenants t ON t.id = a.owner_tenant
+		 ORDER BY a.created_at DESC`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	out := []model.Application{}
 	for rows.Next() {
-		a, err := scanApplication(rows)
-		if err != nil {
+		var a model.Application
+		if err := rows.Scan(append(appScanDest(&a), &a.OwnerName)...); err != nil {
 			return nil, err
+		}
+		a.Platform = a.Owner == ""
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// ApplicationsForTenant returns the deployments visible to a tenant — the ones it
+// owns plus the platform ones it's entitled to — each with its per-tenant enable
+// state + runtime status (mirrors MemoryStoresForTenant).
+func (s *Store) ApplicationsForTenant(ctx context.Context, slug string) ([]model.Application, error) {
+	var entitled []string
+	if err := s.pool.QueryRow(ctx, `SELECT entitled_deployments FROM tenants WHERE id = $1`, slug).Scan(&entitled); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return []model.Application{}, nil
+		}
+		return nil, err
+	}
+	entitledSet := map[string]bool{}
+	for _, id := range entitled {
+		entitledSet[id] = true
+	}
+	rows, err := s.pool.Query(ctx,
+		`SELECT `+applicationCols+`,
+		        (td.app_id IS NOT NULL) AS enabled, coalesce(td.sync_status,''), coalesce(td.health_status,'')
+		 FROM applications a
+		 LEFT JOIN tenant_deployments td ON td.app_id = a.id AND td.tenant_slug = $1
+		 WHERE a.owner_tenant = $1 OR (a.owner_tenant = '' AND a.id = ANY($2))
+		 ORDER BY a.created_at DESC`, slug, entitled)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []model.Application{}
+	for rows.Next() {
+		var a model.Application
+		var enabled bool
+		var sync, health string
+		if err := rows.Scan(append(appScanDest(&a), &enabled, &sync, &health)...); err != nil {
+			return nil, err
+		}
+		a.Platform = a.Owner == ""
+		a.Owned = a.Owner == slug
+		a.Entitled = entitledSet[a.ID]
+		a.Enabled = enabled
+		if enabled {
+			a.SyncStatus, a.HealthStatus = sync, health
+			a.Health = deriveDeploymentHealth(sync, health)
 		}
 		out = append(out, a)
 	}
 	return out, rows.Err()
 }
 
-func (s *Store) CreateApplication(ctx context.Context, slug string, a model.Application, createdBy string) error {
+func (s *Store) ApplicationByID(ctx context.Context, id string) (model.Application, error) {
+	var a model.Application
+	err := s.pool.QueryRow(ctx, `SELECT `+applicationCols+` FROM applications a WHERE a.id = $1`, id).Scan(appScanDest(&a)...)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return a, ErrNotFound
+	}
+	a.Platform = a.Owner == ""
+	return a, err
+}
+
+// CreateApplication inserts a deployment definition (Owner "" = platform-authored).
+func (s *Store) CreateApplication(ctx context.Context, a model.Application, createdBy string) error {
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO applications (id, tenant_slug, name, namespace, repo_url, chart, target_revision, values, created_by, sort_order)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,
-		         coalesce((SELECT max(sort_order)+1 FROM applications WHERE tenant_slug=$2),1))`,
-		a.ID, slug, a.Name, a.Namespace, a.RepoURL, a.Chart, a.TargetRevision, a.Values, createdBy)
+		`INSERT INTO applications (id, name, description, owner_tenant, namespace, repo_url, chart, target_revision, values, created_by)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+		a.ID, a.Name, a.Description, a.Owner, a.Namespace, a.RepoURL, a.Chart, a.TargetRevision, a.Values, createdBy)
 	return err
 }
 
-// DeleteApplication removes a tenant's deployment (scoped to the owning tenant).
-func (s *Store) DeleteApplication(ctx context.Context, slug, id string) error {
-	tag, err := s.pool.Exec(ctx, `DELETE FROM applications WHERE tenant_slug = $1 AND id = $2`, slug, id)
+// UpdateApplication changes only name + description; the deployment definition
+// (chart/repo/values/namespace) is immutable, like a memory store's.
+func (s *Store) UpdateApplication(ctx context.Context, id, name, description string) error {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE applications SET name = $2, description = $3 WHERE id = $1`, id, name, description)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// DeleteApplication removes a deployment definition and detaches it from tenant
+// entitlements + enablements.
+func (s *Store) DeleteApplication(ctx context.Context, id string) error {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM applications WHERE id = $1`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	_, _ = s.pool.Exec(ctx, `UPDATE tenants SET entitled_deployments = array_remove(entitled_deployments, $1)`, id)
+	_, _ = s.pool.Exec(ctx, `DELETE FROM tenant_deployments WHERE app_id = $1`, id)
+	return nil
+}
+
+func (s *Store) SetDeploymentEntitlements(ctx context.Context, slug string, appIDs []string) error {
+	tag, err := s.pool.Exec(ctx, `UPDATE tenants SET entitled_deployments = $2 WHERE id = $1`, slug, appIDs)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) deploymentAccessible(ctx context.Context, slug, appID string) (bool, error) {
+	var ok bool
+	err := s.pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM applications a WHERE a.id = $2 AND
+		   (a.owner_tenant = $1 OR (a.owner_tenant = '' AND a.id IN
+		     (SELECT unnest(entitled_deployments) FROM tenants WHERE id = $1))))`,
+		slug, appID).Scan(&ok)
+	return ok, err
+}
+
+// EnableDeployment marks a deployment enabled for a tenant (one it owns or is
+// entitled to), so the reconciler stamps it as an Argo Application in that
+// tenant's cluster.
+func (s *Store) EnableDeployment(ctx context.Context, slug, appID string) error {
+	ok, err := s.deploymentAccessible(ctx, slug, appID)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return ErrDeploymentNotAccessible
+	}
+	_, err = s.pool.Exec(ctx,
+		`INSERT INTO tenant_deployments (tenant_slug, app_id, health, sort_order)
+		 VALUES ($1,$2,'reconciling',
+		         coalesce((SELECT max(sort_order)+1 FROM tenant_deployments WHERE tenant_slug=$1),1))
+		 ON CONFLICT (tenant_slug, app_id) DO NOTHING`,
+		slug, appID)
+	return err
+}
+
+func (s *Store) DisableDeployment(ctx context.Context, slug, appID string) error {
+	tag, err := s.pool.Exec(ctx,
+		`DELETE FROM tenant_deployments WHERE tenant_slug = $1 AND app_id = $2`, slug, appID)
 	if err != nil {
 		return err
 	}

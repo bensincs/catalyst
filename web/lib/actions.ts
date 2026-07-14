@@ -139,10 +139,11 @@ export async function disableStore(storeId: string): Promise<ActionResult> {
   );
 }
 
-/* ── Applications (Helm deployments → Argo CD) ────────────────────────────── */
+/* ── Deployments — catalog entities (like memory stores) ──────────────────── */
 
 export async function createApplication(input: {
   name: string;
+  description: string;
   namespace: string;
   repoURL: string;
   chart: string;
@@ -152,9 +153,46 @@ export async function createApplication(input: {
   return run(() => apiSend("POST", "/api/applications", input), ["/deployments"]);
 }
 
+export async function updateApplication(
+  id: string,
+  input: { name: string; description: string },
+): Promise<ActionResult> {
+  return run(
+    () => apiSend("PATCH", `/api/applications/${encodeURIComponent(id)}`, input),
+    ["/deployments"],
+  );
+}
+
 export async function deleteApplication(id: string): Promise<ActionResult> {
   return run(
     () => apiSend("DELETE", `/api/applications/${encodeURIComponent(id)}`),
+    ["/deployments"],
+  );
+}
+
+export async function setDeploymentEntitlements(
+  slug: string,
+  entitledDeployments: string[],
+): Promise<ActionResult> {
+  return run(
+    () =>
+      apiSend("PATCH", `/api/tenants/${encodeURIComponent(slug)}/deployment-entitlements`, {
+        entitledDeployments,
+      }),
+    [`/tenants/${slug}`, "/deployments"],
+  );
+}
+
+export async function enableDeployment(id: string): Promise<ActionResult> {
+  return run(
+    () => apiSend("POST", `/api/tenant/deployments/${encodeURIComponent(id)}`),
+    ["/deployments"],
+  );
+}
+
+export async function disableDeployment(id: string): Promise<ActionResult> {
+  return run(
+    () => apiSend("DELETE", `/api/tenant/deployments/${encodeURIComponent(id)}`),
     ["/deployments"],
   );
 }
