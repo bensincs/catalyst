@@ -9,7 +9,6 @@
 
 .dialog::backdrop {
   background: var(--overlay);
-  backdrop-filter: blur(3px);
   animation: fade 180ms var(--ease-out-quart);
 }
 .dialog[open] {
@@ -21,8 +20,7 @@
   flex-direction: column;
   max-height: calc(100dvh - 4rem);
   background: var(--surface-raised);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xl);
+  border-radius: var(--radius-island);
   box-shadow: var(--shadow-lg);
   overflow: hidden;
 }
@@ -31,7 +29,7 @@
   display: flex;
   align-items: flex-start;
   gap: var(--space-base);
-  padding: 18px 20px 14px;
+  padding: 26px 28px 20px;
   border-bottom: 1px solid var(--border);
 }
 .headText {
@@ -39,24 +37,25 @@
   min-width: 0;
 }
 .title {
-  font-size: var(--text-h2);
+  font-size: var(--text-display);
   font-weight: 600;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.02em;
+  line-height: 1.12;
   color: var(--text);
 }
 .description {
-  margin-top: 4px;
-  font-size: var(--text-body-sm);
+  margin-top: 8px;
+  font-size: var(--text-body);
   color: var(--text-muted);
   line-height: 1.5;
 }
 .close {
   display: grid;
   place-items: center;
-  width: 30px;
-  height: 30px;
+  width: 36px;
+  height: 36px;
   flex: none;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-full);
   color: var(--text-muted);
   transition: background-color var(--dur-fast) var(--ease-out-quart), color var(--dur-fast) var(--ease-out-quart);
 }
@@ -66,7 +65,7 @@
 }
 
 .body {
-  padding: 18px 20px;
+  padding: 24px 28px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -76,10 +75,10 @@
 .footer {
   display: flex;
   justify-content: flex-end;
-  gap: var(--space-sm);
-  padding: 14px 20px;
+  gap: var(--space-md);
+  padding: 20px 28px;
   border-top: 1px solid var(--border);
-  background: var(--surface-sunken);
+  background: var(--surface-raised);
 }
 
 @keyframes pop {

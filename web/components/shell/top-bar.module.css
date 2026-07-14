@@ -8,9 +8,8 @@
   justify-content: space-between;
   gap: var(--space-base);
   height: var(--topbar-h);
-  padding: 0 var(--space-base) 0 12px;
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
+  padding: 0 clamp(16px, 2vw, 28px) 0 clamp(16px, 2vw, 28px);
+  background: var(--canvas);
 }
 
 .left {

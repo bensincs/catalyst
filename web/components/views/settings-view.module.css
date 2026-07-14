@@ -5,9 +5,9 @@
 /* ── Panel ── */
 .panel {
   background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: 20px 24px;
+  border-radius: var(--radius-island);
+  box-shadow: var(--shadow-sm);
+  padding: clamp(24px, 3vw, 32px);
   margin-bottom: var(--space-base);
 }
 .panelHead {
@@ -111,14 +111,14 @@
   gap: 2px;
   background: var(--surface-sunken);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
 }
 .segment {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   padding: 6px 14px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   font-size: var(--text-body-sm);
   font-weight: 550;
   color: var(--text-muted);
@@ -190,7 +190,7 @@
   gap: 4px;
   flex: none;
   padding: 7px 12px;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   border: 1px solid var(--border);
   background: var(--surface);
   font-size: var(--text-body-sm);

@@ -4,10 +4,10 @@
   flex-wrap: wrap;
   align-items: center;
   gap: clamp(20px, 5vw, 52px);
-  padding: 16px 24px;
+  padding: clamp(22px, 3vw, 32px);
   background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-island);
+  box-shadow: var(--shadow-sm);
   margin-bottom: var(--space-xl);
 }
 .stat {
@@ -41,8 +41,8 @@
 /* ── Tenant usage table ── */
 .table {
   background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-sm);
   overflow: hidden;
 }
 .row {
@@ -146,10 +146,10 @@
   justify-content: space-between;
   gap: var(--space-lg);
   margin-top: var(--space-xl);
-  padding: 18px 24px;
+  padding: 20px 26px;
   background: var(--surface-sunken);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-sm);
 }
 .costText {
   min-width: 0;
@@ -169,8 +169,8 @@
 
 .emptyWrap {
   background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-island);
+  box-shadow: var(--shadow-sm);
   margin-bottom: var(--space-xl);
 }
 

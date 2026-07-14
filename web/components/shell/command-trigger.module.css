@@ -4,9 +4,9 @@
   gap: 9px;
   width: 264px;
   max-width: 264px;
-  height: 34px;
-  padding: 0 8px 0 11px;
-  border-radius: var(--radius-md);
+  height: 40px;
+  padding: 0 10px 0 14px;
+  border-radius: var(--radius-full);
   border: 1px solid var(--border-strong);
   background: var(--surface);
   color: var(--text-muted);
@@ -16,7 +16,7 @@
 }
 .trigger:hover {
   background: var(--surface-hover);
-  border-color: var(--border-strong);
+  border-color: var(--field-border);
 }
 
 .icon {

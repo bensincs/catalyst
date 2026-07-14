@@ -5,8 +5,7 @@
   height: 100dvh;
   display: flex;
   flex-direction: column;
-  background: var(--surface-sunken);
-  border-right: 1px solid var(--border);
+  background: transparent;
   overflow: hidden;
 }
 
@@ -88,42 +87,22 @@
   display: flex;
   align-items: center;
   gap: 11px;
-  height: 36px;
+  height: 38px;
   padding: 0 10px;
   border-radius: var(--radius-md);
-  color: var(--text-secondary);
+  color: var(--text-muted);
   font-size: var(--text-body);
   font-weight: 500;
-  transition: background-color var(--dur-fast) var(--ease-out-quart),
-    color var(--dur-fast) var(--ease-out-quart);
+  transition: color var(--dur-fast) var(--ease-out-quart);
 }
 
 .link:hover {
-  background: var(--surface-hover);
   color: var(--text);
 }
 
 .link[data-active] {
-  background: var(--surface-hover);
   color: var(--text);
-  font-weight: 560;
-}
-
-/* Lime "you are here" indicator */
-.link[data-active]::before {
-  content: "";
-  position: absolute;
-  left: -12px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 3px;
-  height: 18px;
-  border-radius: var(--radius-full);
-  background: var(--accent);
-}
-
-[data-rail="collapsed"] .rail .link[data-active]::before {
-  left: -10px;
+  font-weight: 600;
 }
 
 .linkIcon {
@@ -138,9 +117,6 @@
 .link:hover .linkIcon,
 .link[data-active] .linkIcon {
   color: var(--text);
-}
-.link[data-active] .linkIcon {
-  color: var(--accent-ink);
 }
 
 .linkLabel {

@@ -3,9 +3,9 @@
   z-index: var(--z-dropdown);
   background: var(--surface-raised);
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-lg);
-  padding: 5px;
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-md);
+  padding: 6px;
   max-height: min(70vh, 520px);
   overflow-y: auto;
   animation: menu-in 150ms var(--ease-out-expo);
@@ -17,10 +17,10 @@
   align-items: center;
   gap: 9px;
   width: 100%;
-  padding: 7px 9px;
+  padding: 8px 10px;
   border-radius: var(--radius-md);
-  font-size: var(--text-body-sm);
-  font-weight: 480;
+  font-size: var(--text-body);
+  font-weight: 500;
   color: var(--text-secondary);
   text-align: left;
   transition: background-color var(--dur-fast) var(--ease-out-quart),

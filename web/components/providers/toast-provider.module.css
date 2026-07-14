@@ -24,8 +24,7 @@
   align-items: start;
   padding: 12px 12px 12px 12px;
   background: var(--surface-raised);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
   box-shadow: var(--shadow-lg);
   animation: toast-in 240ms var(--ease-out-expo);
 }
@@ -90,7 +89,7 @@
   place-items: center;
   width: 24px;
   height: 24px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   color: var(--text-muted);
   transition: background-color var(--dur-fast) var(--ease-out-quart),
     color var(--dur-fast) var(--ease-out-quart);

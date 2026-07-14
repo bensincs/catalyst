@@ -51,17 +51,17 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 2px 9px 2px 8px;
+  padding: 3px 10px;
   border-radius: var(--radius-full);
   font-size: var(--text-label-sm);
-  font-weight: 540;
+  font-weight: 500;
   line-height: 1.5;
   white-space: nowrap;
   color: var(--text-secondary);
 }
 
 .badge[data-variant="soft"] {
-  padding-inline: 8px 10px;
+  padding-inline: 8px 11px;
 }
 .badge[data-variant="soft"][data-tone="success"] {
   background: var(--success-bg);

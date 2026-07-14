@@ -5,7 +5,7 @@ import { Loader2, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/cn";
 import styles from "./button.module.css";
 
-type Variant = "primary" | "secondary" | "ghost" | "danger";
+type Variant = "primary" | "brand" | "secondary" | "ghost" | "danger";
 type Size = "sm" | "md";
 
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {

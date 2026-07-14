@@ -2,11 +2,11 @@
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  height: 40px;
-  padding: 0 10px 0 8px;
+  height: 44px;
+  padding: 0 12px 0 8px;
   max-width: 280px;
   min-width: 0;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-full);
   border: 1px solid transparent;
   transition: background-color var(--dur-fast) var(--ease-out-quart),
     border-color var(--dur-fast) var(--ease-out-quart);
@@ -19,10 +19,10 @@
 .badge {
   display: grid;
   place-items: center;
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
   flex: none;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   background: var(--surface-sunken);
   border: 1px solid var(--border);
   color: var(--text-secondary);

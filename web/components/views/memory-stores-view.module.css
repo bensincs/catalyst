@@ -3,8 +3,8 @@
   place-items: center;
   min-height: 400px;
   background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-island);
+  box-shadow: var(--shadow-sm);
   background-image: radial-gradient(
     circle at 50% 38%,
     color-mix(in srgb, var(--text) 3%, transparent),
@@ -17,8 +17,8 @@
   padding: 0;
   list-style: none;
   background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-sm);
   overflow: hidden;
 }
 
@@ -152,7 +152,7 @@
   padding: 13px 14px;
   background: var(--surface-sunken);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
 }
 .defFact {
   display: flex;

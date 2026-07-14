@@ -1,9 +1,9 @@
 /* ── Deployment lifecycle stepper ── */
 .panel {
   background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: 20px 24px;
+  border-radius: var(--radius-island);
+  box-shadow: var(--shadow-sm);
+  padding: clamp(24px, 3vw, 32px);
   margin-bottom: var(--space-base);
 }
 
@@ -91,8 +91,8 @@
   gap: 14px;
   padding: 16px 24px;
   background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-island);
+  box-shadow: var(--shadow-sm);
   margin-bottom: var(--space-base);
 }
 .reconIcon {
@@ -166,9 +166,9 @@
 /* ── Install identity manifest ── */
 .manifestWrap {
   background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: 20px 24px;
+  border-radius: var(--radius-island);
+  box-shadow: var(--shadow-sm);
+  padding: clamp(24px, 3vw, 32px);
 }
 .sectionTitle {
   font-size: var(--text-h3);

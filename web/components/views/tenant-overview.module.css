@@ -21,16 +21,16 @@
 
 .agentEmpty {
   background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-sm);
 }
 
 .install {
   background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: 20px 24px;
-  margin-bottom: var(--space-base);
+  border-radius: var(--radius-island);
+  box-shadow: var(--shadow-sm);
+  padding: clamp(24px, 3vw, 32px);
+  margin-bottom: var(--space-lg);
 }
 
 .installHead {
@@ -196,10 +196,10 @@
   flex-wrap: wrap;
   align-items: center;
   gap: clamp(20px, 5vw, 52px);
-  padding: 16px 24px;
+  padding: 22px 28px;
   background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-sm);
   margin-bottom: var(--space-xl);
 }
 .snap {
@@ -269,8 +269,8 @@
 .agentList {
   margin: 0;
   background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-sm);
   overflow: hidden;
 }
 
@@ -278,7 +278,7 @@
   display: flex;
   align-items: center;
   gap: 16px;
-  padding: 13px 16px;
+  padding: 15px 20px;
   border-bottom: 1px solid var(--border);
 }
 .agentList .agent:last-child {

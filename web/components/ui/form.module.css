@@ -1,12 +1,12 @@
 .field {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
 
 .label {
-  font-size: var(--text-label);
-  font-weight: 550;
+  font-size: var(--text-body);
+  font-weight: 500;
   color: var(--text);
 }
 
@@ -18,33 +18,39 @@
 
 .input {
   width: 100%;
-  height: 36px;
-  padding: 0 11px;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border-strong);
+  height: 56px;
+  padding: 0 16px;
+  border-radius: var(--radius-lg);
+  border: 2px solid var(--field-border);
   background: var(--surface);
   color: var(--text);
-  font-size: var(--text-body);
+  font-size: var(--text-body-lg);
+  font-weight: 500;
   font-family: inherit;
   transition: border-color var(--dur-fast) var(--ease-out-quart),
     box-shadow var(--dur-fast) var(--ease-out-quart);
 }
 .input::placeholder {
   color: var(--text-muted);
+  font-weight: 500;
 }
-.input:hover {
+.input:hover:not(:focus-visible) {
   border-color: var(--text-disabled);
 }
 .input:focus-visible {
   outline: none;
-  border-color: var(--focus);
-  box-shadow: 0 0 0 3px var(--focus-glow);
+  border-color: var(--text);
+  box-shadow: none;
+}
+.input:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .textarea {
   height: auto;
-  min-height: 76px;
-  padding: 9px 11px;
+  min-height: 108px;
+  padding: 14px 16px;
   line-height: 1.5;
   resize: vertical;
 }
@@ -54,12 +60,12 @@
 }
 .select {
   appearance: none;
-  padding-right: 32px;
+  padding-right: 44px;
   cursor: pointer;
 }
 .selectIcon {
   position: absolute;
-  right: 10px;
+  right: 16px;
   top: 50%;
   transform: translateY(-50%);
   color: var(--text-muted);
@@ -70,9 +76,9 @@
 .checkRow {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
-  padding: 9px 10px;
-  border-radius: var(--radius-md);
+  gap: 12px;
+  padding: 12px 12px;
+  border-radius: var(--radius-lg);
   cursor: pointer;
   transition: background-color var(--dur-fast) var(--ease-out-quart);
 }
@@ -94,20 +100,20 @@
 .checkBox {
   display: grid;
   place-items: center;
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
   margin-top: 1px;
   flex: none;
   border-radius: var(--radius-sm);
-  border: 1.5px solid var(--border-strong);
+  border: 2px solid var(--field-border);
   background: var(--surface);
-  color: var(--on-accent);
+  color: var(--on-primary);
   transition: background-color var(--dur-fast) var(--ease-out-quart),
     border-color var(--dur-fast) var(--ease-out-quart);
 }
 .checkBox[data-checked] {
-  background: var(--accent);
-  border-color: var(--accent);
+  background: var(--primary);
+  border-color: var(--primary);
 }
 .checkInput:focus-visible + .checkText,
 .checkRow:has(.checkInput:focus-visible) .checkBox {
@@ -122,7 +128,7 @@
   min-width: 0;
 }
 .checkLabel {
-  font-size: var(--text-body-sm);
+  font-size: var(--text-body);
   font-weight: 500;
   color: var(--text);
 }

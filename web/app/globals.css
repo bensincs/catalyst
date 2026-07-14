@@ -8,54 +8,63 @@
   /* ---- Fonts (--font-sans / --font-mono provided by next/font on <html>) ---- */
   --font-display: var(--font-sans);
 
-  /* ---- Semantic color roles — LIGHT (default) ---- */
-  --canvas: #fbf8ff;
+  /* ---- Semantic color roles — LIGHT (default) ----
+     Cortex identity: near-black #292929 ink on white islands over a light-grey
+     page, with a restrained purple #a964f7 brand accent. */
+  --canvas: #f6f6f7;
   --surface: #ffffff;
-  --surface-sunken: #f3f1f7;
-  --surface-hover: #f4f2fa;
+  --surface-sunken: #ededed;
+  --surface-hover: rgb(41 41 41 / 0.05);
   --surface-raised: #ffffff;
 
-  --text: #1e1f1e;
-  --text-secondary: #3d3f43;
-  --text-muted: #565961;
-  --text-disabled: #9a9da3;
+  --text: #292929;
+  --text-secondary: rgb(41 41 41 / 0.74);
+  --text-muted: rgb(41 41 41 / 0.6);
+  --text-disabled: rgb(41 41 41 / 0.38);
 
-  --border: #e6e3ef;
-  --border-strong: #c2c8d6;
+  --border: rgb(41 41 41 / 0.08);
+  --border-strong: rgb(41 41 41 / 0.16);
+  --field-border: rgb(41 41 41 / 0.24);
 
-  --accent: #91ff01;
-  --accent-hover: #84e800;
-  --accent-ink: #356b00;
-  --accent-bg: #edfbd2;
-  --on-accent: #1e1f1e;
-  --focus: #1e1f1e;
-  --focus-glow: rgb(145 255 1 / 0.35);
+  /* Primary = solid near-black fills (default buttons, solid CTAs) */
+  --primary: #292929;
+  --primary-hover: #1f1f1f;
+  --on-primary: #ffffff;
+
+  /* Accent = brand purple, used sparingly (focus, selection, active, links, mark) */
+  --accent: #a964f7;
+  --accent-hover: #9a4ff0;
+  --accent-ink: #7c3aed;
+  --accent-bg: rgb(169 100 247 / 0.12);
+  --on-accent: #ffffff;
+  --focus: #a964f7;
+  --focus-glow: rgb(169 100 247 / 0.3);
 
   /* status */
-  --success: #91ff01;
-  --success-ink: #356b00;
-  --success-bg: #edfbd2;
-  --info: #ae74ff;
+  --success: #126e40;
+  --success-ink: #126e40;
+  --success-bg: rgb(18 110 64 / 0.1);
+  --info: #a964f7;
   --info-ink: #7c3aed;
-  --info-bg: #f2ebff;
-  --warning: #f5a623;
-  --warning-ink: #9a5b00;
-  --warning-bg: #fdf3e0;
-  --danger: #f90019;
-  --danger-strong: #e60017;
-  --danger-ink: #cc0016;
-  --danger-bg: #ffeef0;
-  --neutral: #6b7280;
-  --neutral-ink: #565961;
-  --neutral-bg: #eef0f4;
+  --info-bg: rgb(169 100 247 / 0.12);
+  --warning: #b45309;
+  --warning-ink: #b45309;
+  --warning-bg: rgb(217 119 6 / 0.12);
+  --danger: #b5231b;
+  --danger-strong: #b5231b;
+  --danger-ink: #b5231b;
+  --danger-bg: rgb(181 35 27 / 0.1);
+  --neutral: rgb(41 41 41 / 0.55);
+  --neutral-ink: rgb(41 41 41 / 0.62);
+  --neutral-bg: rgb(41 41 41 / 0.08);
 
-  --overlay: rgb(30 31 30 / 0.32);
-  --track: #dedbe8;
+  --overlay: rgb(0 0 0 / 0.4);
+  --track: rgb(41 41 41 / 0.18);
 
   /* ---- Elevation ---- */
-  --shadow-sm: 0 1px 2px rgb(30 31 30 / 0.06);
-  --shadow-md: 0 4px 14px -2px rgb(30 31 30 / 0.10), 0 2px 6px -2px rgb(30 31 30 / 0.08);
-  --shadow-lg: 0 12px 32px -6px rgb(30 31 30 / 0.16), 0 4px 10px -4px rgb(30 31 30 / 0.10);
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.05);
+  --shadow-md: 0 6px 12px rgb(0 0 0 / 0.1);
+  --shadow-lg: 0 12px 24px -3px rgb(0 0 0 / 0.12), 0 4px 10px -4px rgb(0 0 0 / 0.08);
 
   /* ---- Spacing (4px base / 8px rhythm) ---- */
   --space-xs: 4px;
@@ -68,18 +77,20 @@
   --space-3xl: 64px;
 
   /* ---- Structure ---- */
-  --rail-w: 248px;
+  --rail-w: 220px;
   --rail-collapsed-w: 68px;
   --rail-current: var(--rail-w);
-  --topbar-h: 56px;
-  --content-max: 1360px;
+  --topbar-h: 60px;
+  --content-max: 1440px;
 
-  /* ---- Radii ---- */
-  --radius-xs: 2px;
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 8px;
-  --radius-xl: 12px;
+  /* ---- Radii — pill controls, rounded cards, big rounded page islands ---- */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-2xl: 20px;
+  --radius-island: 24px;
   --radius-full: 9999px;
 
   /* ---- Type scale (fixed rem, 1.125–1.2 ratio) ---- */
@@ -119,47 +130,52 @@
 }
 
 [data-theme="dark"] {
-  --canvas: #151615;
-  --surface: #1e1f1e;
-  --surface-sunken: #121312;
-  --surface-hover: #282a29;
-  --surface-raised: #26282a;
+  --canvas: #1a1a1a;
+  --surface: #232323;
+  --surface-sunken: #1a1a1a;
+  --surface-hover: rgb(237 237 237 / 0.06);
+  --surface-raised: #232323;
 
-  --text: #fbf8ff;
-  --text-secondary: #c8cad0;
-  --text-muted: #989ca4;
-  --text-disabled: #63666c;
+  --text: #ededed;
+  --text-secondary: rgb(237 237 237 / 0.82);
+  --text-muted: rgb(237 237 237 / 0.6);
+  --text-disabled: rgb(237 237 237 / 0.38);
 
-  --border: #313235;
-  --border-strong: #484a4e;
+  --border: rgb(237 237 237 / 0.1);
+  --border-strong: rgb(237 237 237 / 0.2);
+  --field-border: rgb(237 237 237 / 0.22);
 
-  --accent: #91ff01;
-  --accent-hover: #a6ff33;
-  --accent-ink: #b6ff5c;
-  --accent-bg: #243100;
-  --on-accent: #12130f;
-  --focus: #91ff01;
-  --focus-glow: rgb(145 255 1 / 0.28);
+  --primary: #ededed;
+  --primary-hover: #ffffff;
+  --on-primary: #1a1a1a;
 
-  --success: #91ff01;
-  --success-ink: #b6ff5c;
-  --success-bg: #243100;
+  --accent: #a964f7;
+  --accent-hover: #b985f9;
+  --accent-ink: #c29bff;
+  --accent-bg: rgb(169 100 247 / 0.18);
+  --on-accent: #ffffff;
+  --focus: #a964f7;
+  --focus-glow: rgb(169 100 247 / 0.32);
+
+  --success: #3cbd7d;
+  --success-ink: #3cbd7d;
+  --success-bg: rgb(60 189 125 / 0.14);
   --info: #c29bff;
   --info-ink: #c29bff;
-  --info-bg: #2a2140;
+  --info-bg: rgb(169 100 247 / 0.2);
   --warning: #f5b642;
   --warning-ink: #f5b642;
-  --warning-bg: #3a2c10;
-  --danger: #ff5a6a;
-  --danger-strong: #e60017;
-  --danger-ink: #ff8a95;
-  --danger-bg: #3a1418;
-  --neutral: #989ca4;
-  --neutral-ink: #b6b9bf;
-  --neutral-bg: #26282a;
+  --warning-bg: rgb(245 182 66 / 0.16);
+  --danger: #ff6b62;
+  --danger-strong: #ff6b62;
+  --danger-ink: #ff8a85;
+  --danger-bg: rgb(255 107 98 / 0.16);
+  --neutral: rgb(237 237 237 / 0.5);
+  --neutral-ink: rgb(237 237 237 / 0.62);
+  --neutral-bg: rgb(237 237 237 / 0.08);
 
-  --overlay: rgb(0 0 0 / 0.55);
-  --track: #3a3c3f;
+  --overlay: rgb(0 0 0 / 0.6);
+  --track: rgb(237 237 237 / 0.16);
 
   --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
   --shadow-md: 0 6px 18px -4px rgb(0 0 0 / 0.5);
@@ -197,7 +213,7 @@ body {
   font-family: var(--font-sans), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   font-size: var(--text-body);
   line-height: 1.55;
-  font-weight: 400;
+  font-weight: 500;
   color: var(--text);
   background: var(--canvas);
   -webkit-font-smoothing: antialiased;

@@ -24,7 +24,6 @@
   flex-direction: column;
   max-height: 68vh;
   background: var(--surface-raised);
-  border: 1px solid var(--border);
   border-radius: var(--radius-xl);
   box-shadow: var(--shadow-lg);
   overflow: hidden;

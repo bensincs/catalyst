@@ -23,8 +23,8 @@
   place-items: center;
   min-height: 400px;
   background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-island);
+  box-shadow: var(--shadow-sm);
   background-image: radial-gradient(
     circle at 50% 38%,
     color-mix(in srgb, var(--text) 3%, transparent),
@@ -35,8 +35,8 @@
 .list {
   margin: 0;
   background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-sm);
   overflow: hidden;
 }
 
@@ -82,7 +82,7 @@
 }
 .beta {
   padding: 1px 6px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   background: var(--info-bg);
   color: var(--info-ink);
   font-size: 10px;
