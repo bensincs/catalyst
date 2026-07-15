@@ -37,6 +37,11 @@ const DEPLOY_URL =
   process.env.NEXT_PUBLIC_CORTEX_DEPLOY_URL ??
   "https://portal.azure.com/#create/Microsoft.Solutions%2FmanagedApplications";
 
+// Portal "Deploy to Azure" for the Lighthouse delegation. Set to the hosted ARM
+// template / managed-service offer URL in production.
+const DELEGATION_DEPLOY_URL =
+  process.env.NEXT_PUBLIC_CORTEX_DELEGATION_DEPLOY_URL ?? "https://portal.azure.com/#create/Microsoft.Template";
+
 // Published by Cortex — the managing tenant + control-plane service principal a
 // customer delegates their cortex-infra resource group to via Azure Lighthouse.
 const CORTEX_TENANT_ID = process.env.NEXT_PUBLIC_CORTEX_TENANT_ID ?? "<your Cortex tenant id>";
@@ -187,6 +192,17 @@ function DelegationSection({ subscriptionId, region }: { subscriptionId: string;
       <pre className={styles.cmd}>
         <code>{cmd}</code>
       </pre>
+      <div className={styles.delegationActions}>
+        <Button
+          variant="primary"
+          icon={ShieldCheck}
+          iconRight={ArrowUpRight}
+          onClick={() => window.open(DELEGATION_DEPLOY_URL, "_blank", "noopener,noreferrer")}
+        >
+          Deploy to Azure
+        </Button>
+        <span className={styles.delegationActionsHint}>Opens the Azure portal to deploy the delegation.</span>
+      </div>
       <p className={styles.delegationNote}>
         Least privilege: Contributor to build resources, plus a <em>limited</em> User Access Administrator
         that can only grant the reconciler&apos;s managed identity its Foundry + AKS roles — nothing else, to

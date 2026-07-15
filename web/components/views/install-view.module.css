@@ -277,6 +277,7 @@
   border-radius: var(--radius-island);
   box-shadow: var(--shadow-sm);
   padding: clamp(24px, 3vw, 32px);
+  margin-bottom: var(--space-base);
 }
 .sectionTitle {
   font-size: var(--text-h3);
@@ -366,6 +367,18 @@
   line-height: 1.55;
   max-width: 80ch;
   margin: 12px 0 0;
+}
+
+.delegationActions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+}
+.delegationActionsHint {
+  font-size: var(--text-caption);
+  color: var(--text-muted);
 }
 
 /* ── Responsive ── */
