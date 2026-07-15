@@ -9,10 +9,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -25,11 +28,14 @@ var ErrBadRef = errors.New("not an OCI Bicep module reference (br:… / oci://�
 
 // Resolve turns an infra reference into a deployable ARM template + the names of
 // its outputs (for wiring). The reference is either an OCI Bicep module
-// (br:registry/repo:tag or oci://…) or an inline ARM JSON template. Empty input
-// yields ("", nil, nil). Returns ErrNoCompiler when a module ref needs a
-// toolchain that isn't present, or a build error (with the compiler message) for
-// an invalid module.
-func Resolve(ctx context.Context, ref string) (arm string, outputs []string, err error) {
+// (br:registry/repo:tag or oci://…) or an inline ARM JSON template. params are
+// the module's input parameters (author-supplied); they're baked into the
+// resolved template as literals, so the reconciler deploys it without needing to
+// pass parameters. Empty input yields ("", nil, nil). Returns ErrNoCompiler when
+// a module ref needs a toolchain that isn't present, or a build error (with the
+// compiler message — e.g. which required params are missing) for an invalid
+// module.
+func Resolve(ctx context.Context, ref string, params map[string]any) (arm string, outputs []string, err error) {
 	s := strings.TrimSpace(ref)
 	if s == "" {
 		return "", nil, nil
@@ -50,7 +56,7 @@ func Resolve(ctx context.Context, ref string) (arm string, outputs []string, err
 	defer os.RemoveAll(dir)
 
 	// Pass 1: build a wrapper that references the module, to discover its outputs.
-	arm1, err := build(ctx, dir, wrapper(s, nil))
+	arm1, err := build(ctx, dir, wrapper(s, nil, params))
 	if err != nil {
 		return "", nil, err
 	}
@@ -60,7 +66,7 @@ func Resolve(ctx context.Context, ref string) (arm string, outputs []string, err
 	}
 	// Pass 2: re-export the module's outputs at the top level so the deployment
 	// surfaces them (that's what the reconciler reads + wires).
-	arm2, err := build(ctx, dir, wrapper(s, outs))
+	arm2, err := build(ctx, dir, wrapper(s, outs, params))
 	if err != nil {
 		return "", nil, err
 	}
@@ -85,11 +91,15 @@ func isModuleRef(s string) bool {
 	return strings.HasPrefix(s, "br:") || strings.HasPrefix(s, "br/") || strings.HasPrefix(s, "oci://")
 }
 
-// wrapper generates a Bicep file that instantiates the OCI module and re-exports
-// the given outputs (name → Bicep type).
-func wrapper(ref string, outputs map[string]string) string {
+// wrapper generates a Bicep file that instantiates the OCI module with the
+// author's params and re-exports the given outputs (name → Bicep type).
+func wrapper(ref string, outputs map[string]string, params map[string]any) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "module infra '%s' = {\n  name: 'infra'\n}\n", ref)
+	fmt.Fprintf(&b, "module infra '%s' = {\n  name: 'infra'\n", ref)
+	if len(params) > 0 {
+		fmt.Fprintf(&b, "  params: %s\n", bicepObject(params, 1))
+	}
+	b.WriteString("}\n")
 	names := make([]string, 0, len(outputs))
 	for k := range outputs {
 		names = append(names, k)
@@ -103,6 +113,98 @@ func wrapper(ref string, outputs map[string]string) string {
 		fmt.Fprintf(&b, "output %s %s = infra.outputs.%s\n", name, t, name)
 	}
 	return b.String()
+}
+
+var bicepIdent = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+
+// bicepObject renders a JSON-decoded map as a Bicep object literal. indent is the
+// nesting depth (2 spaces per level); the closing brace sits at that depth and
+// the entries one deeper, so the block aligns under `params:`.
+func bicepObject(m map[string]any, indent int) string {
+	if len(m) == 0 {
+		return "{}"
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	pad := strings.Repeat("  ", indent+1)
+	end := strings.Repeat("  ", indent)
+	var b strings.Builder
+	b.WriteString("{\n")
+	for _, k := range keys {
+		fmt.Fprintf(&b, "%s%s: %s\n", pad, bicepKey(k), bicepValue(m[k], indent+1))
+	}
+	b.WriteString(end + "}")
+	return b.String()
+}
+
+func bicepArray(a []any, indent int) string {
+	if len(a) == 0 {
+		return "[]"
+	}
+	pad := strings.Repeat("  ", indent+1)
+	end := strings.Repeat("  ", indent)
+	var b strings.Builder
+	b.WriteString("[\n")
+	for _, item := range a {
+		fmt.Fprintf(&b, "%s%s\n", pad, bicepValue(item, indent+1))
+	}
+	b.WriteString(end + "]")
+	return b.String()
+}
+
+// bicepValue renders a single JSON-decoded value as a Bicep literal. Bicep has no
+// float type, so whole-number floats collapse to ints; non-integral numbers are
+// emitted as-is (the compiler rejects them, surfacing a clear author error).
+func bicepValue(v any, indent int) string {
+	switch x := v.(type) {
+	case nil:
+		return "null"
+	case bool:
+		return strconv.FormatBool(x)
+	case string:
+		return "'" + escapeBicepString(x) + "'"
+	case json.Number:
+		return x.String()
+	case float64:
+		if x == math.Trunc(x) && !math.IsInf(x, 0) {
+			return strconv.FormatInt(int64(x), 10)
+		}
+		return strconv.FormatFloat(x, 'g', -1, 64)
+	case int:
+		return strconv.Itoa(x)
+	case int64:
+		return strconv.FormatInt(x, 10)
+	case []any:
+		return bicepArray(x, indent)
+	case map[string]any:
+		return bicepObject(x, indent)
+	default:
+		b, _ := json.Marshal(x)
+		return "'" + escapeBicepString(string(b)) + "'"
+	}
+}
+
+func bicepKey(k string) string {
+	if bicepIdent.MatchString(k) {
+		return k
+	}
+	return "'" + escapeBicepString(k) + "'"
+}
+
+// escapeBicepString escapes a Go string for a single-quoted Bicep string literal.
+func escapeBicepString(s string) string {
+	r := strings.NewReplacer(
+		`\`, `\\`,
+		`'`, `\'`,
+		`$`, `\$`,
+		"\n", `\n`,
+		"\r", `\r`,
+		"\t", `\t`,
+	)
+	return r.Replace(s)
 }
 
 // moduleOutputTypes reads the nested module's outputs (name → Bicep type) from a

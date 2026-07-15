@@ -22,7 +22,7 @@ import (
 // wiring UI). A bad reference or invalid module is a 400; a missing toolchain
 // degrades gracefully — the definition still saves, infra is just unresolved.
 func (s *Server) resolveAppInfra(w http.ResponseWriter, r *http.Request, app *model.Application) bool {
-	arm, outputs, err := bicep.Resolve(r.Context(), app.BicepModule)
+	arm, outputs, err := bicep.Resolve(r.Context(), app.BicepModule, app.BicepParams)
 	if err != nil {
 		if errors.Is(err, bicep.ErrNoCompiler) {
 			app.ArmTemplate, app.BicepOutputs = "", nil
@@ -807,6 +807,7 @@ func (s *Server) handleCreateApplication(w http.ResponseWriter, r *http.Request)
 		TargetRevision string            `json:"targetRevision"`
 		Values         string            `json:"values"`
 		BicepModule    string            `json:"bicepModule"`
+		BicepParams    map[string]any    `json:"bicepParams"`
 		Wiring         []shared.WireLink `json:"wiring"`
 		DependsOn      []string          `json:"dependsOn"`
 	}
@@ -847,6 +848,7 @@ func (s *Server) handleCreateApplication(w http.ResponseWriter, r *http.Request)
 		TargetRevision: strings.TrimSpace(body.TargetRevision),
 		Values:         body.Values,
 		BicepModule:    strings.TrimSpace(body.BicepModule),
+		BicepParams:    body.BicepParams,
 		Wiring:         body.Wiring,
 		DependsOn:      body.DependsOn,
 	}
@@ -879,6 +881,7 @@ func (s *Server) handleUpdateApplication(w http.ResponseWriter, r *http.Request)
 		TargetRevision string            `json:"targetRevision"`
 		Values         string            `json:"values"`
 		BicepModule    string            `json:"bicepModule"`
+		BicepParams    map[string]any    `json:"bicepParams"`
 		Wiring         []shared.WireLink `json:"wiring"`
 		DependsOn      []string          `json:"dependsOn"`
 	}
@@ -907,6 +910,7 @@ func (s *Server) handleUpdateApplication(w http.ResponseWriter, r *http.Request)
 		TargetRevision: strings.TrimSpace(body.TargetRevision),
 		Values:         body.Values,
 		BicepModule:    strings.TrimSpace(body.BicepModule),
+		BicepParams:    body.BicepParams,
 		Wiring:         body.Wiring,
 		DependsOn:      body.DependsOn,
 	}

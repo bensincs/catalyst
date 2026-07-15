@@ -152,6 +152,12 @@
   margin: -2px 0 4px;
 }
 
+.paramsError {
+  font-size: var(--text-caption);
+  color: var(--danger-ink, var(--danger));
+  margin: 6px 0 0;
+}
+
 /* Monospace code editor (Bicep / YAML) */
 .codeArea {
   font-family: var(--font-mono), ui-monospace, monospace;

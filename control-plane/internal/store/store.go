@@ -1227,14 +1227,36 @@ func (s *Store) ApplyHeartbeat(ctx context.Context, hb shared.Heartbeat) error {
 var ErrDeploymentNotAccessible = errors.New("deployment not accessible to tenant")
 
 const applicationCols = `a.id, a.name, a.description, a.owner_tenant, a.namespace,
-	a.repo_url, a.chart, a.target_revision, a.values, a.bicep, a.bicep_outputs, a.wiring, a.depends_on, a.created_by, a.created_at`
+	a.repo_url, a.chart, a.target_revision, a.values, a.bicep, a.bicep_params, a.bicep_outputs, a.wiring, a.depends_on, a.created_by, a.created_at`
 
-// appScanDest scans the fixed columns; wiring (jsonb) is captured raw and
-// unmarshalled by the caller via wiringFromRaw. arm_template is not scanned here
-// (it's reconciler-only, read directly in SyncDesired).
-func appScanDest(a *model.Application, wiringRaw *[]byte) []any {
+// appScanDest scans the fixed columns; bicep_params + wiring (jsonb) are captured
+// raw and unmarshalled by the caller (paramsFromRaw / wiringFromRaw). arm_template
+// is not scanned here (it's reconciler-only, read directly in SyncDesired).
+func appScanDest(a *model.Application, paramsRaw, wiringRaw *[]byte) []any {
 	return []any{&a.ID, &a.Name, &a.Description, &a.Owner, &a.Namespace,
-		&a.RepoURL, &a.Chart, &a.TargetRevision, &a.Values, &a.BicepModule, &a.BicepOutputs, wiringRaw, &a.DependsOn, &a.CreatedBy, &a.CreatedAt}
+		&a.RepoURL, &a.Chart, &a.TargetRevision, &a.Values, &a.BicepModule, paramsRaw, &a.BicepOutputs, wiringRaw, &a.DependsOn, &a.CreatedBy, &a.CreatedAt}
+}
+
+func paramsFromRaw(raw []byte) map[string]any {
+	if len(raw) == 0 {
+		return nil
+	}
+	m := map[string]any{}
+	if json.Unmarshal(raw, &m) != nil || len(m) == 0 {
+		return nil
+	}
+	return m
+}
+
+func paramsJSON(p map[string]any) []byte {
+	if len(p) == 0 {
+		return []byte("{}")
+	}
+	b, err := json.Marshal(p)
+	if err != nil {
+		return []byte("{}")
+	}
+	return b
 }
 
 func wiringFromRaw(raw []byte) []shared.WireLink {
@@ -1326,11 +1348,12 @@ func (s *Store) ApplicationList(ctx context.Context) ([]model.Application, error
 	out := []model.Application{}
 	for rows.Next() {
 		var a model.Application
-		var wraw []byte
-		if err := rows.Scan(append(appScanDest(&a, &wraw), &a.OwnerName)...); err != nil {
+		var wraw, praw []byte
+		if err := rows.Scan(append(appScanDest(&a, &praw, &wraw), &a.OwnerName)...); err != nil {
 			return nil, err
 		}
 		a.Wiring = wiringFromRaw(wraw)
+		a.BicepParams = paramsFromRaw(praw)
 		a.Platform = a.Owner == ""
 		out = append(out, a)
 	}
@@ -1367,14 +1390,15 @@ func (s *Store) ApplicationsForTenant(ctx context.Context, slug string) ([]model
 	out := []model.Application{}
 	for rows.Next() {
 		var a model.Application
-		var wraw []byte
+		var wraw, praw []byte
 		var enabled bool
 		var sync, health, infraState string
 		var waiting bool
-		if err := rows.Scan(append(appScanDest(&a, &wraw), &enabled, &sync, &health, &infraState, &waiting)...); err != nil {
+		if err := rows.Scan(append(appScanDest(&a, &praw, &wraw), &enabled, &sync, &health, &infraState, &waiting)...); err != nil {
 			return nil, err
 		}
 		a.Wiring = wiringFromRaw(wraw)
+		a.BicepParams = paramsFromRaw(praw)
 		a.Platform = a.Owner == ""
 		a.Owned = a.Owner == slug
 		a.Entitled = entitledSet[a.ID]
@@ -1392,12 +1416,13 @@ func (s *Store) ApplicationsForTenant(ctx context.Context, slug string) ([]model
 
 func (s *Store) ApplicationByID(ctx context.Context, id string) (model.Application, error) {
 	var a model.Application
-	var wraw []byte
-	err := s.pool.QueryRow(ctx, `SELECT `+applicationCols+` FROM applications a WHERE a.id = $1`, id).Scan(appScanDest(&a, &wraw)...)
+	var wraw, praw []byte
+	err := s.pool.QueryRow(ctx, `SELECT `+applicationCols+` FROM applications a WHERE a.id = $1`, id).Scan(appScanDest(&a, &praw, &wraw)...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return a, ErrNotFound
 	}
 	a.Wiring = wiringFromRaw(wraw)
+	a.BicepParams = paramsFromRaw(praw)
 	a.Platform = a.Owner == ""
 	return a, err
 }
@@ -1405,10 +1430,10 @@ func (s *Store) ApplicationByID(ctx context.Context, id string) (model.Applicati
 // CreateApplication inserts a deployment definition (Owner "" = platform-authored).
 func (s *Store) CreateApplication(ctx context.Context, a model.Application, createdBy string) error {
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO applications (id, name, description, owner_tenant, namespace, repo_url, chart, target_revision, values, bicep, arm_template, bicep_outputs, wiring, depends_on, created_by)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+		`INSERT INTO applications (id, name, description, owner_tenant, namespace, repo_url, chart, target_revision, values, bicep, arm_template, bicep_params, bicep_outputs, wiring, depends_on, created_by)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
 		a.ID, a.Name, a.Description, a.Owner, a.Namespace, a.RepoURL, a.Chart, a.TargetRevision, a.Values,
-		a.BicepModule, a.ArmTemplate, depsArray(a.BicepOutputs), wiringJSON(a.Wiring), depsArray(a.DependsOn), createdBy)
+		a.BicepModule, a.ArmTemplate, paramsJSON(a.BicepParams), depsArray(a.BicepOutputs), wiringJSON(a.Wiring), depsArray(a.DependsOn), createdBy)
 	return err
 }
 
@@ -1419,10 +1444,10 @@ func (s *Store) UpdateApplication(ctx context.Context, a model.Application) erro
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE applications SET name = $2, description = $3, namespace = $4, repo_url = $5,
 		   chart = $6, target_revision = $7, values = $8, bicep = $9, arm_template = $10,
-		   bicep_outputs = $11, wiring = $12, depends_on = $13
+		   bicep_params = $11, bicep_outputs = $12, wiring = $13, depends_on = $14
 		 WHERE id = $1`,
 		a.ID, a.Name, a.Description, a.Namespace, a.RepoURL, a.Chart, a.TargetRevision, a.Values,
-		a.BicepModule, a.ArmTemplate, depsArray(a.BicepOutputs), wiringJSON(a.Wiring), depsArray(a.DependsOn))
+		a.BicepModule, a.ArmTemplate, paramsJSON(a.BicepParams), depsArray(a.BicepOutputs), wiringJSON(a.Wiring), depsArray(a.DependsOn))
 	if err != nil {
 		return err
 	}

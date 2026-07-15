@@ -383,6 +383,7 @@ interface ApiApplication {
   targetRevision: string;
   values?: string;
   bicepModule?: string;
+  bicepParams?: Record<string, unknown> | null;
   bicepOutputs?: string[] | null;
   wiring?: WireLink[] | null;
   dependsOn?: string[] | null;
@@ -412,6 +413,7 @@ export const getApplications = cache(async (): Promise<Application[]> => {
     targetRevision: a.targetRevision,
     values: a.values,
     bicepModule: a.bicepModule ?? "",
+    bicepParams: a.bicepParams ?? {},
     bicepOutputs: a.bicepOutputs ?? [],
     wiring: a.wiring ?? [],
     dependsOn: a.dependsOn ?? [],

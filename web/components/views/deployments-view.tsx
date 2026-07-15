@@ -327,6 +327,7 @@ function DeploymentModal({
     targetRevision: string;
     values: string;
     bicepModule: string;
+    bicepParams: Record<string, unknown>;
     wiring: WireLink[];
     dependsOn: string[];
   }) => void;
@@ -340,10 +341,28 @@ function DeploymentModal({
   const [namespace, setNamespace] = useState(app?.namespace ?? "");
   const [values, setValues] = useState(app?.values ?? "");
   const [bicepModule, setBicepModule] = useState(app?.bicepModule ?? "");
+  const [paramsText, setParamsText] = useState(
+    app?.bicepParams && Object.keys(app.bicepParams).length
+      ? JSON.stringify(app.bicepParams, null, 2)
+      : "",
+  );
   const [wiring, setWiring] = useState<WireLink[]>(app?.wiring ?? []);
   const [dependsOn, setDependsOn] = useState<string[]>(app?.dependsOn ?? []);
 
-  const valid = name.trim().length >= 2 && repoURL.trim() !== "" && chart.trim() !== "";
+  // Params are a JSON object baked into the module; validate before enabling save.
+  const params = useMemo((): { ok: boolean; value: Record<string, unknown> } => {
+    const t = paramsText.trim();
+    if (t === "") return { ok: true, value: {} };
+    try {
+      const v = JSON.parse(t);
+      if (v && typeof v === "object" && !Array.isArray(v)) return { ok: true, value: v as Record<string, unknown> };
+    } catch {
+      /* fall through */
+    }
+    return { ok: false, value: {} };
+  }, [paramsText]);
+
+  const valid = name.trim().length >= 2 && repoURL.trim() !== "" && chart.trim() !== "" && params.ok;
 
   const submit = () =>
     onSubmit({
@@ -355,6 +374,7 @@ function DeploymentModal({
       targetRevision: targetRevision.trim(),
       values,
       bicepModule: bicepModule.trim(),
+      bicepParams: params.value,
       wiring,
       dependsOn,
     });
@@ -435,6 +455,24 @@ function DeploymentModal({
 
       {bicepModule.trim() !== "" && (
         <>
+          <Field
+            label="Module parameters (JSON)"
+            htmlFor="dep-params"
+            hint="Author the module's inputs as a JSON object — baked into the template on save. Required params (e.g. name) must be set or the module won't resolve."
+          >
+            <Textarea
+              id="dep-params"
+              value={paramsText}
+              onChange={(e) => setParamsText(e.target.value)}
+              spellCheck={false}
+              className={styles.codeArea}
+              placeholder={'{\n  "name": "cortex-db",\n  "skuName": "Standard_B1ms",\n  "tier": "Burstable"\n}'}
+            />
+            {paramsText.trim() !== "" && !params.ok && (
+              <p className={styles.paramsError}>Must be a JSON object.</p>
+            )}
+          </Field>
+
           <p className={styles.groupLabel}>Wire outputs → Helm values</p>
           <WiringEditor outputs={app?.bicepOutputs ?? []} wiring={wiring} onChange={setWiring} />
         </>

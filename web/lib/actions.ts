@@ -150,6 +150,7 @@ export async function createApplication(input: {
   targetRevision: string;
   values: string;
   bicepModule: string;
+  bicepParams: Record<string, unknown>;
   wiring: WireLink[];
   dependsOn: string[];
 }): Promise<ActionResult> {
@@ -167,6 +168,7 @@ export async function updateApplication(
     targetRevision: string;
     values: string;
     bicepModule: string;
+    bicepParams: Record<string, unknown>;
     wiring: WireLink[];
     dependsOn: string[];
   },

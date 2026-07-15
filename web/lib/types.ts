@@ -127,6 +127,7 @@ export interface Application {
   targetRevision: string;
   values?: string;
   bicepModule?: string; // OCI ref to a published Bicep module (Azure infra)
+  bicepParams?: Record<string, unknown>; // author-supplied module params
   bicepOutputs: string[]; // resolved module output names (for wiring)
   wiring: WireLink[]; // Bicep output → Helm values path
   dependsOn: string[]; // ids of apps/agents that must converge first

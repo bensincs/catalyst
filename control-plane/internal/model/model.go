@@ -192,6 +192,7 @@ type Application struct {
 	TargetRevision string            `json:"targetRevision"`
 	Values         string            `json:"values,omitempty"`
 	BicepModule    string            `json:"bicepModule,omitempty"` // OCI ref to a published Bicep module
+	BicepParams    map[string]any    `json:"bicepParams,omitempty"` // author-supplied module params (baked into the ARM)
 	ArmTemplate    string            `json:"-"`                     // resolved ARM template; reconciler-only
 	BicepOutputs   []string          `json:"bicepOutputs"`          // resolved module output names (for wiring)
 	Wiring         []shared.WireLink `json:"wiring"`                // Bicep output → Helm values path

@@ -218,11 +218,13 @@ CREATE TABLE IF NOT EXISTS applications (
 ALTER TABLE applications ADD COLUMN IF NOT EXISTS owner_tenant text NOT NULL DEFAULT '';
 ALTER TABLE applications ADD COLUMN IF NOT EXISTS description  text NOT NULL DEFAULT '';
 -- Azure infra + wiring + dependencies. bicep holds an OCI Bicep-module reference
--- (e.g. br:acr.azurecr.io/bicep/db:1.0.0); the control plane resolves it to an
--- ARM template (arm_template) + output names (bicep_outputs) at save. wiring maps
--- those outputs → Helm values paths; depends_on gates deploy order.
+-- (e.g. br:acr.azurecr.io/bicep/db:1.0.0); the control plane bakes bicep_params
+-- into it and resolves it to an ARM template (arm_template) + output names
+-- (bicep_outputs) at save. wiring maps those outputs → Helm values paths;
+-- depends_on gates deploy order.
 ALTER TABLE applications ADD COLUMN IF NOT EXISTS bicep         text    NOT NULL DEFAULT '';
 ALTER TABLE applications ADD COLUMN IF NOT EXISTS arm_template  text    NOT NULL DEFAULT '';
+ALTER TABLE applications ADD COLUMN IF NOT EXISTS bicep_params  jsonb   NOT NULL DEFAULT '{}';
 ALTER TABLE applications ADD COLUMN IF NOT EXISTS bicep_outputs text[]  NOT NULL DEFAULT '{}';
 ALTER TABLE applications ADD COLUMN IF NOT EXISTS wiring        jsonb   NOT NULL DEFAULT '[]';
 ALTER TABLE applications ADD COLUMN IF NOT EXISTS depends_on    text[]  NOT NULL DEFAULT '{}';
