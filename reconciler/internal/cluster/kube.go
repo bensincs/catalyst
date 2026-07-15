@@ -48,12 +48,12 @@ func (k *kube) ensureNamespace(ctx context.Context, name string) error {
 	return err
 }
 
-// protectedNamespaceList is the deterministic set of namespaces that are never
-// mesh-injected or used as tenant workload destinations — the mesh/platform
-// namespaces and Kubernetes' own system namespaces. Kept as an ordered slice so
-// the derived Argo project denies apply without churn.
+// protectedNamespaceList is the deterministic set of namespaces tenant apps may
+// never deploy into — the platform/ingress namespaces and Kubernetes' own system
+// namespaces. Kept as an ordered slice so the derived Argo project denies apply
+// without churn.
 var protectedNamespaceList = []string{
-	argoNamespace, istioSystemNS, istioIngressNS, observabilityNS,
+	argoNamespace, ingressNS,
 	"kube-system", "kube-public", "kube-node-lease", "default", "gatekeeper-system",
 }
 
@@ -65,24 +65,13 @@ var protectedNamespaces = func() map[string]bool {
 	return m
 }()
 
-// ensureMeshNamespace enrolls a tenant workload namespace into the mesh
-// (istio-injection=enabled) so STRICT mTLS, deny-by-default egress, and
-// telemetry actually cover the workloads Argo deploys there. Best-effort: it
-// only adds the label (server-side apply), never fighting Argo for the rest of
-// the namespace, and never touches a protected namespace.
-func (k *kube) ensureMeshNamespace(ctx context.Context, name string) {
+// ensureWorkloadNamespace makes sure a tenant workload namespace exists before
+// Argo deploys into it. It never touches a protected namespace.
+func (k *kube) ensureWorkloadNamespace(ctx context.Context, name string) {
 	if name == "" || protectedNamespaces[name] {
 		return
 	}
-	ns := &unstructured.Unstructured{Object: map[string]any{
-		"apiVersion": "v1",
-		"kind":       "Namespace",
-		"metadata": map[string]any{
-			"name":   name,
-			"labels": map[string]any{"istio-injection": "enabled"},
-		},
-	}}
-	_, _ = k.dyn.Resource(nsGVR).Apply(ctx, name, ns, ssaOpts)
+	_ = k.ensureNamespace(ctx, name)
 }
 
 // applyYAML server-side-applies every document in a multi-doc manifest. Objects
@@ -149,7 +138,7 @@ func (k *kube) reconcileApplications(ctx context.Context, apps []shared.DesiredA
 	for _, a := range apps {
 		name := appName(a.ID)
 		desired[name] = true
-		k.ensureMeshNamespace(ctx, a.Namespace) // enroll the workload's namespace in the mesh
+		k.ensureWorkloadNamespace(ctx, a.Namespace) // make sure the target namespace exists
 		st := shared.ApplicationStatus{ID: a.ID, SyncStatus: "pending", HealthStatus: "pending", InfraState: infraStates[a.ID]}
 		if _, err := ri.Apply(ctx, name, buildApplication(a, name), metav1.ApplyOptions{FieldManager: fieldManager, Force: true}); err != nil {
 			st.SyncStatus, st.HealthStatus = "Unknown", "Unknown"
@@ -178,83 +167,53 @@ func (k *kube) reconcileApplications(ctx context.Context, apps []shared.DesiredA
 	return out
 }
 
-// meshResult is what reconcileMesh reports back for the heartbeat.
-type meshResult struct {
-	meshInstalled bool
-	gatewayIP     string
-	mtlsStrict    bool
-	otelInstalled bool
+// ingressResult is what reconcileIngress reports back for the heartbeat.
+type ingressResult struct {
+	ingressInstalled bool
+	gatewayIP        string
+	issuer           string
 }
 
-// ssaOpts is the server-side-apply option every mesh CR apply uses.
+// ssaOpts is the server-side-apply option every apply uses.
 var ssaOpts = metav1.ApplyOptions{FieldManager: fieldManager, Force: true}
 
-// reconcileMesh installs the mesh as Argo "system" Applications (Istio base +
-// istiod, a hardened ingress gateway, the Alloy OTel collector) and applies the
-// mesh-wide CRs: STRICT mTLS, the default Gateway, security-header EnvoyFilter,
-// and Telemetry. It reports mesh + collector presence and the gateway's public
-// address. Best-effort: the CRs need Istio CRDs, which land over a few cycles,
-// so errors are tolerated and retried.
-func (k *kube) reconcileMesh(ctx context.Context, o Options) meshResult {
-	// Restricted Argo projects first, so the mesh + tenant apps are bounded the
-	// moment they're stamped.
-	for _, p := range argoProjects() {
-		_, _ = k.dyn.Resource(prjGVR).Namespace(argoNamespace).Apply(ctx, p.GetName(), p, ssaOpts)
-	}
-	ri := k.dyn.Resource(appGVR).Namespace(argoNamespace)
-	for _, app := range systemApps(o) {
-		_, _ = ri.Apply(ctx, app.GetName(), app, ssaOpts)
-	}
+// reconcileIngress installs the standalone Envoy ingress: a hardened public
+// LoadBalancer whose Envoy config enforces the tenant's Entra JWT (native
+// jwt_authn) and hardens response headers. The config is rendered from the
+// tenant's issuer rules — with none it fails closed (403). It also stamps the
+// restricted tenant Argo project. Reports ingress presence, the public address,
+// and the enforced issuer ("" ⇒ closed).
+func (k *kube) reconcileIngress(ctx context.Context, o Options, auth *shared.IngressAuth) ingressResult {
+	// Bound tenant Helm apps first, so they're restricted the moment they're stamped.
+	_, _ = k.dyn.Resource(prjGVR).Namespace(argoNamespace).Apply(ctx, projectTenants, argoTenantProject(), ssaOpts)
 
-	// Mesh-wide CRs (depend on Istio CRDs — tolerated + retried until established).
-	_, mtlsErr := k.dyn.Resource(paGVR).Namespace(istioSystemNS).Apply(ctx, "default", peerAuthentication(), ssaOpts)
-	_, _ = k.dyn.Resource(gwGVR).Namespace(istioIngressNS).Apply(ctx, defaultGWName, defaultGateway(o.IngressTLSCredentialName), ssaOpts)
-	_, _ = k.dyn.Resource(efGVR).Namespace(istioIngressNS).Apply(ctx, "cortex-security-headers", securityHeadersFilter(), ssaOpts)
-	_, _ = k.dyn.Resource(telGVR).Namespace(istioSystemNS).Apply(ctx, "default", meshTelemetry(), ssaOpts)
+	rules := validAuthRules(auth)
+	cfg := envoyConfig(rules, o.IngressTLSCredentialName)
 
-	res := meshResult{gatewayIP: k.ingressIP(ctx)}
-	if _, err := k.dyn.Resource(depGVR).Namespace(istioSystemNS).Get(ctx, "istiod", metav1.GetOptions{}); err == nil {
-		res.meshInstalled = true
+	_, _ = k.dyn.Resource(nsGVR).Apply(ctx, ingressNS, ingressNamespace(), ssaOpts)
+	_, _ = k.dyn.Resource(saGVR).Namespace(ingressNS).Apply(ctx, ingressName, ingressServiceAccount(), ssaOpts)
+	_, _ = k.dyn.Resource(cmGVR).Namespace(ingressNS).Apply(ctx, ingressCMName, ingressConfigMap(cfg), ssaOpts)
+	_, _ = k.dyn.Resource(depGVR).Namespace(ingressNS).Apply(ctx, ingressName, ingressDeployment(cfg, o.IngressTLSCredentialName), ssaOpts)
+	_, _ = k.dyn.Resource(svcGVR).Namespace(ingressNS).Apply(ctx, ingressName, ingressService(o.IngressTLSCredentialName), ssaOpts)
+
+	res := ingressResult{gatewayIP: k.ingressIP(ctx)}
+	if _, err := k.dyn.Resource(depGVR).Namespace(ingressNS).Get(ctx, ingressName, metav1.GetOptions{}); err == nil {
+		res.ingressInstalled = true
 	}
-	// STRICT mTLS is "active" only when the policy applied and the control plane
-	// that enforces it is present.
-	res.mtlsStrict = mtlsErr == nil && res.meshInstalled
-	if _, err := k.dyn.Resource(depGVR).Namespace(observabilityNS).Get(ctx, alloyServiceName, metav1.GetOptions{}); err == nil {
-		res.otelInstalled = true
+	if len(rules) > 0 {
+		res.issuer = rules[0].Issuer
 	}
 	return res
 }
 
-// reconcileIngressAuth pins the ingress gateway to accept only the tenant's own
-// Entra tokens (RequestAuthentication) and requires one on every request
-// (AuthorizationPolicy). With no identity configured it fails the gateway CLOSED
-// (deny-all) rather than serving open. It returns the enforced issuer, or "" when
-// none is configured. Best-effort: the CRs need Istio's security CRDs, which land
-// with istiod over a few cycles, so errors are tolerated and retried.
-func (k *kube) reconcileIngressAuth(ctx context.Context, auth *shared.IngressAuth) string {
-	ap := k.dyn.Resource(apGVR).Namespace(istioIngressNS)
-	ra := k.dyn.Resource(raGVR).Namespace(istioIngressNS)
-	rules := validAuthRules(auth)
-	if len(rules) == 0 {
-		// No usable identity ⇒ fail closed: deny all ingress and drop any stale
-		// JWT rule.
-		_, _ = ap.Apply(ctx, authPolicyName, denyAllPolicy(), ssaOpts)
-		_ = ra.Delete(ctx, requestAuthName, metav1.DeleteOptions{})
-		return ""
-	}
-	_, _ = ra.Apply(ctx, requestAuthName, requestAuthentication(rules), ssaOpts)
-	_, _ = ap.Apply(ctx, authPolicyName, requireJWTPolicy(rules), ssaOpts)
-	return rules[0].Issuer
-}
-
-// ingressIP returns the public address (IP or hostname) of the ingress gateway's
+// ingressIP returns the public address (IP or hostname) of the Envoy ingress
 // LoadBalancer Service, or "" until Azure has assigned one.
 func (k *kube) ingressIP(ctx context.Context) string {
-	list, err := k.dyn.Resource(svcGVR).Namespace(istioIngressNS).List(ctx, metav1.ListOptions{LabelSelector: "istio=" + ingressGWLabel})
-	if err != nil || len(list.Items) == 0 {
+	svc, err := k.dyn.Resource(svcGVR).Namespace(ingressNS).Get(ctx, ingressName, metav1.GetOptions{})
+	if err != nil {
 		return ""
 	}
-	ing, found, _ := unstructured.NestedSlice(list.Items[0].Object, "status", "loadBalancer", "ingress")
+	ing, found, _ := unstructured.NestedSlice(svc.Object, "status", "loadBalancer", "ingress")
 	if !found || len(ing) == 0 {
 		return ""
 	}

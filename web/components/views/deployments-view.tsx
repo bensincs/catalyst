@@ -285,19 +285,13 @@ function ClusterStrip({ cluster }: { cluster: ClusterInfo }) {
       <span className={styles.chip} data-off={!cluster.argoInstalled}>
         Argo CD
       </span>
-      <span className={styles.chip} data-off={!cluster.meshInstalled}>
-        Istio
-      </span>
-      <span className={styles.chip} data-off={!cluster.mtlsStrict} title="Mesh-wide STRICT mutual TLS">
-        mTLS
-      </span>
-      <span className={styles.chip} data-off={!cluster.otelInstalled} title="Grafana Alloy OpenTelemetry collector">
-        OTel
+      <span className={styles.chip} data-off={!cluster.ingressInstalled} title="Envoy ingress (public LoadBalancer)">
+        Envoy ingress
       </span>
       <span
         className={styles.chip}
         data-off={!cluster.ingressIssuer}
-        title={cluster.ingressIssuer ? `Ingress requires an Entra token from ${cluster.ingressIssuer}` : undefined}
+        title={cluster.ingressIssuer ? `Ingress requires an Entra token from ${cluster.ingressIssuer}` : "Ingress is closed until an Entra identity is configured"}
       >
         Entra auth
       </span>

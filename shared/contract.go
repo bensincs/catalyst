@@ -186,17 +186,15 @@ const (
 // ClusterStatus is the actual state of a tenant's Kubernetes cluster + its GitOps
 // bootstrap (reconciler → control plane).
 type ClusterStatus struct {
-	Name          string `json:"name"`
-	Phase         string `json:"phase"` // provisioning | ready | unreachable
-	KubernetesVer string `json:"kubernetesVersion,omitempty"`
-	ArgoInstalled bool   `json:"argoInstalled"`
-	MeshInstalled bool   `json:"meshInstalled"`           // Istio control plane present
-	MTLSStrict    bool   `json:"mtlsStrict"`              // mesh-wide STRICT mTLS active
-	OTelInstalled bool   `json:"otelInstalled"`           // Alloy OTel collector present
-	GatewayIP     string `json:"gatewayIP,omitempty"`     // public ingress gateway address (LB IP/hostname)
-	IngressIssuer string `json:"ingressIssuer,omitempty"` // Entra issuer the ingress enforces ("" ⇒ open)
-	NodeCount     int    `json:"nodeCount,omitempty"`
-	Detail        string `json:"detail,omitempty"` // human-readable note when not ready
+	Name             string `json:"name"`
+	Phase            string `json:"phase"` // provisioning | ready | unreachable
+	KubernetesVer    string `json:"kubernetesVersion,omitempty"`
+	ArgoInstalled    bool   `json:"argoInstalled"`
+	IngressInstalled bool   `json:"ingressInstalled"`        // Envoy ingress present
+	GatewayIP        string `json:"gatewayIP,omitempty"`     // public ingress address (LB IP/hostname)
+	IngressIssuer    string `json:"ingressIssuer,omitempty"` // Entra issuer the ingress enforces ("" ⇒ closed)
+	NodeCount        int    `json:"nodeCount,omitempty"`
+	Detail           string `json:"detail,omitempty"` // human-readable note when not ready
 }
 
 // ApplicationStatus is the actual state of one Argo CD Application the reconciler

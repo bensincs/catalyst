@@ -89,11 +89,9 @@ export interface ClusterInfo {
   phase: string; // provisioning | ready | unreachable | "" (none)
   kubernetesVersion?: string;
   argoInstalled: boolean;
-  meshInstalled: boolean;
-  mtlsStrict: boolean;
-  otelInstalled: boolean;
+  ingressInstalled: boolean;
   gatewayIP?: string;
-  ingressIssuer?: string; // Entra issuer the ingress enforces ("" ⇒ open)
+  ingressIssuer?: string; // Entra issuer the ingress enforces ("" ⇒ closed)
   nodeCount: number;
   detail?: string;
 }

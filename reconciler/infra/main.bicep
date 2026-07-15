@@ -94,23 +94,7 @@ param nodeCount int = 2
 @description('Argo CD version the reconciler bootstraps into the cluster.')
 param argocdVersion string = 'v2.13.2'
 
-@description('Istio version the reconciler installs for the service mesh + ingress gateway.')
-param istioVersion string = '1.24.2'
-
-@description('Grafana Alloy Helm chart version the reconciler installs as the cluster OTel collector.')
-param alloyChartVersion string = '1.0.1'
-
-@description('OTLP endpoint the in-cluster Alloy collector ships telemetry to. Empty = collect + log locally (no external backend).')
-param otelExporterEndpoint string = ''
-
-@description('Mesh egress policy: REGISTRY_ONLY (deny-by-default, recommended) or ALLOW_ANY.')
-@allowed([
-  'REGISTRY_ONLY'
-  'ALLOW_ANY'
-])
-param outboundTrafficPolicy string = 'REGISTRY_ONLY'
-
-@description('Name of the Kubernetes TLS secret (in the istio-ingress namespace) the gateway terminates HTTPS from. Empty = HTTP only (JWT auth still enforced).')
+@description('Name of the Kubernetes TLS secret (in the cortex-ingress namespace) the Envoy ingress terminates HTTPS from. Empty = HTTP only (JWT auth still enforced).')
 param ingressTlsCredentialName string = ''
 
 @description('Reconciler container image (published by Cortex, or your own registry).')
@@ -388,10 +372,6 @@ resource reconciler 'Microsoft.App/containerApps@2024-03-01' = if (deployReconci
             { name: 'CLUSTER_NAME', value: clusterName }
             { name: 'CLUSTER_RESOURCE_GROUP', value: resourceGroup().name }
             { name: 'ARGOCD_VERSION', value: argocdVersion }
-            { name: 'ISTIO_VERSION', value: istioVersion }
-            { name: 'ALLOY_CHART_VERSION', value: alloyChartVersion }
-            { name: 'OTEL_EXPORTER_OTLP_ENDPOINT', value: otelExporterEndpoint }
-            { name: 'ISTIO_OUTBOUND_TRAFFIC_POLICY', value: outboundTrafficPolicy }
             { name: 'INGRESS_TLS_CREDENTIAL_NAME', value: ingressTlsCredentialName }
           ]
         }

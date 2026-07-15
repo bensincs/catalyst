@@ -42,10 +42,6 @@ func main() {
 			ResourceGroup:            cfg.ClusterResourceGroup,
 			ClusterName:              cfg.ClusterName,
 			ArgoVersion:              cfg.ArgoCDVersion,
-			IstioVersion:             cfg.IstioVersion,
-			AlloyChartVersion:        cfg.AlloyChartVersion,
-			OTelExporterEndpoint:     cfg.OTelExporterEndpoint,
-			OutboundTrafficPolicy:    cfg.OutboundTrafficPolicy,
 			IngressTLSCredentialName: cfg.IngressTLSCredentialName,
 		})
 	}

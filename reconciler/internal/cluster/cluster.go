@@ -44,11 +44,11 @@ const (
 )
 
 // Labels Cortex stamps on every Argo Application it manages, so it only ever
-// mutates or prunes Applications it owns. System apps (Istio, gateway) also carry
-// labelSystem so the tenant-app prune never removes the mesh.
+// mutates or prunes Applications it owns. System resources (the ingress) also
+// carry labelSystem so the tenant-app prune never removes them.
 const (
 	labelManaged = "cortex.io/managed" // "true"
-	labelSystem  = "cortex.io/system"  // "true" for mesh/gateway apps
+	labelSystem  = "cortex.io/system"  // "true" for the ingress/system resources
 	labelAppID   = "cortex.io/app-id"  // control-plane application id
 )
 
@@ -58,26 +58,18 @@ var (
 	nsGVR  = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "namespaces"}
 	depGVR = schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
 	svcGVR = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "services"}
-	gwGVR  = schema.GroupVersionResource{Group: "networking.istio.io", Version: "v1", Resource: "gateways"}
-	raGVR  = schema.GroupVersionResource{Group: "security.istio.io", Version: "v1", Resource: "requestauthentications"}
-	apGVR  = schema.GroupVersionResource{Group: "security.istio.io", Version: "v1", Resource: "authorizationpolicies"}
-	paGVR  = schema.GroupVersionResource{Group: "security.istio.io", Version: "v1", Resource: "peerauthentications"}
-	efGVR  = schema.GroupVersionResource{Group: "networking.istio.io", Version: "v1alpha3", Resource: "envoyfilters"}
-	telGVR = schema.GroupVersionResource{Group: "telemetry.istio.io", Version: "v1", Resource: "telemetries"}
+	saGVR  = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "serviceaccounts"}
+	cmGVR  = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "configmaps"}
 )
 
 // Options is the full address + policy for one tenant's cluster. Grouping them
-// keeps the constructor stable as the mesh/observability surface grows.
+// keeps the constructor stable as the platform surface grows.
 type Options struct {
 	SubscriptionID           string
 	ResourceGroup            string
 	ClusterName              string
 	ArgoVersion              string
-	IstioVersion             string
-	AlloyChartVersion        string
-	OTelExporterEndpoint     string // where the in-cluster collector ships telemetry ("" ⇒ log locally)
-	OutboundTrafficPolicy    string // mesh egress mode: REGISTRY_ONLY | ALLOW_ANY
-	IngressTLSCredentialName string // cert secret name ⇒ gateway terminates HTTPS + redirects HTTP
+	IngressTLSCredentialName string // cert secret name ⇒ Envoy terminates HTTPS + redirects HTTP
 }
 
 // Client drives one tenant's cluster (one reconciler → one cluster).
@@ -145,18 +137,12 @@ func (c *Client) Reconcile(ctx context.Context, apps []shared.DesiredApplication
 	status.ArgoInstalled = true
 	status.Phase = shared.ClusterReady
 
-	// Bootstrap the service mesh: Istio + a hardened public ingress gateway,
-	// mesh-wide STRICT mTLS, an OTel collector (Alloy) every workload can emit
-	// to, and mesh telemetry — all as Argo "system" Applications / CRs.
-	mr := k.reconcileMesh(ctx, c.o)
-	status.MeshInstalled = mr.meshInstalled
-	status.GatewayIP = mr.gatewayIP
-	status.MTLSStrict = mr.mtlsStrict
-	status.OTelInstalled = mr.otelInstalled
-
-	// Pin the ingress gateway to this tenant's Entra directory (the multi-tenant
-	// Cortex app, but only tokens issued for this tenant).
-	status.IngressIssuer = k.reconcileIngressAuth(ctx, auth)
+	// Bootstrap the public ingress: a hardened Envoy LoadBalancer that enforces
+	// this tenant's Entra identity (native JWT) and fails closed when none is set.
+	ir := k.reconcileIngress(ctx, c.o, auth)
+	status.IngressInstalled = ir.ingressInstalled
+	status.GatewayIP = ir.gatewayIP
+	status.IngressIssuer = ir.issuer
 
 	// Provision each app's Azure infra (compiled ARM from Bicep) and wire its
 	// outputs into the Helm values before Argo stamps the chart. Best-effort +

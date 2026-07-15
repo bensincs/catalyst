@@ -162,17 +162,15 @@ type MemoryStore struct {
 // ClusterInfo is a tenant's Kubernetes/GitOps status, reported by the reconciler
 // via the heartbeat (never client-supplied).
 type ClusterInfo struct {
-	Name          string `json:"name"`
-	Phase         string `json:"phase"` // provisioning | ready | unreachable | "" (none)
-	K8sVersion    string `json:"kubernetesVersion,omitempty"`
-	ArgoInstalled bool   `json:"argoInstalled"`
-	MeshInstalled bool   `json:"meshInstalled"`
-	MTLSStrict    bool   `json:"mtlsStrict"`
-	OTelInstalled bool   `json:"otelInstalled"`
-	GatewayIP     string `json:"gatewayIP,omitempty"`
-	IngressIssuer string `json:"ingressIssuer,omitempty"`
-	NodeCount     int    `json:"nodeCount"`
-	Detail        string `json:"detail,omitempty"`
+	Name             string `json:"name"`
+	Phase            string `json:"phase"` // provisioning | ready | unreachable | "" (none)
+	K8sVersion       string `json:"kubernetesVersion,omitempty"`
+	ArgoInstalled    bool   `json:"argoInstalled"`
+	IngressInstalled bool   `json:"ingressInstalled"`
+	GatewayIP        string `json:"gatewayIP,omitempty"`
+	IngressIssuer    string `json:"ingressIssuer,omitempty"`
+	NodeCount        int    `json:"nodeCount"`
+	Detail           string `json:"detail,omitempty"`
 }
 
 // Application is a Helm deployment a tenant runs in its cluster, realized as an

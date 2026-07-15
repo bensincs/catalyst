@@ -55,9 +55,7 @@ interface ApiCluster {
   phase?: string;
   kubernetesVersion?: string;
   argoInstalled?: boolean;
-  meshInstalled?: boolean;
-  mtlsStrict?: boolean;
-  otelInstalled?: boolean;
+  ingressInstalled?: boolean;
   gatewayIP?: string;
   ingressIssuer?: string;
   nodeCount?: number;
@@ -226,9 +224,7 @@ function toCluster(c?: ApiCluster | null): ClusterInfo {
     phase: c?.phase ?? "",
     kubernetesVersion: c?.kubernetesVersion,
     argoInstalled: Boolean(c?.argoInstalled),
-    meshInstalled: Boolean(c?.meshInstalled),
-    mtlsStrict: Boolean(c?.mtlsStrict),
-    otelInstalled: Boolean(c?.otelInstalled),
+    ingressInstalled: Boolean(c?.ingressInstalled),
     gatewayIP: c?.gatewayIP,
     ingressIssuer: c?.ingressIssuer,
     nodeCount: c?.nodeCount ?? 0,
