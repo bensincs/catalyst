@@ -130,7 +130,7 @@ func (k *kube) restMapper() (meta.RESTMapper, error) {
 
 // reconcileApplications stamps a desired Argo Application for each deployment,
 // prunes managed Applications no longer desired, and reports each app's status.
-func (k *kube) reconcileApplications(ctx context.Context, apps []shared.DesiredApplication, infraStates map[string]string) []shared.ApplicationStatus {
+func (k *kube) reconcileApplications(ctx context.Context, apps []shared.DesiredApplication) []shared.ApplicationStatus {
 	out := make([]shared.ApplicationStatus, 0, len(apps))
 	desired := map[string]bool{}
 	ri := k.dyn.Resource(appGVR).Namespace(argoNamespace)
@@ -139,7 +139,7 @@ func (k *kube) reconcileApplications(ctx context.Context, apps []shared.DesiredA
 		name := appName(a.ID)
 		desired[name] = true
 		k.ensureWorkloadNamespace(ctx, a.Namespace) // make sure the target namespace exists
-		st := shared.ApplicationStatus{ID: a.ID, SyncStatus: "pending", HealthStatus: "pending", InfraState: infraStates[a.ID]}
+		st := shared.ApplicationStatus{ID: a.ID, SyncStatus: "pending", HealthStatus: "pending"}
 		if _, err := ri.Apply(ctx, name, buildApplication(a, name), metav1.ApplyOptions{FieldManager: fieldManager, Force: true}); err != nil {
 			st.SyncStatus, st.HealthStatus = "Unknown", "Unknown"
 			out = append(out, st)

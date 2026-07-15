@@ -225,6 +225,41 @@
   color: var(--accent-ink);
 }
 
+/* ── Infrastructure delegation (Lighthouse) ── */
+.delegationLead {
+  font-size: var(--text-body-sm);
+  color: var(--text-muted);
+  line-height: 1.55;
+  max-width: 80ch;
+  margin: 0 0 16px;
+}
+.delegationStep {
+  font-size: var(--text-body-sm);
+  font-weight: 600;
+  color: var(--text);
+  margin: 16px 0 8px;
+}
+.cmd {
+  margin: 0;
+  padding: 14px 16px;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow-x: auto;
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text);
+  white-space: pre;
+}
+.delegationNote {
+  font-size: var(--text-caption);
+  color: var(--text-muted);
+  line-height: 1.55;
+  max-width: 80ch;
+  margin: 12px 0 0;
+}
+
 /* ── Responsive ── */
 @media (min-width: 561px) and (max-width: 900px) {
   .steps {

@@ -93,8 +93,9 @@ type WireLink struct {
 // DesiredApplication is a deployment a tenant wants running in its cluster
 // (control plane → reconciler). It is realized in two steps: the reconciler
 // provisions the app's Bicep infra (Azure) if any, wires those outputs into the
-// Helm values, then stamps an Argo CD Application (Helm source) — ordered by Wave
-// so dependencies converge first.
+// Helm values (already merged with any resolved Azure-infra outputs by the
+// control plane), then stamps an Argo CD Application (Helm source) — ordered by
+// Wave so dependencies converge first.
 type DesiredApplication struct {
 	ID             string `json:"id"`
 	Name           string `json:"name"`           // Argo Application name (also the release)
@@ -103,13 +104,10 @@ type DesiredApplication struct {
 	Chart          string `json:"chart"`          // chart name
 	TargetRevision string `json:"targetRevision"` // chart version
 	Values         string `json:"values,omitempty"`
-	// Azure infra + wiring. InfraTemplate is the compiled ARM template (from the
-	// deployment's Bicep); the reconciler provisions it before the chart and
-	// injects its outputs into the Helm values per Wiring.
-	InfraTemplate string     `json:"infraTemplate,omitempty"`
-	Wiring        []WireLink `json:"wiring,omitempty"`
 	// DependsOn are ids of other entities (apps/agents) that must converge first;
 	// Wave is the derived Argo sync-wave (0 = no deps) that enforces the order.
+	// Azure infra is provisioned by the control plane via Lighthouse before the app
+	// is included here, and its outputs are already merged into Values.
 	DependsOn []string `json:"dependsOn,omitempty"`
 	Wave      int      `json:"wave,omitempty"`
 }
@@ -202,9 +200,8 @@ type ClusterStatus struct {
 // mirror Argo's own vocabulary (Synced/OutOfSync; Healthy/Progressing/Degraded).
 type ApplicationStatus struct {
 	ID           string `json:"id"`
-	SyncStatus   string `json:"syncStatus"`           // Synced | OutOfSync | Unknown | pending
-	HealthStatus string `json:"healthStatus"`         // Healthy | Progressing | Degraded | Missing | pending
-	InfraState   string `json:"infraState,omitempty"` // "" | provisioning | ready | failed (Bicep infra)
+	SyncStatus   string `json:"syncStatus"`   // Synced | OutOfSync | Unknown | pending
+	HealthStatus string `json:"healthStatus"` // Healthy | Progressing | Degraded | Missing | pending
 }
 
 // Heartbeat is the reconciler's periodic report: the in-tenant install identity

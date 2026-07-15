@@ -4,6 +4,7 @@ import {
   ArrowUpRight,
   Bot,
   Check,
+  Cloud,
   Cpu,
   Fingerprint,
   Landmark,
@@ -20,6 +21,13 @@ import styles from "./install-view.module.css";
 const DEPLOY_URL =
   process.env.NEXT_PUBLIC_CORTEX_DEPLOY_URL ??
   "https://portal.azure.com/#create/Microsoft.Solutions%2FmanagedApplications";
+
+// Published by Cortex — the managing tenant + control-plane service principal a
+// customer delegates their cortex-infra resource group to via Azure Lighthouse.
+const CORTEX_TENANT_ID = process.env.NEXT_PUBLIC_CORTEX_TENANT_ID ?? "<your Cortex tenant id>";
+const CORTEX_SP_OBJECT_ID =
+  process.env.NEXT_PUBLIC_CORTEX_SP_OBJECT_ID ?? "<Cortex control-plane service principal object id>";
+const CORTEX_INFRA_RG = process.env.NEXT_PUBLIC_CORTEX_INFRA_RG ?? "cortex-infra";
 
 type StepState = "done" | "current" | "pending";
 
@@ -99,6 +107,9 @@ export function InstallView({
         </div>
       </section>
 
+      {/* Infrastructure delegation — how the control plane gets to provision infra */}
+      <DelegationSection subscriptionId={tenant.subscriptionId} region={tenant.region} />
+
       {/* Identity manifest — what runs where, and as whom */}
       <section aria-label="Install identity" className={styles.manifestWrap}>
         <h2 className={styles.sectionTitle}>Install identity</h2>
@@ -116,11 +127,56 @@ export function InstallView({
         </dl>
         <p className={styles.sovereign}>
           <ShieldCheck size={14} strokeWidth={2.2} aria-hidden />
-          Cortex holds no data plane. Models, agents, and knowledge stay in your subscription; the
-          reconciler only reports state and pulls desired configuration.
+          Your <strong>data plane</strong> stays yours — models, agents, and knowledge run under the
+          reconciler&apos;s own identity, in your subscription. Cortex only manages application{" "}
+          <strong>infrastructure</strong>, and only inside the <span className="mono">{CORTEX_INFRA_RG}</span>{" "}
+          resource group you delegate below.
         </p>
       </section>
     </div>
+  );
+}
+
+// DelegationSection explains — and gives the exact values for — the Azure
+// Lighthouse delegation that lets the Cortex control plane provision each
+// deployment's Azure infrastructure into a dedicated resource group.
+function DelegationSection({ subscriptionId, region }: { subscriptionId: string; region: string }) {
+  const cmd = [
+    "az deployment sub create \\",
+    `  --subscription ${subscriptionId || "<your-subscription-id>"} --location ${region || "<region>"} \\`,
+    "  --template-file onboarding/lighthouse-delegation.bicep \\",
+    `  -p controlPlaneTenantId=${CORTEX_TENANT_ID} \\`,
+    `  -p controlPlanePrincipalId=${CORTEX_SP_OBJECT_ID}`,
+  ].join("\n");
+
+  return (
+    <section aria-label="Infrastructure delegation" className={styles.manifestWrap}>
+      <h2 className={styles.sectionTitle}>Delegate infrastructure to Cortex (Azure Lighthouse)</h2>
+      <p className={styles.delegationLead}>
+        Deployments can declare Azure infrastructure (storage, Key Vault, Postgres…). The Cortex control
+        plane provisions it <strong>for you</strong>, cross-tenant, into a dedicated{" "}
+        <span className="mono">{CORTEX_INFRA_RG}</span> resource group — so you never run those deployments
+        yourself. To enable that, delegate just that resource group to Cortex with Azure Lighthouse
+        (built-in <strong>Contributor</strong>, nothing else).
+      </p>
+
+      <dl className={styles.manifest}>
+        <Fact icon={Fingerprint} label="Cortex tenant (managing)" value={CORTEX_TENANT_ID} mono />
+        <Fact icon={ShieldCheck} label="Control-plane principal" value={CORTEX_SP_OBJECT_ID} mono />
+        <Fact icon={Cloud} label="Delegated resource group" value={CORTEX_INFRA_RG} mono />
+      </dl>
+
+      <p className={styles.delegationStep}>Run as a subscription Owner (creates the RG + the delegation):</p>
+      <pre className={styles.cmd}>
+        <code>{cmd}</code>
+      </pre>
+      <p className={styles.delegationNote}>
+        Least privilege: Cortex can only act inside <span className="mono">{CORTEX_INFRA_RG}</span>. Revoke
+        any time by deleting the delegation under <em>Service providers → Delegations</em> — your reconciler
+        (data plane) is unaffected. Prefer just-in-time? Grant the principal via PIM instead of standing
+        Contributor.
+      </p>
+    </section>
   );
 }
 

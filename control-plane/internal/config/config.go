@@ -3,6 +3,7 @@ package config
 import (
 	"bufio"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -17,6 +18,15 @@ type Config struct {
 	EntraIssuerHost  string
 	PlatformTenantID string
 	CORSOrigin       string
+
+	// Platform Azure service principal — used to provision each deployment's Bicep
+	// infra cross-tenant into the customer's Lighthouse-delegated resource group.
+	// When unset, infra provisioning is disabled (deployments with infra stay held).
+	AzureTenantID      string
+	AzureClientID      string
+	AzureClientSecret  string
+	InfraResourceGroup string // delegated RG the control plane deploys infra into
+	InfraPollSeconds   int
 }
 
 // Load reads .env (if present) into the process env, then builds Config.
@@ -34,7 +44,22 @@ func Load() Config {
 		EntraIssuerHost:  env("ENTRA_ISSUER_HOST", "https://login.microsoftonline.com/"),
 		PlatformTenantID: strings.ToLower(env("PLATFORM_TENANT_ID", "")),
 		CORSOrigin:       env("CORS_ORIGIN", "http://localhost:4200"),
+
+		AzureTenantID:      env("AZURE_TENANT_ID", ""),
+		AzureClientID:      env("AZURE_CLIENT_ID", ""),
+		AzureClientSecret:  env("AZURE_CLIENT_SECRET", ""),
+		InfraResourceGroup: env("INFRA_RESOURCE_GROUP", "cortex-infra"),
+		InfraPollSeconds:   envInt("INFRA_POLL_SECONDS", 30),
 	}
+}
+
+func envInt(key string, def int) int {
+	if v, ok := os.LookupEnv(key); ok && v != "" {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 {
+			return n
+		}
+	}
+	return def
 }
 
 func env(key, def string) string {

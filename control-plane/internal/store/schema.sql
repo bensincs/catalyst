@@ -239,6 +239,7 @@ CREATE TABLE IF NOT EXISTS tenant_deployments (
 );
 CREATE INDEX IF NOT EXISTS tenant_deployments_tenant_idx ON tenant_deployments(tenant_slug);
 ALTER TABLE tenant_deployments ADD COLUMN IF NOT EXISTS infra_state text NOT NULL DEFAULT '';  -- '' | provisioning | ready | failed
+ALTER TABLE tenant_deployments ADD COLUMN IF NOT EXISTS infra_outputs jsonb NOT NULL DEFAULT '{}'; -- resolved ARM outputs (control-plane provisioned)
 ALTER TABLE tenant_deployments ADD COLUMN IF NOT EXISTS waiting     boolean NOT NULL DEFAULT false; -- held for unmet dependencies
 
 -- One-time migration from the legacy tenant-private applications model: adopt the

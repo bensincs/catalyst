@@ -12,6 +12,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"sigs.k8s.io/yaml"
 
 	"github.com/inception42/cortex/control-plane/internal/model"
 	"github.com/inception42/cortex/shared"
@@ -1048,14 +1049,16 @@ func (s *Store) SyncDesired(ctx context.Context, tid string) (shared.DesiredStat
 		return out, err
 	}
 
-	// Deployments ENABLED in this tenant — the reconciler provisions each app's
-	// Bicep infra, wires its outputs into the Helm values, and stamps an Argo CD
+	// Deployments ENABLED in this tenant. The control plane provisions each app's
+	// Azure infra (via Lighthouse) and merges its outputs into the Helm values
+	// BEFORE the app is served here — so the reconciler just stamps the Argo CD
 	// Application. Dependencies are enforced two ways: app→app deps are ordered by
 	// Wave (Argo sync-waves), and app→agent deps HOLD the app until the agent is
-	// live (agents aren't cluster resources, so sync-waves can't order them).
+	// live. An app with unresolved infra is also held until its infra is ready.
 	arows, err := s.pool.Query(ctx,
 		`SELECT a.id, a.name, a.namespace, a.repo_url, a.chart, a.target_revision, a.values,
-		        a.arm_template, a.wiring, a.depends_on
+		        a.arm_template, a.wiring, a.depends_on,
+		        coalesce(td.infra_state,''), coalesce(td.infra_outputs,'{}')
 		 FROM applications a JOIN tenant_deployments td ON td.app_id = a.id AND td.tenant_slug = $1
 		 ORDER BY td.sort_order`, t.ID)
 	if err != nil {
@@ -1063,14 +1066,22 @@ func (s *Store) SyncDesired(ctx context.Context, tid string) (shared.DesiredStat
 	}
 	defer arows.Close()
 	all := []shared.DesiredApplication{}
+	type infraInfo struct {
+		armTemplate string
+		wiring      []shared.WireLink
+		outputs     map[string]any
+		state       string
+	}
+	infraByID := map[string]infraInfo{}
 	for arows.Next() {
 		var da shared.DesiredApplication
-		var wraw []byte
+		var armTemplate, infraState string
+		var wraw, oraw []byte
 		if err := arows.Scan(&da.ID, &da.Name, &da.Namespace, &da.RepoURL, &da.Chart, &da.TargetRevision, &da.Values,
-			&da.InfraTemplate, &wraw, &da.DependsOn); err != nil {
+			&armTemplate, &wraw, &da.DependsOn, &infraState, &oraw); err != nil {
 			return out, err
 		}
-		da.Wiring = wiringFromRaw(wraw)
+		infraByID[da.ID] = infraInfo{armTemplate: armTemplate, wiring: wiringFromRaw(wraw), outputs: paramsFromRaw(oraw), state: infraState}
 		all = append(all, da)
 	}
 	if err := arows.Err(); err != nil {
@@ -1124,16 +1135,117 @@ func (s *Store) SyncDesired(ctx context.Context, tid string) (shared.DesiredStat
 		return ok
 	}
 	for _, da := range all {
-		deployable := ready(da.ID)
+		info := infraByID[da.ID]
+		infraReady := strings.TrimSpace(info.armTemplate) == "" || info.state == "ready"
+		deployable := ready(da.ID) && infraReady
 		_, _ = s.pool.Exec(ctx, `UPDATE tenant_deployments SET waiting = $3 WHERE tenant_slug = $1 AND app_id = $2`,
 			t.ID, da.ID, !deployable)
 		if deployable {
+			// Merge the control-plane-provisioned infra outputs into the values.
+			da.Values = applyWiring(da.Values, info.wiring, info.outputs)
 			out.Applications = append(out.Applications, da)
 		}
 	}
 	// Order the deployable apps so their app→app dependencies converge first.
 	assignWaves(out.Applications)
 	return out, nil
+}
+
+// InfraTarget is one enabled deployment that carries Azure infra (a resolved ARM
+// template), for the control-plane infra worker to provision cross-tenant.
+type InfraTarget struct {
+	TenantSlug     string
+	TenantID       string
+	SubscriptionID string
+	AppID          string
+	ArmTemplate    string
+	State          string // current infra_state
+}
+
+// InfraTargets returns every enabled deployment (across tenants) that has infra to
+// provision and a known subscription to provision it into.
+func (s *Store) InfraTargets(ctx context.Context) ([]InfraTarget, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT t.id, coalesce(t.tenant_id,''), coalesce(t.subscription_id,''), a.id, a.arm_template, coalesce(td.infra_state,'')
+		 FROM tenant_deployments td
+		 JOIN applications a ON a.id = td.app_id
+		 JOIN tenants t ON t.id = td.tenant_slug
+		 WHERE a.arm_template <> '' AND coalesce(t.subscription_id,'') <> ''`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []InfraTarget
+	for rows.Next() {
+		var it InfraTarget
+		if err := rows.Scan(&it.TenantSlug, &it.TenantID, &it.SubscriptionID, &it.AppID, &it.ArmTemplate, &it.State); err != nil {
+			return nil, err
+		}
+		out = append(out, it)
+	}
+	return out, rows.Err()
+}
+
+// SetInfraState records the provisioning state + resolved outputs of a deployment's
+// infra (control-plane worker → DB). SyncDesired then merges the outputs into the
+// Helm values and only serves the app once state is "ready".
+func (s *Store) SetInfraState(ctx context.Context, tenantSlug, appID, state string, outputs map[string]any) error {
+	raw := []byte("{}")
+	if len(outputs) > 0 {
+		if b, err := json.Marshal(outputs); err == nil {
+			raw = b
+		}
+	}
+	_, err := s.pool.Exec(ctx,
+		`UPDATE tenant_deployments SET infra_state = $3, infra_outputs = $4 WHERE tenant_slug = $1 AND app_id = $2`,
+		tenantSlug, appID, state, raw)
+	return err
+}
+
+// applyWiring merges provisioned infra outputs into a chart's Helm values at the
+// wired paths (types preserved; malformed values left untouched). Pure + defensive.
+func applyWiring(values string, wiring []shared.WireLink, outputs map[string]any) string {
+	if len(wiring) == 0 || len(outputs) == 0 {
+		return values
+	}
+	m := map[string]any{}
+	if strings.TrimSpace(values) != "" {
+		if err := yaml.Unmarshal([]byte(values), &m); err != nil {
+			return values
+		}
+	}
+	changed := false
+	for _, w := range wiring {
+		v, ok := outputs[w.BicepOutput]
+		if !ok || strings.TrimSpace(w.HelmPath) == "" {
+			continue
+		}
+		setNested(m, strings.Split(w.HelmPath, "."), v)
+		changed = true
+	}
+	if !changed {
+		return values
+	}
+	out, err := yaml.Marshal(m)
+	if err != nil {
+		return values
+	}
+	return string(out)
+}
+
+// setNested sets m[a][b][c] = value, creating intermediate maps as needed.
+func setNested(m map[string]any, path []string, value any) {
+	for i := 0; i < len(path)-1; i++ {
+		next, ok := m[path[i]].(map[string]any)
+		if !ok {
+			next = map[string]any{}
+			m[path[i]] = next
+		}
+		m = next
+	}
+	if len(path) > 0 {
+		m[path[len(path)-1]] = value
+	}
 }
 
 // ApplyHeartbeat records a reconciler heartbeat: it upserts the tenant with the
@@ -1206,13 +1318,14 @@ func (s *Store) ApplyHeartbeat(ctx context.Context, hb shared.Heartbeat) error {
 		}
 	}
 	// Record each Argo Application's per-tenant sync/health + derived lifecycle +
-	// Bicep infra state (a deployment removed between sync and heartbeat is a
-	// harmless no-op).
+	// Argo sync/health only — infra_state is owned by the control-plane infra
+	// worker now, not the reconciler (a deployment removed between sync and
+	// heartbeat is a harmless no-op).
 	for _, a := range hb.Applications {
 		if _, err := s.pool.Exec(ctx,
-			`UPDATE tenant_deployments SET sync_status = $3, health_status = $4, health = $5, infra_state = $6
+			`UPDATE tenant_deployments SET sync_status = $3, health_status = $4, health = $5
 			 WHERE tenant_slug = $1 AND app_id = $2`,
-			t.ID, a.ID, a.SyncStatus, a.HealthStatus, deriveDeploymentHealth(a.SyncStatus, a.HealthStatus), a.InfraState); err != nil {
+			t.ID, a.ID, a.SyncStatus, a.HealthStatus, deriveDeploymentHealth(a.SyncStatus, a.HealthStatus)); err != nil {
 			return err
 		}
 	}

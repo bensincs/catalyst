@@ -164,6 +164,47 @@ What healthy looks like:
 
 ---
 
+## 5. Delegate infrastructure to Cortex (Azure Lighthouse)
+
+The reconciler you just deployed handles the **data plane** (Foundry agents/memory)
+with its own in-tenant identity. Application **infrastructure** (the Bicep modules a
+deployment declares — storage, Key Vault, Postgres, …) is instead deployed **by the
+Cortex control plane, cross-tenant, via [Azure Lighthouse](https://learn.microsoft.com/azure/lighthouse/overview)** —
+so you never run those deployments yourself.
+
+To enable that, deploy the delegation
+([`../../onboarding/lighthouse-delegation.bicep`](../../onboarding/lighthouse-delegation.bicep)) at
+**subscription** scope. It creates a dedicated **`cortex-infra`** resource group and
+delegates **only that resource group** to the Cortex control-plane service principal,
+granting built-in **Contributor** (Lighthouse doesn't allow custom roles). The
+platform tenant id + service-principal object id are **published by Cortex** — a tenant
+admin normally just accepts them.
+
+```bash
+az deployment sub create \
+  --subscription "<CUSTOMER_SUBSCRIPTION_ID>" --location "$LOCATION" \
+  --template-file onboarding/lighthouse-delegation.bicep \
+  -p controlPlaneTenantId="<CORTEX_TENANT_ID>" \
+  -p controlPlanePrincipalId="<CORTEX_CONTROL_PLANE_SP_OBJECT_ID>"
+```
+
+Verify the delegation is in place (nothing else is needed — the control plane learns
+your subscription from the reconciler's heartbeat and targets `cortex-infra`):
+
+```bash
+# Under Service providers → Delegations in the portal, or:
+az managedservices assignment list --query "[].properties.registrationDefinitionId" -o tsv
+```
+
+- **Deployer needs `Owner`** (or Managed Services Registration Assignment Delete/Contributor)
+  on the subscription — creating a delegation is a subscription-scoped, privileged action.
+- **Least privilege by design:** the platform can only act inside `cortex-infra`. Delete
+  the delegation any time to revoke access; the reconciler (data plane) is unaffected.
+- Prefer **just-in-time** access? Grant the control-plane SP via PIM instead of standing
+  Contributor — the delegation model supports eligible assignments.
+
+---
+
 ## How auth works (no shared secrets)
 
 The reconciler presents its **user-assigned managed identity** everywhere:

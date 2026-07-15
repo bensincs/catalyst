@@ -14,6 +14,7 @@ import (
 	"github.com/inception42/cortex/control-plane/internal/auth"
 	"github.com/inception42/cortex/control-plane/internal/config"
 	"github.com/inception42/cortex/control-plane/internal/httpapi"
+	"github.com/inception42/cortex/control-plane/internal/infra"
 	"github.com/inception42/cortex/control-plane/internal/store"
 )
 
@@ -72,6 +73,20 @@ func main() {
 	)
 	srv := httpapi.NewServer(st, authn, recon, cfg.CORSOrigin, cfg.EntraClientID, cfg.EntraIssuerHost)
 
+	// Infra worker: provisions each deployment's Bicep infra cross-tenant via
+	// Azure Lighthouse. Disabled (deployments with infra stay held) when no
+	// platform Azure service principal is configured.
+	workerCtx, stopWorker := context.WithCancel(context.Background())
+	defer stopWorker()
+	if prov, err := infra.New(st, cfg.AzureTenantID, cfg.AzureClientID, cfg.AzureClientSecret, cfg.InfraResourceGroup); err != nil {
+		slog.Error("infra provisioner init failed", "err", err)
+	} else if prov == nil {
+		slog.Info("infra provisioning disabled (set AZURE_TENANT_ID/AZURE_CLIENT_ID/AZURE_CLIENT_SECRET to enable)")
+	} else {
+		go prov.Run(workerCtx, time.Duration(cfg.InfraPollSeconds)*time.Second)
+		slog.Info("infra provisioning enabled (Lighthouse)", "resourceGroup", cfg.InfraResourceGroup, "pollSeconds", cfg.InfraPollSeconds)
+	}
+
 	httpServer := &http.Server{
 		Addr:              ":" + cfg.Port,
 		Handler:           srv.Router(),
@@ -90,6 +105,7 @@ func main() {
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	<-stop
 	slog.Info("shutting down")
+	stopWorker()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

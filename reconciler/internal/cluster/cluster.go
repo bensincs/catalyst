@@ -144,24 +144,10 @@ func (c *Client) Reconcile(ctx context.Context, apps []shared.DesiredApplication
 	status.GatewayIP = ir.gatewayIP
 	status.IngressIssuer = ir.issuer
 
-	// Provision each app's Azure infra (compiled ARM from Bicep) and wire its
-	// outputs into the Helm values before Argo stamps the chart. Best-effort +
-	// eventually consistent: until the infra is ready, the chart deploys with its
-	// base values and gets re-wired on a later cycle. Dependency ordering is
-	// carried by Wave (Argo sync-waves) in buildApplication.
-	infraStates := map[string]string{}
-	for i := range apps {
-		if strings.TrimSpace(apps[i].InfraTemplate) == "" {
-			continue
-		}
-		outputs, state := c.provisionInfra(ctx, apps[i])
-		infraStates[apps[i].ID] = state
-		if state == infraReady {
-			apps[i].Values = applyWiring(apps[i].Values, apps[i].Wiring, outputs)
-		}
-	}
-
-	return status, k.reconcileApplications(ctx, apps, infraStates)
+	// Each app's Azure infra is provisioned by the control plane (via Lighthouse)
+	// and its outputs are already merged into the Helm values by the time an app
+	// is served here — the reconciler just stamps the Argo CD Application.
+	return status, k.reconcileApplications(ctx, apps)
 }
 
 // --- ARM (cluster metadata + kubeconfig) ------------------------------------
