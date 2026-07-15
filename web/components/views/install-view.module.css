@@ -380,6 +380,26 @@
   font-size: var(--text-caption);
   color: var(--text-muted);
 }
+.downloadLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-body-sm);
+  font-weight: 500;
+  color: var(--text-secondary);
+  text-decoration: none;
+  padding: 6px 4px;
+  border-radius: var(--radius-sm);
+  transition: color var(--dur-fast) var(--ease-out-quart);
+}
+.downloadLink:hover {
+  color: var(--accent-ink);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.downloadLink svg {
+  color: var(--text-muted);
+}
 
 /* ── Responsive ── */
 @media (min-width: 561px) and (max-width: 900px) {

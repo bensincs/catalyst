@@ -8,6 +8,7 @@ import {
   Cloud,
   Cpu,
   Fingerprint,
+  Download,
   Landmark,
   Minus,
   Radio,
@@ -37,10 +38,9 @@ const DEPLOY_URL =
   process.env.NEXT_PUBLIC_CORTEX_DEPLOY_URL ??
   "https://portal.azure.com/#create/Microsoft.Solutions%2FmanagedApplications";
 
-// Portal "Deploy to Azure" for the Lighthouse delegation. Set to the hosted ARM
-// template / managed-service offer URL in production.
-const DELEGATION_DEPLOY_URL =
-  process.env.NEXT_PUBLIC_CORTEX_DELEGATION_DEPLOY_URL ?? "https://portal.azure.com/#create/Microsoft.Template";
+// The compiled delegation ARM template, served as a static asset so the Azure
+// portal can fetch it and the customer can download it.
+const DELEGATION_TEMPLATE_PATH = "/onboarding/lighthouse-delegation.json";
 
 // Published by Cortex — the managing tenant + control-plane service principal a
 // customer delegates their cortex-infra resource group to via Azure Lighthouse.
@@ -167,7 +167,7 @@ function DelegationSection({ subscriptionId, region }: { subscriptionId: string;
   const cmd = [
     "az deployment sub create \\",
     `  --subscription ${subscriptionId || "<your-subscription-id>"} --location ${region || "<region>"} \\`,
-    "  --template-file onboarding/lighthouse-delegation.bicep \\",
+    "  --template-file lighthouse-delegation.json \\",
     `  -p controlPlaneTenantId=${CORTEX_TENANT_ID} \\`,
     `  -p controlPlanePrincipalId=${CORTEX_SP_OBJECT_ID}`,
   ].join("\n");
@@ -188,7 +188,9 @@ function DelegationSection({ subscriptionId, region }: { subscriptionId: string;
         <Fact icon={Cloud} label="Scope" value="Subscription · Contributor + limited User Access Admin" />
       </dl>
 
-      <p className={styles.delegationStep}>Run as a subscription Owner:</p>
+      <p className={styles.delegationStep}>
+        One click via the button below, or download the template and run it as a subscription Owner:
+      </p>
       <pre className={styles.cmd}>
         <code>{cmd}</code>
       </pre>
@@ -197,11 +199,22 @@ function DelegationSection({ subscriptionId, region }: { subscriptionId: string;
           variant="primary"
           icon={ShieldCheck}
           iconRight={ArrowUpRight}
-          onClick={() => window.open(DELEGATION_DEPLOY_URL, "_blank", "noopener,noreferrer")}
+          onClick={() => {
+            const override = process.env.NEXT_PUBLIC_CORTEX_DELEGATION_DEPLOY_URL;
+            const url =
+              override ||
+              `https://portal.azure.com/#create/Microsoft.Template/uri/${encodeURIComponent(
+                `${window.location.origin}${DELEGATION_TEMPLATE_PATH}`,
+              )}`;
+            window.open(url, "_blank", "noopener,noreferrer");
+          }}
         >
           Deploy to Azure
         </Button>
-        <span className={styles.delegationActionsHint}>Opens the Azure portal to deploy the delegation.</span>
+        <a href={DELEGATION_TEMPLATE_PATH} download className={styles.downloadLink}>
+          <Download size={14} strokeWidth={2.2} aria-hidden /> Download template
+        </a>
+        <span className={styles.delegationActionsHint}>The portal asks for the two values above.</span>
       </div>
       <p className={styles.delegationNote}>
         Least privilege: Contributor to build resources, plus a <em>limited</em> User Access Administrator

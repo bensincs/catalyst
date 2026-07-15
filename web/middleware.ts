@@ -7,6 +7,7 @@ export default auth((req) => {
     pathname === "/signin" ||
     pathname.startsWith("/api/auth") ||
     pathname.startsWith("/_next") ||
+    pathname.startsWith("/onboarding/") || // public onboarding assets (Lighthouse template)
     pathname === "/favicon.ico";
 
   if (isPublic) return;

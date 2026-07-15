@@ -1,0 +1,85 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.40.2.10011",
+      "templateHash": "2121615258124905989"
+    }
+  },
+  "parameters": {
+    "controlPlaneTenantId": {
+      "type": "string",
+      "metadata": {
+        "description": "Cortex (managing) Entra tenant id. Published by Cortex."
+      }
+    },
+    "controlPlanePrincipalId": {
+      "type": "string",
+      "metadata": {
+        "description": "Object id of the Cortex control-plane service principal in the Cortex tenant. Published by Cortex."
+      }
+    },
+    "offerName": {
+      "type": "string",
+      "defaultValue": "Cortex managed platform",
+      "metadata": {
+        "description": "Display name shown to you under Service providers → Delegations."
+      }
+    }
+  },
+  "variables": {
+    "contributorRoleId": "b24988ac-6180-42a0-ab88-20f7382dd24c",
+    "userAccessAdminRoleId": "18d7d88d-d35e-4fb5-a5c3-7773c20a72d9",
+    "foundryUserRoleId": "53ca6127-db72-4b80-b1b0-d745d6d5456d",
+    "aksRbacClusterAdminRoleId": "b1ff04bb-8a4e-4dc4-8eb5-8693973ce19b",
+    "aksClusterUserRoleId": "4abbcc35-e782-43d8-92c5-2d3f1bd2253f"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.ManagedServices/registrationDefinitions",
+      "apiVersion": "2022-10-01",
+      "name": "[guid(parameters('offerName'), parameters('controlPlaneTenantId'), parameters('controlPlanePrincipalId'))]",
+      "properties": {
+        "registrationDefinitionName": "[parameters('offerName')]",
+        "description": "Lets the Cortex control plane deploy + manage the Cortex platform in this subscription.",
+        "managedByTenantId": "[parameters('controlPlaneTenantId')]",
+        "authorizations": [
+          {
+            "principalId": "[parameters('controlPlanePrincipalId')]",
+            "principalIdDisplayName": "Cortex control plane",
+            "roleDefinitionId": "[variables('contributorRoleId')]"
+          },
+          {
+            "principalId": "[parameters('controlPlanePrincipalId')]",
+            "principalIdDisplayName": "Cortex control plane (role assignment to managed identities)",
+            "roleDefinitionId": "[variables('userAccessAdminRoleId')]",
+            "delegatedRoleDefinitionIds": [
+              "[variables('foundryUserRoleId')]",
+              "[variables('aksRbacClusterAdminRoleId')]",
+              "[variables('aksClusterUserRoleId')]"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.ManagedServices/registrationAssignments",
+      "apiVersion": "2022-10-01",
+      "name": "[guid(subscriptionResourceId('Microsoft.ManagedServices/registrationDefinitions', guid(parameters('offerName'), parameters('controlPlaneTenantId'), parameters('controlPlanePrincipalId'))), subscription().id)]",
+      "properties": {
+        "registrationDefinitionId": "[subscriptionResourceId('Microsoft.ManagedServices/registrationDefinitions', guid(parameters('offerName'), parameters('controlPlaneTenantId'), parameters('controlPlanePrincipalId')))]"
+      },
+      "dependsOn": [
+        "[subscriptionResourceId('Microsoft.ManagedServices/registrationDefinitions', guid(parameters('offerName'), parameters('controlPlaneTenantId'), parameters('controlPlanePrincipalId')))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "registrationDefinitionId": {
+      "type": "string",
+      "value": "[subscriptionResourceId('Microsoft.ManagedServices/registrationDefinitions', guid(parameters('offerName'), parameters('controlPlaneTenantId'), parameters('controlPlanePrincipalId')))]"
+    }
+  }
+}
