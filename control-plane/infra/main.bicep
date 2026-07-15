@@ -62,6 +62,18 @@ param entraIssuer string = 'https://login.microsoftonline.com/common/v2.0'
 @description('Value surfaced as NEXT_PUBLIC_CORTEX_ENV (drives the console env badge). One of dev|qa|uat|prod.')
 param cortexEnv string = 'prod'
 
+@description('Enable cross-tenant provisioning (Azure Lighthouse): the control-plane identity discovers delegated subscriptions and provisions each tenant footprint + infra.')
+param crossTenantProvisioning bool = false
+
+@description('Reconciler image the control plane deploys into each tenant footprint.')
+param reconcilerImage string = 'ghcr.io/inception42/cortex-reconciler:latest'
+
+@description('Resource group the control plane deploys each tenant footprint (reconciler + Foundry + AKS) into.')
+param footprintResourceGroup string = 'cortex'
+
+@description('Resource group the control plane deploys application infrastructure into.')
+param infraResourceGroup string = 'cortex-infra'
+
 @description('PostgreSQL administrator login.')
 param postgresAdminUser string = 'cortexadmin'
 
@@ -263,6 +275,17 @@ resource api 'Microsoft.App/containerApps@2024-03-01' = if (deployApps) {
             { name: 'PLATFORM_TENANT_ID', value: platformTenantId }
             { name: 'CORS_ORIGIN', value: 'https://${consoleDomain}' }
             { name: 'SEED_DEMO', value: 'false' }
+            // Cross-tenant provisioning (Azure Lighthouse). AZURE_CLIENT_ID selects
+            // this user-assigned identity for DefaultAzureCredential — the control
+            // plane acts as its own managed identity, no secret held.
+            { name: 'AZURE_CLIENT_ID', value: uami.properties.clientId }
+            { name: 'CROSS_TENANT_PROVISIONING', value: string(crossTenantProvisioning) }
+            { name: 'FOOTPRINT_RESOURCE_GROUP', value: footprintResourceGroup }
+            { name: 'INFRA_RESOURCE_GROUP', value: infraResourceGroup }
+            { name: 'INFRA_REGION', value: location }
+            { name: 'CONTROL_PLANE_PUBLIC_URL', value: 'https://${apiDomain}' }
+            { name: 'CORTEX_API_SCOPE', value: 'api://${entraClientId}' }
+            { name: 'RECONCILER_IMAGE', value: reconcilerImage }
           ]
         }
       ]
@@ -335,6 +358,9 @@ resource console 'Microsoft.App/containerApps@2024-03-01' = if (deployApps) {
             { name: 'AUTH_MICROSOFT_ENTRA_ID_ISSUER', value: entraIssuer }
             { name: 'PLATFORM_TENANT_ID', value: platformTenantId }
             { name: 'CORTEX_API_URL', value: 'https://${apiDomain}' }
+            // The control-plane identity's object id — what customers delegate to
+            // via Lighthouse; shown on the install page for copy-paste.
+            { name: 'CORTEX_SP_OBJECT_ID', value: uami.properties.principalId }
             { name: 'NEXT_PUBLIC_CORTEX_ENV', value: cortexEnv }
             { name: 'PORT', value: '3000' }
           ]
@@ -364,3 +390,6 @@ output apiDefaultFqdn string = '${apiAppName}.${env.properties.defaultDomain}'
 output consoleDomain string = consoleDomain
 output apiDomain string = apiDomain
 output uamiClientId string = uami.properties.clientId
+// The control-plane identity's object id — the principal customers delegate to via
+// Azure Lighthouse (controlPlanePrincipalId / CORTEX_SP_OBJECT_ID).
+output uamiPrincipalId string = uami.properties.principalId

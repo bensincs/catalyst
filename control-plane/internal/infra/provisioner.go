@@ -51,11 +51,12 @@ type Provisioner struct {
 	reconcilerImage  string // reconciler container image
 }
 
-// Config is the platform Azure service principal + footprint parameters.
+// Config enables cross-tenant provisioning + supplies the footprint parameters.
+// The control plane authenticates with its own managed identity (or AZURE_* env /
+// az login locally) — no secret is held here.
 type Config struct {
-	TenantID           string
-	ClientID           string
-	ClientSecret       string
+	Enabled            bool
+	ManagingTenantID   string // the Cortex platform tenant (filters delegated subs)
 	InfraResourceGroup string
 	FootprintRG        string
 	Region             string
@@ -64,13 +65,14 @@ type Config struct {
 	ReconcilerImage    string
 }
 
-// New builds a Provisioner, or (nil, nil) when no platform Azure service principal
-// is configured — in which case all cross-tenant provisioning is disabled.
+// New builds a Provisioner, or (nil, nil) when cross-tenant provisioning is off.
+// The credential is DefaultAzureCredential — the control plane's managed identity
+// when it runs in Azure, falling back to AZURE_* env or az login for local runs.
 func New(st *store.Store, cfg Config) (*Provisioner, error) {
-	if cfg.TenantID == "" || cfg.ClientID == "" || cfg.ClientSecret == "" {
+	if !cfg.Enabled {
 		return nil, nil
 	}
-	cred, err := azidentity.NewClientSecretCredential(cfg.TenantID, cfg.ClientID, cfg.ClientSecret, nil)
+	cred, err := azidentity.NewDefaultAzureCredential(nil)
 	if err != nil {
 		return nil, err
 	}
@@ -78,7 +80,7 @@ func New(st *store.Store, cfg Config) (*Provisioner, error) {
 		cred:             cred,
 		http:             &http.Client{Timeout: 90 * time.Second},
 		store:            st,
-		managingTenantID: cfg.TenantID,
+		managingTenantID: cfg.ManagingTenantID,
 		infraRG:          cfg.InfraResourceGroup,
 		footprintRG:      cfg.FootprintRG,
 		region:           cfg.Region,

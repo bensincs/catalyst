@@ -75,7 +75,8 @@ func main() {
 
 	// Infra worker: discovers Lighthouse-delegated subscriptions, provisions each
 	// enabled tenant's footprint (reconciler + Foundry + AKS) and each deployment's
-	// Bicep infra — all cross-tenant. Disabled when no platform SP is configured.
+	// Bicep infra — all cross-tenant, authenticated as the control plane's managed
+	// identity. Off unless CROSS_TENANT_PROVISIONING=true.
 	workerCtx, stopWorker := context.WithCancel(context.Background())
 	defer stopWorker()
 	apiScope := cfg.CortexAPIScope
@@ -83,9 +84,8 @@ func main() {
 		apiScope = "api://" + cfg.EntraClientID
 	}
 	if prov, err := infra.New(st, infra.Config{
-		TenantID:           cfg.AzureTenantID,
-		ClientID:           cfg.AzureClientID,
-		ClientSecret:       cfg.AzureClientSecret,
+		Enabled:            cfg.CrossTenantProvisioning,
+		ManagingTenantID:   cfg.PlatformTenantID,
 		InfraResourceGroup: cfg.InfraResourceGroup,
 		FootprintRG:        cfg.FootprintRG,
 		Region:             cfg.InfraRegion,
@@ -95,10 +95,10 @@ func main() {
 	}); err != nil {
 		slog.Error("infra provisioner init failed", "err", err)
 	} else if prov == nil {
-		slog.Info("cross-tenant provisioning disabled (set AZURE_TENANT_ID/AZURE_CLIENT_ID/AZURE_CLIENT_SECRET to enable)")
+		slog.Info("cross-tenant provisioning disabled (set CROSS_TENANT_PROVISIONING=true)")
 	} else {
 		go prov.Run(workerCtx, time.Duration(cfg.InfraPollSeconds)*time.Second)
-		slog.Info("cross-tenant provisioning enabled (Lighthouse)", "footprintRG", cfg.FootprintRG, "infraRG", cfg.InfraResourceGroup, "region", cfg.InfraRegion)
+		slog.Info("cross-tenant provisioning enabled (managed identity + Lighthouse)", "footprintRG", cfg.FootprintRG, "infraRG", cfg.InfraResourceGroup, "region", cfg.InfraRegion)
 	}
 
 	httpServer := &http.Server{

@@ -19,16 +19,14 @@ type Config struct {
 	PlatformTenantID string
 	CORSOrigin       string
 
-	// Platform Azure service principal — used to discover Lighthouse-delegated
-	// subscriptions and provision the tenant footprint + each deployment's Bicep
-	// infra cross-tenant. When unset, all cross-tenant provisioning is disabled.
-	AzureTenantID      string
-	AzureClientID      string
-	AzureClientSecret  string
-	InfraResourceGroup string // delegated RG the control plane deploys app infra into
-	FootprintRG        string // RG the control plane deploys the tenant footprint into
-	InfraRegion        string // region for created resource groups
-	InfraPollSeconds   int
+	// Cross-tenant provisioning (Azure Lighthouse). The control plane authenticates
+	// with its own managed identity (DefaultAzureCredential) — no secret held here.
+	// Off unless CROSS_TENANT_PROVISIONING=true.
+	CrossTenantProvisioning bool
+	InfraResourceGroup      string // delegated RG the control plane deploys app infra into
+	FootprintRG             string // RG the control plane deploys the tenant footprint into
+	InfraRegion             string // region for created resource groups
+	InfraPollSeconds        int
 
 	// Footprint parameters injected into each tenant's reconciler.
 	ControlPlanePublicURL string // the reconciler → control plane base URL
@@ -52,13 +50,11 @@ func Load() Config {
 		PlatformTenantID: strings.ToLower(env("PLATFORM_TENANT_ID", "")),
 		CORSOrigin:       env("CORS_ORIGIN", "http://localhost:4200"),
 
-		AzureTenantID:      env("AZURE_TENANT_ID", ""),
-		AzureClientID:      env("AZURE_CLIENT_ID", ""),
-		AzureClientSecret:  env("AZURE_CLIENT_SECRET", ""),
-		InfraResourceGroup: env("INFRA_RESOURCE_GROUP", "cortex-infra"),
-		FootprintRG:        env("FOOTPRINT_RESOURCE_GROUP", "cortex"),
-		InfraRegion:        env("INFRA_REGION", "uksouth"),
-		InfraPollSeconds:   envInt("INFRA_POLL_SECONDS", 30),
+		CrossTenantProvisioning: strings.EqualFold(strings.TrimSpace(env("CROSS_TENANT_PROVISIONING", "")), "true"),
+		InfraResourceGroup:      env("INFRA_RESOURCE_GROUP", "cortex-infra"),
+		FootprintRG:             env("FOOTPRINT_RESOURCE_GROUP", "cortex"),
+		InfraRegion:             env("INFRA_REGION", "uksouth"),
+		InfraPollSeconds:        envInt("INFRA_POLL_SECONDS", 30),
 
 		ControlPlanePublicURL: env("CONTROL_PLANE_PUBLIC_URL", "https://api.catalyst.msft.ae"),
 		CortexAPIScope:        env("CORTEX_API_SCOPE", ""),

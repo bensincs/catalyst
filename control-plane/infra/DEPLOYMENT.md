@@ -264,6 +264,34 @@ open https://catalyst.msft.ae                    # sign in with Entra
   so no demo data). Sign in from your `CORTEX_PLATFORM_TENANT_ID` to land as a
   Platform Admin; the Fleet starts empty until a tenant enrolls.
 
+### Cross-tenant provisioning (Azure Lighthouse)
+
+The control plane can provision each tenant's footprint + infra cross-tenant,
+authenticating as **its own user-assigned managed identity** (`cortex-cp`) — no
+service-principal secret. To enable it, deploy pass 2 with:
+
+```bash
+  -p crossTenantProvisioning=true \
+  -p reconcilerImage="<your published reconciler image>"
+```
+
+The control plane then uses `DefaultAzureCredential` (it sets `AZURE_CLIENT_ID` to
+the identity's client id automatically) to discover Lighthouse-delegated
+subscriptions and provision into them.
+
+**The value customers delegate to** (`controlPlanePrincipalId` in the delegation /
+`CORTEX_SP_OBJECT_ID` shown on the install page) is the identity's **object id** —
+emitted as the `uamiPrincipalId` output and injected into the console automatically:
+
+```bash
+az deployment group show -g "$RG" -n main --query properties.outputs.uamiPrincipalId.value -o tsv
+```
+
+No home-tenant role is needed on this identity — Azure Lighthouse projects the
+customer's delegated subscriptions onto it. (For a customer to grant it the
+footprint roles, the delegation includes a *limited* User Access Administrator; see
+[`../../onboarding/lighthouse-delegation.bicep`](../../onboarding/lighthouse-delegation.bicep).)
+
 ---
 
 ## Configuration reference
