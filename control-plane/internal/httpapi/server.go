@@ -100,6 +100,7 @@ func (s *Server) Router() http.Handler {
 			// Deployments — catalog entities (platform-authored + tenant-created)
 			r.Get("/applications", s.handleApplications)
 			r.Post("/applications", s.handleCreateApplication)
+			r.Post("/applications/inspect", s.handleInspectModule)
 			r.Patch("/applications/{id}", s.handleUpdateApplication)
 			r.Delete("/applications/{id}", s.handleDeleteApplication)
 
@@ -794,6 +795,32 @@ func (s *Server) appWriteAllowed(w http.ResponseWriter, r *http.Request, id mode
 		return false
 	}
 	return true
+}
+
+func (s *Server) handleInspectModule(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		BicepModule string `json:"bicepModule"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	params, outputs, err := bicep.Inspect(r.Context(), strings.TrimSpace(body.BicepModule))
+	if err != nil {
+		if errors.Is(err, bicep.ErrNoCompiler) {
+			// No toolchain — the form degrades to the JSON editor client-side.
+			writeJSON(w, http.StatusOK, map[string]any{"params": []any{}, "outputs": []any{}, "resolved": false})
+			return
+		}
+		writeErr(w, http.StatusBadRequest, "bicep module: "+err.Error())
+		return
+	}
+	if params == nil {
+		params = []bicep.ParamSpec{}
+	}
+	if outputs == nil {
+		outputs = []bicep.OutputSpec{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"params": params, "outputs": outputs, "resolved": true})
 }
 
 func (s *Server) handleCreateApplication(w http.ResponseWriter, r *http.Request) {

@@ -158,6 +158,11 @@
   margin: 6px 0 0;
 }
 
+.inspecting {
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
 /* Monospace code editor (Bicep / YAML) */
 .codeArea {
   font-family: var(--font-mono), ui-monospace, monospace;

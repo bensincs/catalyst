@@ -104,6 +104,24 @@ export interface WireLink {
   helmPath: string;
 }
 
+/** One input parameter of a Bicep module, resolved from its published schema —
+ *  drives the generated authoring form (types, required, allowed values). */
+export interface BicepParamSpec {
+  name: string;
+  type: string; // string | int | bool | object | array | securestring | secureobject
+  required: boolean;
+  default?: unknown;
+  allowed?: unknown[]; // allowedValues → a dropdown
+  description?: string;
+  secure?: boolean;
+}
+
+/** One output of a Bicep module (name + type), for the wiring board. */
+export interface BicepOutputSpec {
+  name: string;
+  type: string;
+}
+
 /** A dependency candidate (another deployment or agent) a deployment can wait on. */
 export interface DepOption {
   id: string;

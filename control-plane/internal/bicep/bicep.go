@@ -303,3 +303,201 @@ func compileCmd(ctx context.Context, in, out string) (*exec.Cmd, error) {
 	}
 	return nil, ErrNoCompiler
 }
+
+// ParamSpec describes one module input parameter, for rendering an authoring form.
+type ParamSpec struct {
+	Name        string `json:"name"`
+	Type        string `json:"type"`              // string | int | bool | object | array | securestring | secureobject
+	Required    bool   `json:"required"`          // no default and not nullable
+	Default     any    `json:"default,omitempty"` // primitive/JSON default, when present
+	Allowed     []any  `json:"allowed,omitempty"` // allowedValues (→ a dropdown)
+	Description string `json:"description,omitempty"`
+	Secure      bool   `json:"secure,omitempty"` // securestring/secureobject
+}
+
+// OutputSpec describes one module output (name + type), for the wiring board.
+type OutputSpec struct {
+	Name string `json:"name"`
+	Type string `json:"type"`
+}
+
+// Inspect returns a module's input parameters + outputs so the console can render
+// a typed authoring form (instead of raw JSON) and show wireable outputs before
+// the deployment is even saved. It works for a module with required params — it
+// restores the module to the local cache (no values needed) and reads its
+// compiled interface — or an inline ARM template (parsed directly).
+func Inspect(ctx context.Context, ref string) ([]ParamSpec, []OutputSpec, error) {
+	s := strings.TrimSpace(ref)
+	if s == "" {
+		return nil, nil, nil
+	}
+	if strings.HasPrefix(s, "{") { // inline ARM — read its interface directly
+		p, o := parseModuleInterface([]byte(s))
+		return p, o, nil
+	}
+	if !isModuleRef(s) {
+		return nil, nil, ErrBadRef
+	}
+	if !Available() {
+		return nil, nil, ErrNoCompiler
+	}
+	dir, err := os.MkdirTemp("", "cortex-bicep-")
+	if err != nil {
+		return nil, nil, err
+	}
+	defer os.RemoveAll(dir)
+
+	// Restore (not build) the module — this pulls it to the cache without needing
+	// its required params satisfied, unlike a build.
+	in := filepath.Join(dir, "main.bicep")
+	if err := os.WriteFile(in, []byte(fmt.Sprintf("module infra '%s' = {\n  name: 'infra'\n}\n", s)), 0o600); err != nil {
+		return nil, nil, err
+	}
+	cmd, err := restoreCmd(ctx, in)
+	if err != nil {
+		return nil, nil, err
+	}
+	if b, err := cmd.CombinedOutput(); err != nil {
+		return nil, nil, fmt.Errorf("bicep restore failed: %s", strings.TrimSpace(string(b)))
+	}
+	arm, err := readCachedModule(s)
+	if err != nil {
+		return nil, nil, err
+	}
+	p, o := parseModuleInterface(arm)
+	return p, o, nil
+}
+
+func restoreCmd(ctx context.Context, file string) (*exec.Cmd, error) {
+	if p, err := exec.LookPath("bicep"); err == nil {
+		return exec.CommandContext(ctx, p, "restore", file, "--force"), nil
+	}
+	if p, err := exec.LookPath("az"); err == nil {
+		return exec.CommandContext(ctx, p, "bicep", "restore", "--file", file, "--force"), nil
+	}
+	return nil, ErrNoCompiler
+}
+
+// readCachedModule reads a restored module's compiled ARM from the bicep module
+// cache (~/.bicep/br/<registry>/<repo with / → $>/<tag>$/main.json), falling back
+// to a directed walk if the layout differs.
+func readCachedModule(ref string) ([]byte, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, err
+	}
+	registry, repo, tag, err := splitModuleRef(ref)
+	if err != nil {
+		return nil, err
+	}
+	direct := filepath.Join(home, ".bicep", "br", registry, strings.ReplaceAll(repo, "/", "$"), tag+"$", "main.json")
+	if b, err := os.ReadFile(direct); err == nil {
+		return b, nil
+	}
+	// Fallback: walk the cache for a main.json under a "<tag>$" dir matching the
+	// repo's last segment (handles registry alias / path-encoding differences).
+	seg := repo
+	if i := strings.LastIndexByte(repo, '/'); i >= 0 {
+		seg = repo[i+1:]
+	}
+	root := filepath.Join(home, ".bicep", "br")
+	var found string
+	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil || found != "" || d.IsDir() || d.Name() != "main.json" {
+			return nil
+		}
+		parent := filepath.Base(filepath.Dir(path))
+		if parent == tag+"$" && strings.Contains(path, seg) {
+			found = path
+		}
+		return nil
+	})
+	if found == "" {
+		return nil, fmt.Errorf("restored module not found in cache for %q", ref)
+	}
+	return os.ReadFile(found)
+}
+
+// splitModuleRef parses an OCI module ref into (registry, repo, tag). The
+// br/public alias maps to mcr.microsoft.com/bicep.
+func splitModuleRef(ref string) (registry, repo, tag string, err error) {
+	s := ref
+	switch {
+	case strings.HasPrefix(s, "br/public:"):
+		s = "mcr.microsoft.com/bicep/" + strings.TrimPrefix(s, "br/public:")
+	case strings.HasPrefix(s, "br:"):
+		s = strings.TrimPrefix(s, "br:")
+	case strings.HasPrefix(s, "oci://"):
+		s = strings.TrimPrefix(s, "oci://")
+	default:
+		return "", "", "", ErrBadRef
+	}
+	slash := strings.IndexByte(s, '/')
+	colon := strings.LastIndexByte(s, ':')
+	if slash < 0 || colon < 0 || colon < slash {
+		return "", "", "", ErrBadRef
+	}
+	return s[:slash], s[slash+1 : colon], s[colon+1:], nil
+}
+
+// parseModuleInterface reads parameter + output schemas from a compiled ARM
+// template. Params are sorted required-first then by name; AVM's "Required. " /
+// "Optional. " description prefixes are trimmed.
+func parseModuleInterface(arm []byte) ([]ParamSpec, []OutputSpec) {
+	var t struct {
+		Parameters map[string]struct {
+			Type          string          `json:"type"`
+			DefaultValue  json.RawMessage `json:"defaultValue"`
+			AllowedValues []any           `json:"allowedValues"`
+			Nullable      bool            `json:"nullable"`
+			Metadata      struct {
+				Description string `json:"description"`
+			} `json:"metadata"`
+		} `json:"parameters"`
+		Outputs map[string]struct {
+			Type string `json:"type"`
+		} `json:"outputs"`
+	}
+	if json.Unmarshal(arm, &t) != nil {
+		return nil, nil
+	}
+	params := make([]ParamSpec, 0, len(t.Parameters))
+	for name, p := range t.Parameters {
+		hasDefault := len(p.DefaultValue) > 0
+		var def any
+		if hasDefault {
+			_ = json.Unmarshal(p.DefaultValue, &def)
+		}
+		lt := strings.ToLower(p.Type)
+		params = append(params, ParamSpec{
+			Name:        name,
+			Type:        lt,
+			Required:    !hasDefault && !p.Nullable,
+			Default:     def,
+			Allowed:     p.AllowedValues,
+			Description: trimDescPrefix(p.Metadata.Description),
+			Secure:      strings.HasPrefix(lt, "secure"),
+		})
+	}
+	sort.Slice(params, func(i, j int) bool {
+		if params[i].Required != params[j].Required {
+			return params[i].Required // required first
+		}
+		return params[i].Name < params[j].Name
+	})
+	outputs := make([]OutputSpec, 0, len(t.Outputs))
+	for name, o := range t.Outputs {
+		outputs = append(outputs, OutputSpec{Name: name, Type: strings.ToLower(o.Type)})
+	}
+	sort.Slice(outputs, func(i, j int) bool { return outputs[i].Name < outputs[j].Name })
+	return params, outputs
+}
+
+func trimDescPrefix(d string) string {
+	for _, p := range []string{"Required. ", "Optional. ", "Conditional. "} {
+		if strings.HasPrefix(d, p) {
+			return strings.TrimPrefix(d, p)
+		}
+	}
+	return d
+}

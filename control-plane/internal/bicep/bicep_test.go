@@ -95,3 +95,56 @@ func TestIsModuleRef(t *testing.T) {
 		}
 	}
 }
+
+func TestParseModuleInterface(t *testing.T) {
+	arm := []byte(`{
+		"parameters": {
+			"name":     {"type":"string","metadata":{"description":"Required. The name."}},
+			"skuName":  {"type":"string","defaultValue":"Standard_GRS","allowedValues":["Standard_LRS","Standard_GRS"],"metadata":{"description":"Optional. The sku."}},
+			"secret":   {"type":"securestring"},
+			"tags":     {"type":"object","nullable":true}
+		},
+		"outputs": {"resourceId":{"type":"string"},"name":{"type":"string"}}
+	}`)
+	params, outputs := parseModuleInterface(arm)
+	if len(params) != 4 {
+		t.Fatalf("params: %d", len(params))
+	}
+	// Required-first ordering: name + secret are required (no default, not nullable).
+	if params[0].Name != "name" && params[0].Name != "secret" {
+		t.Fatalf("required not sorted first: %v", params[0])
+	}
+	by := map[string]ParamSpec{}
+	for _, p := range params {
+		by[p.Name] = p
+	}
+	if !by["name"].Required || by["name"].Description != "The name." {
+		t.Fatalf("name spec: %+v", by["name"])
+	}
+	if by["skuName"].Required || by["skuName"].Default != "Standard_GRS" || len(by["skuName"].Allowed) != 2 {
+		t.Fatalf("skuName spec: %+v", by["skuName"])
+	}
+	if !by["secret"].Secure || !by["secret"].Required {
+		t.Fatalf("secret spec: %+v", by["secret"])
+	}
+	if by["tags"].Required { // nullable → optional
+		t.Fatalf("nullable tags should be optional: %+v", by["tags"])
+	}
+	if len(outputs) != 2 || outputs[0].Name != "name" || outputs[1].Name != "resourceId" {
+		t.Fatalf("outputs: %v", outputs)
+	}
+}
+
+func TestSplitModuleRef(t *testing.T) {
+	reg, repo, tag, err := splitModuleRef("br:mcr.microsoft.com/bicep/avm/res/storage/storage-account:0.32.1")
+	if err != nil || reg != "mcr.microsoft.com" || repo != "bicep/avm/res/storage/storage-account" || tag != "0.32.1" {
+		t.Fatalf("br: got %q %q %q %v", reg, repo, tag, err)
+	}
+	reg, repo, _, err = splitModuleRef("br/public:avm/res/key-vault/vault:0.13.3")
+	if err != nil || reg != "mcr.microsoft.com" || repo != "bicep/avm/res/key-vault/vault" {
+		t.Fatalf("br/public: got %q %q %v", reg, repo, err)
+	}
+	if _, _, _, err := splitModuleRef("not-a-ref"); err != ErrBadRef {
+		t.Fatalf("want ErrBadRef, got %v", err)
+	}
+}

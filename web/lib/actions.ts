@@ -2,7 +2,14 @@
 
 import { revalidatePath } from "next/cache";
 import { apiSend, ApiError } from "@/lib/api";
-import type { AgentDefinition, AgentType, MemoryStoreDefinition, WireLink } from "@/lib/types";
+import type {
+  AgentDefinition,
+  AgentType,
+  BicepOutputSpec,
+  BicepParamSpec,
+  MemoryStoreDefinition,
+  WireLink,
+} from "@/lib/types";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
 
@@ -20,6 +27,27 @@ async function run(fn: () => Promise<unknown>, paths: string[]): Promise<ActionR
     await fn();
     for (const p of paths) revalidatePath(p);
     return { ok: true };
+  } catch (e) {
+    return { ok: false, error: errMsg(e) };
+  }
+}
+
+// Inspect a Bicep module's published interface (input params + outputs) so the
+// deployment modal can render a typed form and show wireable outputs before save.
+export type InspectResult =
+  | { ok: true; params: BicepParamSpec[]; outputs: BicepOutputSpec[]; resolved: boolean }
+  | { ok: false; error: string };
+
+export async function inspectModule(bicepModule: string): Promise<InspectResult> {
+  const ref = bicepModule.trim();
+  if (ref === "") return { ok: true, params: [], outputs: [], resolved: false };
+  try {
+    const d = await apiSend<{ params: BicepParamSpec[]; outputs: BicepOutputSpec[]; resolved: boolean }>(
+      "POST",
+      "/api/applications/inspect",
+      { bicepModule: ref },
+    );
+    return { ok: true, params: d.params ?? [], outputs: d.outputs ?? [], resolved: Boolean(d.resolved) };
   } catch (e) {
     return { ok: false, error: errMsg(e) };
   }

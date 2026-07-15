@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Rocket, Plus, Trash2, Pencil, Power, Cloud, GitBranch, Bot } from "lucide-react";
 import { PageHeader } from "@/components/ui/page-header";
@@ -11,17 +11,21 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { StatusBadge } from "@/components/ui/status";
 import { useToast } from "@/components/providers/toast-provider";
 import { WiringEditor } from "./wiring-editor";
+import { ModuleInputsForm } from "./module-inputs-form";
 import {
   createApplication,
   updateApplication,
   deleteApplication,
   enableDeployment,
   disableDeployment,
+  inspectModule,
   type ActionResult,
 } from "@/lib/actions";
 import {
   HEALTH_META,
   type Application,
+  type BicepOutputSpec,
+  type BicepParamSpec,
   type ClusterInfo,
   type DepOption,
   type HealthMeta,
@@ -341,28 +345,70 @@ function DeploymentModal({
   const [namespace, setNamespace] = useState(app?.namespace ?? "");
   const [values, setValues] = useState(app?.values ?? "");
   const [bicepModule, setBicepModule] = useState(app?.bicepModule ?? "");
-  const [paramsText, setParamsText] = useState(
-    app?.bicepParams && Object.keys(app.bicepParams).length
-      ? JSON.stringify(app.bicepParams, null, 2)
-      : "",
-  );
+  const [paramValues, setParamValues] = useState<Record<string, unknown>>(app?.bicepParams ?? {});
   const [wiring, setWiring] = useState<WireLink[]>(app?.wiring ?? []);
   const [dependsOn, setDependsOn] = useState<string[]>(app?.dependsOn ?? []);
 
-  // Params are a JSON object baked into the module; validate before enabling save.
-  const params = useMemo((): { ok: boolean; value: Record<string, unknown> } => {
-    const t = paramsText.trim();
-    if (t === "") return { ok: true, value: {} };
+  // Resolve the module's input/output schema so the params render as a typed form
+  // (and outputs are wireable) live, before saving. Debounced on the ref.
+  const [inspect, setInspect] = useState<{
+    loading: boolean;
+    resolved: boolean;
+    params: BicepParamSpec[];
+    outputs: BicepOutputSpec[];
+    error?: string;
+  }>({ loading: false, resolved: false, params: [], outputs: [] });
+
+  // JSON fallback, used when no toolchain can resolve the module (or a bad ref).
+  const [jsonText, setJsonText] = useState(
+    app?.bicepParams && Object.keys(app.bicepParams).length ? JSON.stringify(app.bicepParams, null, 2) : "",
+  );
+  const [jsonOk, setJsonOk] = useState(true);
+
+  useEffect(() => {
+    const ref = bicepModule.trim();
+    if (ref === "") {
+      setInspect({ loading: false, resolved: false, params: [], outputs: [] });
+      return;
+    }
+    let cancelled = false;
+    setInspect((s) => ({ ...s, loading: true, error: undefined }));
+    const t = setTimeout(async () => {
+      const r = await inspectModule(ref);
+      if (cancelled) return;
+      if (r.ok) setInspect({ loading: false, resolved: r.resolved, params: r.params, outputs: r.outputs });
+      else setInspect({ loading: false, resolved: false, params: [], outputs: [], error: r.error });
+    }, 500);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [bicepModule]);
+
+  const useForm = inspect.resolved && inspect.params.length > 0;
+  const liveOutputs = inspect.outputs.length > 0 ? inspect.outputs.map((o) => o.name) : (app?.bicepOutputs ?? []);
+
+  const setJson = (t: string) => {
+    setJsonText(t);
+    if (t.trim() === "") {
+      setParamValues({});
+      setJsonOk(true);
+      return;
+    }
     try {
       const v = JSON.parse(t);
-      if (v && typeof v === "object" && !Array.isArray(v)) return { ok: true, value: v as Record<string, unknown> };
+      if (v && typeof v === "object" && !Array.isArray(v)) {
+        setParamValues(v as Record<string, unknown>);
+        setJsonOk(true);
+        return;
+      }
     } catch {
       /* fall through */
     }
-    return { ok: false, value: {} };
-  }, [paramsText]);
+    setJsonOk(false);
+  };
 
-  const valid = name.trim().length >= 2 && repoURL.trim() !== "" && chart.trim() !== "" && params.ok;
+  const valid = name.trim().length >= 2 && repoURL.trim() !== "" && chart.trim() !== "" && (useForm || jsonOk);
 
   const submit = () =>
     onSubmit({
@@ -374,7 +420,7 @@ function DeploymentModal({
       targetRevision: targetRevision.trim(),
       values,
       bicepModule: bicepModule.trim(),
-      bicepParams: params.value,
+      bicepParams: paramValues,
       wiring,
       dependsOn,
     });
@@ -442,7 +488,7 @@ function DeploymentModal({
       <Field
         label="Bicep module reference"
         htmlFor="dep-bicep"
-        hint="An OCI reference to a published Bicep module — provisioned in the tenant's resource group before the chart. Its outputs resolve on save."
+        hint="An OCI reference to a published Bicep module — provisioned in the tenant's resource group before the chart. Its inputs + outputs resolve as you type."
       >
         <TextInput
           id="dep-bicep"
@@ -455,26 +501,45 @@ function DeploymentModal({
 
       {bicepModule.trim() !== "" && (
         <>
-          <Field
-            label="Module parameters (JSON)"
-            htmlFor="dep-params"
-            hint="Author the module's inputs as a JSON object — baked into the template on save. Required params (e.g. name) must be set or the module won't resolve."
-          >
-            <Textarea
-              id="dep-params"
-              value={paramsText}
-              onChange={(e) => setParamsText(e.target.value)}
-              spellCheck={false}
-              className={styles.codeArea}
-              placeholder={'{\n  "name": "cortex-db",\n  "skuName": "Standard_B1ms",\n  "tier": "Burstable"\n}'}
-            />
-            {paramsText.trim() !== "" && !params.ok && (
-              <p className={styles.paramsError}>Must be a JSON object.</p>
-            )}
-          </Field>
+          <p className={styles.groupLabel}>
+            Module inputs
+            {inspect.loading && <span className={styles.inspecting}> · inspecting…</span>}
+          </p>
+
+          {inspect.error && (
+            <p className={styles.paramsError}>Couldn&apos;t inspect module: {inspect.error}</p>
+          )}
+
+          {useForm ? (
+            <ModuleInputsForm params={inspect.params} value={paramValues} onChange={setParamValues} />
+          ) : inspect.resolved && inspect.params.length === 0 ? (
+            <p className={styles.groupHint}>This module takes no parameters.</p>
+          ) : (
+            !inspect.loading && (
+              <Field
+                label="Module parameters (JSON)"
+                htmlFor="dep-params"
+                hint={
+                  inspect.error
+                    ? "Author the module's inputs as a JSON object — baked into the template on save."
+                    : "No live schema (Bicep toolchain unavailable) — author the inputs as a JSON object, baked into the template on save."
+                }
+              >
+                <Textarea
+                  id="dep-params"
+                  value={jsonText}
+                  onChange={(e) => setJson(e.target.value)}
+                  spellCheck={false}
+                  className={styles.codeArea}
+                  placeholder={'{\n  "name": "cortex-db",\n  "skuName": "Standard_B1ms",\n  "tier": "Burstable"\n}'}
+                />
+                {!jsonOk && <p className={styles.paramsError}>Must be a JSON object.</p>}
+              </Field>
+            )
+          )}
 
           <p className={styles.groupLabel}>Wire outputs → Helm values</p>
-          <WiringEditor outputs={app?.bicepOutputs ?? []} wiring={wiring} onChange={setWiring} />
+          <WiringEditor outputs={liveOutputs} wiring={wiring} onChange={setWiring} />
         </>
       )}
 
