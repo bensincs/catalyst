@@ -2,7 +2,6 @@
 
 import { Menu as MenuIcon } from "lucide-react";
 import { useConsole } from "@/components/providers/console-provider";
-import { TenantSwitcher } from "./tenant-switcher";
 import { EnvBadge } from "./env-badge";
 import { ThemeToggle } from "./theme-toggle";
 import { CommandTrigger } from "./command-trigger";
@@ -22,7 +21,6 @@ export function TopBar() {
         >
           <MenuIcon size={19} strokeWidth={2} />
         </button>
-        <TenantSwitcher />
       </div>
 
       <div className={styles.right}>

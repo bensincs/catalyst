@@ -7,7 +7,6 @@ import {
   ArrowLeft,
   ArrowUpRight,
   Bot,
-  Boxes,
   Globe,
   MessageSquare,
   Settings2,
@@ -28,13 +27,6 @@ import {
   type TenantContextInfo,
 } from "@/lib/types";
 import styles from "./tenant-overview.module.css";
-
-// Where the "Deploy to Azure" CTA sends the tenant admin to stand up the managed
-// application in their own subscription. Real outbound launch — the console
-// never writes install/enrollment state; the reconciler binds via heartbeat.
-const DEPLOY_URL =
-  process.env.NEXT_PUBLIC_CORTEX_DEPLOY_URL ??
-  "https://portal.azure.com/#create/Microsoft.Solutions%2FmanagedApplications";
 
 const PUBLISH: Record<PublishTarget, { label: string; icon: typeof Globe }> = {
   api: { label: "API", icon: Globe },
@@ -58,10 +50,9 @@ export function TenantOverview({
   const lc = LIFECYCLE_META[tenant.lifecycle];
   const recon = reconStatus(tenant.lifecycle);
   const installed = tenant.enrollment === "bound";
+  const delegated = tenant.cluster.infraDelegated;
   const totalCalls = agents.reduce((n, a) => n + a.calls30d, 0);
   const models = new Set(agents.map((a) => a.model)).size;
-
-  const deploy = () => window.open(DEPLOY_URL, "_blank", "noopener,noreferrer");
 
   return (
     <div>
@@ -80,25 +71,25 @@ export function TenantOverview({
         title={platformView ? tenant.name : "Overview"}
         description={
           platformView
-            ? `Install, agents, and workloads for ${tenant.name} — running in the tenant's own Azure subscription.`
+            ? `Install, agents, and workloads for ${tenant.name} — provisioned by Cortex into the tenant's own subscription via Azure Lighthouse.`
             : "Your tenant's install, the agents running in it, and the workloads they're serving — everything under your own identity."
         }
         actions={
           installed ? (
-            <Button variant="primary" icon={Boxes} onClick={() => router.push("/catalog")}>
-              Browse catalog
+            <Button variant="primary" icon={Bot} onClick={() => router.push("/agents")}>
+              Browse agents
             </Button>
           ) : platformView ? (
             <Button
               variant="secondary"
               icon={ShieldCheck}
-              onClick={() => toast({ title: "Deployment is initiated by the tenant admin", tone: "neutral" })}
+              onClick={() => toast({ title: "Awaiting the tenant's Lighthouse delegation", tone: "neutral" })}
             >
-              Awaiting deployment
+              Awaiting delegation
             </Button>
           ) : (
-            <Button variant="primary" icon={ShieldCheck} iconRight={ArrowUpRight} onClick={deploy}>
-              Deploy to Azure
+            <Button variant="primary" icon={ShieldCheck} iconRight={ArrowUpRight} onClick={() => router.push("/install")}>
+              Set up install
             </Button>
           )
         }
@@ -117,8 +108,8 @@ export function TenantOverview({
               <StatusBadge tone={lc.tone} label={lc.label} pulse={tenant.lifecycle === "live"} />
             </div>
             <p className={styles.installSub}>
-              Cortex runs in this tenant&rsquo;s own Azure subscription. Your data,
-              models, and agents never leave it.
+              Delegate your subscription once; Cortex provisions the reconciler, Foundry,
+              and cluster inside it. Your models, agents, and data never leave your tenant.
             </p>
           </div>
           <div className={styles.heartbeat} data-installed={installed || undefined}>
@@ -138,6 +129,8 @@ export function TenantOverview({
           <Fact label="Tenant ID" value={tenant.tenantId} mono />
           <Fact label="Subscription" value={tenant.subscriptionId || "—"} mono />
           <Fact label="Region" value={tenant.region} />
+          <Fact label="Delegation" value={delegated ? "Active · Lighthouse" : "Not delegated"} />
+          <Fact label="Environment" value={footprintLabel(tenant.cluster.footprintState)} />
           <Fact label="Reconciler identity" value={tenant.reconcilerIdentity || "—"} mono />
           <Fact label="Foundry project" value={tenant.foundryProject || "—"} mono />
           <Fact label="Reconciler" value={tenant.reconcilerVersion ? `v${tenant.reconcilerVersion}` : "—"} mono />
@@ -154,12 +147,16 @@ export function TenantOverview({
 
         <div className={styles.installFoot}>
           <span className={styles.installFootText}>
-            {tenant.installedAt ? `Installed ${tenant.installedAt} · self-updating` : "Awaiting installation into your subscription"}
+            {tenant.installedAt
+              ? `Installed ${tenant.installedAt} · self-updating`
+              : delegated
+                ? "Cortex is provisioning your environment"
+                : "Awaiting your Lighthouse delegation"}
           </span>
-          <button className={styles.installLink} onClick={() => toast({ title: "Install details", tone: "neutral" })}>
+          <Link href="/install" className={styles.installLink}>
             View install
             <ArrowUpRight size={14} strokeWidth={2} aria-hidden />
-          </button>
+          </Link>
         </div>
       </section>
 
@@ -178,8 +175,8 @@ export function TenantOverview({
             Enabled agents
             <span className={styles.sectionCount}>{agents.length}</span>
           </h2>
-          <button className={styles.sectionLink} onClick={() => router.push("/catalog")}>
-            Browse catalog
+          <button className={styles.sectionLink} onClick={() => router.push("/agents")}>
+            Browse agents
             <ArrowUpRight size={14} strokeWidth={2} aria-hidden />
           </button>
         </div>
@@ -191,8 +188,8 @@ export function TenantOverview({
               title="No agents enabled yet"
               description="Browse the agents your platform team has entitled you to, configure one against your own knowledge, and the reconciler brings it live in your Foundry project."
               action={
-                <Button variant="primary" onClick={() => router.push("/catalog")}>
-                  Browse catalog
+                <Button variant="primary" onClick={() => router.push("/agents")}>
+                  Browse agents
                 </Button>
               }
               compact
@@ -228,6 +225,21 @@ function reconStatus(lifecycle: Lifecycle): {
       return { tone: "neutral", label: "Suspended", pulse: false, showTime: false };
     default:
       return { tone: "neutral", label: "Not installed yet", pulse: false, showTime: false };
+  }
+}
+
+// footprintLabel reads the control-plane-provisioned footprint (reconciler +
+// Foundry + AKS) state for the install panel.
+function footprintLabel(state?: string): string {
+  switch (state) {
+    case "ready":
+      return "Provisioned";
+    case "provisioning":
+      return "Provisioning…";
+    case "failed":
+      return "Failed";
+    default:
+      return "Not provisioned";
   }
 }
 

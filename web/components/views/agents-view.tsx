@@ -15,18 +15,12 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { PageHeader } from "@/components/ui/page-header";
-import { Button } from "@/components/ui/button";
+import { Button, ButtonLink } from "@/components/ui/button";
 import { StatusBadge } from "@/components/ui/status";
 import { EmptyState } from "@/components/ui/empty-state";
 import { useToast } from "@/components/providers/toast-provider";
-import {
-  createCatalogAgent,
-  disableAgent,
-  enableAgent,
-  publishVersion,
-  type ActionResult,
-} from "@/lib/actions";
-import { EnableModal, NewAgentModal, OwnershipTag, PublishModal, TypeTag } from "./catalog-view";
+import { disableAgent, enableAgent, publishVersion, type ActionResult } from "@/lib/actions";
+import { EnableModal, OwnershipTag, PublishModal, TypeTag } from "./catalog-view";
 import {
   HEALTH_META,
   type CatalogAgent,
@@ -63,7 +57,6 @@ export function AgentsView({
   const [pending, start] = useTransition();
   const platform = role === "platform";
 
-  const [newOpen, setNewOpen] = useState(false);
   const [publishFor, setPublishFor] = useState<CatalogAgent | null>(null);
   const [enableFor, setEnableFor] = useState<CatalogAgent | null>(null);
 
@@ -101,9 +94,9 @@ export function AgentsView({
           ) : undefined
         }
         actions={
-          <Button variant="primary" icon={Plus} onClick={() => setNewOpen(true)}>
+          <ButtonLink href="/agents/new" variant="primary" icon={Plus}>
             New agent
-          </Button>
+          </ButtonLink>
         }
       />
 
@@ -118,9 +111,9 @@ export function AgentsView({
                 : "Author your own agent, or ask your platform team to entitle your tenant to one. Enabled agents are provisioned into your own Foundry project."
             }
             action={
-              <Button variant="primary" icon={Plus} onClick={() => setNewOpen(true)}>
+              <ButtonLink href="/agents/new" variant="primary" icon={Plus}>
                 New agent
-              </Button>
+              </ButtonLink>
             }
           />
         </div>
@@ -228,15 +221,6 @@ export function AgentsView({
         </ul>
       )}
 
-      <NewAgentModal
-        open={newOpen}
-        pending={pending}
-        onClose={() => setNewOpen(false)}
-        stores={memoryStores}
-        onSubmit={(input) =>
-          runAction(() => createCatalogAgent(input), `Created ${input.name}`, () => setNewOpen(false))
-        }
-      />
       <PublishModal
         key={publishFor?.id ?? "none"}
         agent={publishFor}

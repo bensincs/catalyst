@@ -32,8 +32,8 @@ export function UsageView({ agents }: { agents: EnabledAgent[] }) {
             title="No usage yet"
             description="Once you enable an agent and it starts answering over its endpoint, call volume and model mix appear here — reported from your own tenant on every reconciler heartbeat."
             action={
-              <Button variant="primary" icon={Bot} onClick={() => (window.location.href = "/catalog")}>
-                Browse catalog
+              <Button variant="primary" icon={Bot} onClick={() => (window.location.href = "/agents")}>
+                Browse agents
               </Button>
             }
           />

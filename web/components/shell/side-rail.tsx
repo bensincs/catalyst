@@ -87,10 +87,6 @@ export function SideRail() {
 
       <nav className={styles.nav} aria-label="Primary navigation">
         <RailNav collapsed={railCollapsed} />
-      </nav>
-
-      <div className={styles.foot}>
-        <UserPanel collapsed={railCollapsed} />
         <button
           type="button"
           className={styles.collapseBtn}
@@ -107,6 +103,10 @@ export function SideRail() {
           </span>
           <span className={styles.collapseLabel}>Collapse</span>
         </button>
+      </nav>
+
+      <div className={styles.foot}>
+        <UserPanel collapsed={railCollapsed} />
       </div>
     </aside>
   );

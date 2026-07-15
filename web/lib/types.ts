@@ -124,6 +124,19 @@ export interface BicepOutputSpec {
   type: string;
 }
 
+/** A Helm chart's authoring surface — its default values (values.yaml) and an
+ *  optional JSON Schema (values.schema.json) — resolved from the chart so the
+ *  console can render a typed, searchable values builder instead of a raw
+ *  textarea. The stored deployment `values` are override-only YAML: Helm merges
+ *  them over these defaults at install. */
+export interface ChartInterface {
+  name: string;
+  version: string;
+  description?: string;
+  defaults: Record<string, unknown>; // values.yaml → the default value tree
+  schema?: Record<string, unknown>; // values.schema.json (JSON Schema), when present
+}
+
 /** A dependency candidate (another deployment or agent) a deployment can wait on. */
 export interface DepOption {
   id: string;

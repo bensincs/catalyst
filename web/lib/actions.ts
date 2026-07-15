@@ -7,6 +7,7 @@ import type {
   AgentType,
   BicepOutputSpec,
   BicepParamSpec,
+  ChartInterface,
   MemoryStoreDefinition,
   WireLink,
 } from "@/lib/types";
@@ -48,6 +49,48 @@ export async function inspectModule(bicepModule: string): Promise<InspectResult>
       { bicepModule: ref },
     );
     return { ok: true, params: d.params ?? [], outputs: d.outputs ?? [], resolved: Boolean(d.resolved) };
+  } catch (e) {
+    return { ok: false, error: errMsg(e) };
+  }
+}
+
+// Inspect a Helm chart's authoring surface (default values + optional JSON Schema)
+// so the deployment modal can render a typed, searchable values builder. `resolved`
+// is false when the helm toolchain is absent (the console then falls back to a raw
+// YAML editor) or the ref is blank; a bad/unreachable chart surfaces as an error.
+export type InspectChartResult =
+  | { ok: true; resolved: boolean; iface?: ChartInterface }
+  | { ok: false; error: string };
+
+export async function inspectChart(
+  repoURL: string,
+  chart: string,
+  version: string,
+): Promise<InspectChartResult> {
+  const repo = repoURL.trim();
+  const name = chart.trim();
+  if (repo === "" || name === "") return { ok: true, resolved: false };
+  try {
+    const d = await apiSend<{
+      resolved: boolean;
+      name?: string;
+      version?: string;
+      description?: string;
+      defaults?: Record<string, unknown>;
+      schema?: Record<string, unknown>;
+    }>("POST", "/api/applications/inspect-chart", { repoURL: repo, chart: name, version: version.trim() });
+    if (!d.resolved) return { ok: true, resolved: false };
+    return {
+      ok: true,
+      resolved: true,
+      iface: {
+        name: d.name || name,
+        version: d.version ?? "",
+        description: d.description,
+        defaults: d.defaults ?? {},
+        schema: d.schema,
+      },
+    };
   } catch (e) {
     return { ok: false, error: errMsg(e) };
   }

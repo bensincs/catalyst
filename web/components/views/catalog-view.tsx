@@ -10,7 +10,7 @@ import styles from "./catalog-view.module.css";
 // The agent authoring surface: type tags plus the New agent / Publish version /
 // Enable modals. Rendered inline on the unified Agents page (see agents-view).
 
-const MODELS = ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "jais-30b", "o3-mini"];
+export const MODELS = ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "jais-30b", "o3-mini"];
 const PROMPT_TOOLS: { id: string; label: string; hint: string }[] = [
   { id: "file_search", label: "File search", hint: "Retrieve over attached knowledge." },
   { id: "code_interpreter", label: "Code interpreter", hint: "Run sandboxed Python." },
@@ -42,7 +42,7 @@ export function OwnershipTag({ agent }: { agent: CatalogAgent }) {
 
 /* ── Modals ───────────────────────────────────────────────────────────────── */
 
-function TypeToggle({ value, onChange }: { value: AgentType; onChange: (t: AgentType) => void }) {
+export function TypeToggle({ value, onChange }: { value: AgentType; onChange: (t: AgentType) => void }) {
   const opts: { id: AgentType; label: string; hint: string }[] = [
     { id: "prompt", label: "Prompt", hint: "Declarative — model, instructions, tools." },
     { id: "hosted", label: "Hosted", hint: "Bring-your-own container." },
@@ -69,7 +69,7 @@ function TypeToggle({ value, onChange }: { value: AgentType; onChange: (t: Agent
 
 // DefinitionFields renders the typed definition editor — the substance that
 // travels with each published version (see AGENT-MODEL.md).
-function DefinitionFields({
+export function DefinitionFields({
   type,
   value,
   onChange,

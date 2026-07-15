@@ -1,0 +1,289 @@
+.page {
+  padding-bottom: 96px; /* clear the sticky action bar */
+}
+
+/* ── Header ─────────────────────────────────────────────────────────────── */
+.head {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-bottom: var(--space-xl);
+}
+.back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  font-size: var(--text-body-sm);
+  font-weight: 550;
+  color: var(--text-muted);
+  padding: 4px 2px;
+  transition: color var(--dur-fast) var(--ease-out-quart);
+}
+.back:hover {
+  color: var(--text);
+}
+.back svg {
+  transition: transform var(--dur-fast) var(--ease-out-quart);
+}
+.back:hover svg {
+  transform: translateX(-2px);
+}
+
+.titleRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+.titleIcon {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  flex: none;
+  border-radius: var(--radius-lg);
+  background: var(--surface-sunken);
+  color: var(--text);
+}
+.title {
+  font-size: var(--text-h1);
+  font-weight: 640;
+  letter-spacing: -0.02em;
+}
+.subtitle {
+  margin-top: 3px;
+  font-size: var(--text-body);
+  color: var(--text-muted);
+  line-height: 1.5;
+  max-width: 68ch;
+}
+
+.clusterLine {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding-top: 2px;
+}
+.clusterNote {
+  font-size: var(--text-caption);
+  color: var(--text-muted);
+}
+
+/* ── Sections ───────────────────────────────────────────────────────────── */
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-base);
+}
+
+/* Two sides that fill the width: Helm (left) and Bicep (right), each an
+   independent column so a tall section on one side doesn't dead-space the other.
+   The Wiring section below spans full width, bridging the two. */
+.columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-base);
+  align-items: start;
+}
+.col {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-base);
+  min-width: 0;
+}
+@media (max-width: 960px) {
+  .columns {
+    grid-template-columns: 1fr;
+  }
+}
+
+.section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  padding: var(--space-lg);
+  animation: sectionIn var(--dur-slow) var(--ease-out-quart) both;
+}
+@keyframes sectionIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.section[data-accent] {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+  background: linear-gradient(180deg, var(--accent-bg), transparent 120px), var(--surface);
+}
+
+.sectionHead {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: var(--space-base);
+}
+.sectionIcon {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  flex: none;
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  color: var(--text-secondary);
+}
+.section[data-accent] .sectionIcon {
+  background: var(--accent-bg);
+  color: var(--accent-ink);
+}
+.sectionMeta {
+  flex: 1;
+  min-width: 0;
+}
+.sectionTitle {
+  font-size: var(--text-h2);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.sectionDesc {
+  margin-top: 2px;
+  font-size: var(--text-body-sm);
+  color: var(--text-muted);
+  line-height: 1.45;
+  max-width: 72ch;
+}
+.sectionStatus {
+  flex: none;
+  padding-top: 2px;
+}
+.sectionBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-base);
+}
+
+.grid2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-base);
+}
+
+.note {
+  font-size: var(--text-body-sm);
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+.code {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: var(--text-body-sm);
+  line-height: 1.5;
+  min-height: 96px;
+  tab-size: 2;
+}
+.err {
+  font-size: var(--text-caption);
+  color: var(--danger-ink, var(--danger));
+  margin: 4px 0 0;
+}
+
+/* ── Deploy-after chips ─────────────────────────────────────────────────── */
+.depGrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.depChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 13px;
+  font-size: var(--text-body-sm);
+  font-weight: 550;
+  color: var(--text-secondary);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-full);
+  transition:
+    color var(--dur-fast) var(--ease-out-quart),
+    border-color var(--dur-fast) var(--ease-out-quart),
+    background-color var(--dur-fast) var(--ease-out-quart);
+}
+.depChip svg {
+  color: var(--text-muted);
+  transition: color var(--dur-fast) var(--ease-out-quart);
+}
+.depChip:hover {
+  border-color: var(--text-disabled);
+  color: var(--text);
+}
+.depChip[data-on] {
+  color: var(--accent-ink);
+  background: var(--accent-bg);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.depChip[data-on] svg {
+  color: var(--accent-ink);
+}
+
+/* ── Sticky action bar ──────────────────────────────────────────────────── */
+.footer {
+  position: sticky;
+  bottom: 0;
+  z-index: var(--z-sticky);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-base);
+  margin-top: var(--space-lg);
+  padding: 14px 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: color-mix(in srgb, var(--surface) 82%, transparent);
+  backdrop-filter: blur(12px);
+  box-shadow: var(--shadow-md);
+}
+.summary {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.sumItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-body-sm);
+  color: var(--text-muted);
+}
+.sumItem svg {
+  color: var(--text-disabled);
+}
+.actions {
+  display: flex;
+  gap: 10px;
+  flex: none;
+}
+
+@media (max-width: 720px) {
+  .grid2 {
+    grid-template-columns: 1fr;
+  }
+  .summary {
+    display: none;
+  }
+  .footer {
+    justify-content: flex-end;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .section {
+    animation: none;
+  }
+}

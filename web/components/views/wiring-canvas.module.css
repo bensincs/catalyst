@@ -1,7 +1,7 @@
 .wrap {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
 }
 
 .legend {
@@ -18,13 +18,21 @@
 .legendOut {
   color: var(--accent-ink);
   font-weight: 600;
+  font-family: var(--font-mono), ui-monospace, monospace;
+}
+
+.boardScroll {
+  max-height: 520px;
+  overflow-y: auto;
+  margin: 0 -4px;
+  padding: 0 4px;
 }
 
 .board {
   position: relative;
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: clamp(48px, 12vw, 120px);
+  gap: clamp(48px, 12vw, 128px);
   padding: 4px 2px;
   min-height: 96px;
 }
@@ -43,14 +51,29 @@
   fill: none;
   stroke: var(--accent);
   stroke-width: 2;
-  opacity: 0.45;
+  opacity: 0.5;
   stroke-linecap: round;
-  transition: opacity var(--dur) var(--ease-out-quart), stroke-width var(--dur) var(--ease-out-quart);
+  stroke-dasharray: 1;
+  stroke-dashoffset: 0;
+  animation: wireDraw var(--dur-slow) var(--ease-out-quart);
+  transition:
+    opacity var(--dur) var(--ease-out-quart),
+    stroke-width var(--dur) var(--ease-out-quart);
 }
 .wire[data-active] {
   opacity: 1;
   stroke-width: 3;
   filter: drop-shadow(0 0 5px var(--focus-glow));
+}
+@keyframes wireDraw {
+  from {
+    stroke-dashoffset: 1;
+    opacity: 0;
+  }
+  to {
+    stroke-dashoffset: 0;
+    opacity: 0.5;
+  }
 }
 
 .col {
@@ -74,6 +97,49 @@
   color: var(--accent-ink);
 }
 
+.colSticky {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  z-index: 3;
+}
+
+.colHeadRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1;
+  max-width: 210px;
+}
+.searchIcon {
+  position: absolute;
+  left: 10px;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+.searchInput {
+  width: 100%;
+  height: 30px;
+  padding: 0 10px 0 30px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--field-border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--text-body-sm);
+}
+.searchInput:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -1px;
+  border-color: transparent;
+}
+
 .node {
   position: relative;
   display: flex;
@@ -88,7 +154,8 @@
   font-size: var(--text-body-sm);
   text-align: left;
   cursor: pointer;
-  transition: border-color var(--dur-fast) var(--ease-out-quart),
+  transition:
+    border-color var(--dur-fast) var(--ease-out-quart),
     box-shadow var(--dur-fast) var(--ease-out-quart),
     background-color var(--dur-fast) var(--ease-out-quart),
     transform var(--dur-fast) var(--ease-out-quart);
@@ -136,6 +203,69 @@
   font-weight: 500;
 }
 
+.nodeTag {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--accent-ink);
+  background: var(--surface);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-radius: var(--radius-full);
+  padding: 1px 6px;
+}
+.nodeTag[data-static] {
+  padding: 2px;
+  color: var(--text-muted);
+  border-color: var(--border-strong);
+}
+
+.node[data-static] {
+  gap: 6px;
+  cursor: pointer;
+}
+.staticInput {
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: none;
+  color: var(--text);
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: var(--text-body-sm);
+  padding: 2px 0;
+}
+.staticInput:focus-visible {
+  outline: none;
+}
+.staticInput::placeholder {
+  color: var(--text-muted);
+}
+
+.addStatic {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  margin-top: 2px;
+  padding: 9px 13px;
+  font-size: var(--text-body-sm);
+  font-weight: 550;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1.5px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+  transition:
+    border-color var(--dur-fast) var(--ease-out-quart),
+    color var(--dur-fast) var(--ease-out-quart);
+}
+.addStatic:hover {
+  color: var(--text);
+  border-color: var(--text-disabled);
+}
+
 /* Connection ports — the anchor points the wires run to. */
 .port {
   width: 11px;
@@ -144,6 +274,9 @@
   border-radius: var(--radius-full);
   background: var(--surface);
   border: 2px solid var(--accent);
+  transition:
+    background-color var(--dur-fast) var(--ease-out-quart),
+    transform var(--dur-fast) var(--ease-out-quart);
 }
 .node[data-side="out"] .port {
   margin-right: -19px; /* sit on the right edge */
@@ -155,6 +288,9 @@
 .node[data-side="out"][data-wired] .port,
 .node[data-side="out"][data-selected] .port {
   background: var(--accent);
+}
+.node[data-side="out"][data-selected] .port {
+  transform: scale(1.15);
 }
 .node[data-side="in"][data-wired] .port {
   background: var(--text);
@@ -169,7 +305,9 @@
   flex: none;
   border-radius: var(--radius-full);
   color: var(--text-muted);
-  transition: background-color var(--dur-fast) var(--ease-out-quart), color var(--dur-fast) var(--ease-out-quart);
+  transition:
+    background-color var(--dur-fast) var(--ease-out-quart),
+    color var(--dur-fast) var(--ease-out-quart);
 }
 .nodeRemove:hover {
   background: var(--danger-bg);
@@ -186,6 +324,7 @@
   font-family: var(--font-mono), monospace;
   font-size: 0.92em;
   padding: 1px 5px;
+  margin: 0 3px;
   border-radius: var(--radius-sm);
   background: var(--surface-sunken);
 }
@@ -206,6 +345,7 @@
   color: var(--text);
   font-size: var(--text-body-sm);
   font-family: var(--font-mono), monospace;
+  transition: border-color var(--dur-fast) var(--ease-out-quart);
 }
 .addInput:focus-visible {
   outline: none;
@@ -229,4 +369,10 @@
 }
 .addBtn:hover {
   background: var(--primary-hover);
+}
+
+@media (max-width: 640px) {
+  .board {
+    gap: 40px;
+  }
 }
