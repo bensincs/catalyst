@@ -394,6 +394,8 @@ interface ApiApplication {
   health?: string;
   syncStatus?: string;
   healthStatus?: string;
+  infraState?: string;
+  waiting?: boolean;
 }
 
 export const getApplications = cache(async (): Promise<Application[]> => {
@@ -420,6 +422,8 @@ export const getApplications = cache(async (): Promise<Application[]> => {
     health: (a.health as Application["health"]) || undefined,
     syncStatus: a.syncStatus || undefined,
     healthStatus: a.healthStatus || undefined,
+    infraState: a.infraState || undefined,
+    waiting: Boolean(a.waiting),
   }));
 });
 

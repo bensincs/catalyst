@@ -5,8 +5,19 @@ import { Cable, Plus, X } from "lucide-react";
 import type { WireLink } from "@/lib/types";
 import styles from "./wiring-editor.module.css";
 
-/** Parse `output <name> ...` declarations out of a Bicep module. */
+/** Parse output names from either Bicep source (`output <name> ...`) or a
+ *  compiled ARM template (the `outputs` object). */
 export function parseBicepOutputs(bicep: string): string[] {
+  const s = bicep.trim();
+  if (s.startsWith("{")) {
+    try {
+      const t = JSON.parse(s) as { outputs?: Record<string, unknown> };
+      if (t && t.outputs && typeof t.outputs === "object") return Object.keys(t.outputs);
+    } catch {
+      /* not valid JSON yet */
+    }
+    return [];
+  }
   const out: string[] = [];
   const re = /(?:^|\n)\s*output\s+([A-Za-z_][A-Za-z0-9_]*)\b/g;
   let m: RegExpExecArray | null;

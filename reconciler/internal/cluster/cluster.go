@@ -158,21 +158,24 @@ func (c *Client) Reconcile(ctx context.Context, apps []shared.DesiredApplication
 	// Cortex app, but only tokens issued for this tenant).
 	status.IngressIssuer = k.reconcileIngressAuth(ctx, auth)
 
-	// Provision each app's Azure infra (Bicep) and wire its outputs into the Helm
-	// values before Argo stamps the chart. Best-effort + eventually consistent:
-	// until the infra's outputs are ready, the chart deploys with its base values
-	// and gets re-wired on a later cycle. Dependency ordering is carried by Wave
-	// (Argo sync-waves) in buildApplication.
+	// Provision each app's Azure infra (compiled ARM from Bicep) and wire its
+	// outputs into the Helm values before Argo stamps the chart. Best-effort +
+	// eventually consistent: until the infra is ready, the chart deploys with its
+	// base values and gets re-wired on a later cycle. Dependency ordering is
+	// carried by Wave (Argo sync-waves) in buildApplication.
+	infraStates := map[string]string{}
 	for i := range apps {
-		if strings.TrimSpace(apps[i].Bicep) == "" {
+		if strings.TrimSpace(apps[i].InfraTemplate) == "" {
 			continue
 		}
-		if outputs, ready := c.provisionInfra(ctx, apps[i]); ready {
+		outputs, state := c.provisionInfra(ctx, apps[i])
+		infraStates[apps[i].ID] = state
+		if state == infraReady {
 			apps[i].Values = applyWiring(apps[i].Values, apps[i].Wiring, outputs)
 		}
 	}
 
-	return status, k.reconcileApplications(ctx, apps)
+	return status, k.reconcileApplications(ctx, apps, infraStates)
 }
 
 // --- ARM (cluster metadata + kubeconfig) ------------------------------------

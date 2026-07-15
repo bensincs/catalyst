@@ -192,6 +192,7 @@ type Application struct {
 	TargetRevision string            `json:"targetRevision"`
 	Values         string            `json:"values,omitempty"`
 	Bicep          string            `json:"bicep,omitempty"` // Azure infra module (provisioned before the chart)
+	ArmTemplate    string            `json:"-"`               // compiled ARM template (from Bicep); reconciler-only
 	Wiring         []shared.WireLink `json:"wiring"`          // Bicep output → Helm values path
 	DependsOn      []string          `json:"dependsOn"`       // ids of apps/agents that must converge first
 	CreatedBy      string            `json:"createdBy,omitempty"`
@@ -205,6 +206,8 @@ type Application struct {
 	Health       string `json:"health,omitempty"`       // per-tenant lifecycle: reconciling | live | blocked
 	SyncStatus   string `json:"syncStatus,omitempty"`   // Argo sync when enabled
 	HealthStatus string `json:"healthStatus,omitempty"` // Argo health when enabled
+	InfraState   string `json:"infraState,omitempty"`   // Bicep infra: "" | provisioning | ready | failed
+	Waiting      bool   `json:"waiting,omitempty"`      // enabled but held for unmet dependencies
 	// Populated in the platform view:
 	OwnerName string `json:"ownerName,omitempty"` // owning tenant's display name
 }

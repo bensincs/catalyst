@@ -140,6 +140,17 @@ export function DeploymentsView({
                         pulse={a.health === "reconciling"}
                       />
                     )}
+                    {!platform && a.enabled && a.waiting && (
+                      <StatusBadge tone="warning" label="Waiting on deps" variant="soft" />
+                    )}
+                    {!platform && a.enabled && a.infraState && (
+                      <StatusBadge
+                        tone={a.infraState === "ready" ? "success" : a.infraState === "failed" ? "danger" : "info"}
+                        label={`Infra ${a.infraState}`}
+                        variant="soft"
+                        pulse={a.infraState === "provisioning"}
+                      />
+                    )}
                     {platform && a.owner !== "" && a.ownerName && (
                       <span className={styles.count}>owned by {a.ownerName}</span>
                     )}

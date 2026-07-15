@@ -20,9 +20,10 @@ const infraAPIVersion = "2021-04-01" // Microsoft.Resources/deployments
 
 // applyWiring injects an app's provisioned Bicep outputs into its Helm values at
 // the wired paths, so the chart is configured with the address/secret of the
-// Azure infra that backs it. Pure + defensive: malformed values are left
-// untouched, and only outputs that exist are wired.
-func applyWiring(values string, wiring []shared.WireLink, outputs map[string]string) string {
+// Azure infra that backs it. Types are preserved (an int output stays an int).
+// Pure + defensive: malformed values are left untouched, only existing outputs
+// are wired.
+func applyWiring(values string, wiring []shared.WireLink, outputs map[string]any) string {
 	if len(wiring) == 0 || len(outputs) == 0 {
 		return values
 	}
@@ -52,7 +53,7 @@ func applyWiring(values string, wiring []shared.WireLink, outputs map[string]str
 }
 
 // setNested sets m[a][b][c] = value, creating intermediate maps as needed.
-func setNested(m map[string]any, path []string, value string) {
+func setNested(m map[string]any, path []string, value any) {
 	for i := 0; i < len(path)-1; i++ {
 		next, ok := m[path[i]].(map[string]any)
 		if !ok {
@@ -66,32 +67,43 @@ func setNested(m map[string]any, path []string, value string) {
 	}
 }
 
-// provisionInfra provisions a deployment's Bicep infra as an ARM deployment in
-// the tenant's cluster resource group and returns its outputs. Idempotent +
-// non-blocking: if the deployment already succeeded it returns the outputs; if
-// it's absent it submits it and reports not-ready (the chart wires in on a later
-// cycle); if the template isn't a compiled ARM template it's skipped. Best-
-// effort — infra never blocks the chart from converging with its base values.
-func (c *Client) provisionInfra(ctx context.Context, app shared.DesiredApplication) (map[string]string, bool) {
-	if strings.TrimSpace(app.Bicep) == "" {
-		return nil, false
+// Bicep infra states reported back per app.
+const (
+	infraProvisioning = "provisioning"
+	infraReady        = "ready"
+	infraFailed       = "failed"
+)
+
+// provisionInfra provisions a deployment's compiled ARM template as an ARM
+// deployment in the tenant's cluster resource group and returns its outputs +
+// state. Idempotent + non-blocking: if the deployment succeeded it returns the
+// outputs (state "ready"); if it's absent it submits it ("provisioning"); a
+// failed deployment reports "failed". Best-effort — infra never blocks the chart
+// from converging with its base values.
+func (c *Client) provisionInfra(ctx context.Context, app shared.DesiredApplication) (map[string]any, string) {
+	if strings.TrimSpace(app.InfraTemplate) == "" {
+		return nil, ""
 	}
 	name := "cortex-app-" + appName(app.ID)
-	if outs, state, found := c.deploymentOutputs(ctx, name); found {
-		if strings.EqualFold(state, "Succeeded") {
-			return outs, true
+	if outs, pstate, found := c.deploymentOutputs(ctx, name); found {
+		switch {
+		case strings.EqualFold(pstate, "Succeeded"):
+			return outs, infraReady
+		case strings.EqualFold(pstate, "Failed") || strings.EqualFold(pstate, "Canceled"):
+			return nil, infraFailed
+		default:
+			return nil, infraProvisioning
 		}
-		return nil, false // still running or failed — retried next cycle
 	}
 	var template map[string]any
-	if err := json.Unmarshal([]byte(app.Bicep), &template); err != nil {
-		slog.Warn("app infra: Bicep must be a compiled ARM template (JSON) to provision; skipping wiring", "app", app.ID)
-		return nil, false
+	if err := json.Unmarshal([]byte(app.InfraTemplate), &template); err != nil {
+		slog.Warn("app infra: template is not valid ARM JSON; skipping", "app", app.ID)
+		return nil, infraFailed
 	}
 	if err := c.submitDeployment(ctx, name, template); err != nil {
 		slog.Warn("app infra: submit deployment failed", "app", app.ID, "err", trunc(err.Error()))
 	}
-	return nil, false
+	return nil, infraProvisioning
 }
 
 func (c *Client) deploymentURL(name string) string {
@@ -101,8 +113,9 @@ func (c *Client) deploymentURL(name string) string {
 }
 
 // deploymentOutputs reads an existing ARM deployment's provisioning state +
-// outputs (found=false when the deployment doesn't exist yet).
-func (c *Client) deploymentOutputs(ctx context.Context, name string) (map[string]string, string, bool) {
+// outputs (found=false when the deployment doesn't exist yet). Output values
+// keep their JSON type.
+func (c *Client) deploymentOutputs(ctx context.Context, name string) (map[string]any, string, bool) {
 	var body struct {
 		Properties struct {
 			ProvisioningState string                         `json:"provisioningState"`
@@ -112,9 +125,9 @@ func (c *Client) deploymentOutputs(ctx context.Context, name string) (map[string
 	if err := c.arm(ctx, http.MethodGet, c.deploymentURL(name), &body); err != nil {
 		return nil, "", false
 	}
-	outs := make(map[string]string, len(body.Properties.Outputs))
+	outs := make(map[string]any, len(body.Properties.Outputs))
 	for k, v := range body.Properties.Outputs {
-		outs[k] = fmt.Sprintf("%v", v.Value)
+		outs[k] = v.Value
 	}
 	return outs, body.Properties.ProvisioningState, true
 }

@@ -220,6 +220,7 @@ ALTER TABLE applications ADD COLUMN IF NOT EXISTS description  text NOT NULL DEF
 -- Azure infra + wiring + dependencies. bicep is provisioned before the chart;
 -- wiring maps Bicep outputs → Helm values paths; depends_on gates deploy order.
 ALTER TABLE applications ADD COLUMN IF NOT EXISTS bicep        text    NOT NULL DEFAULT '';
+ALTER TABLE applications ADD COLUMN IF NOT EXISTS arm_template text    NOT NULL DEFAULT '';  -- compiled from bicep at save
 ALTER TABLE applications ADD COLUMN IF NOT EXISTS wiring       jsonb   NOT NULL DEFAULT '[]';
 ALTER TABLE applications ADD COLUMN IF NOT EXISTS depends_on   text[]  NOT NULL DEFAULT '{}';
 ALTER TABLE tenants      ADD COLUMN IF NOT EXISTS entitled_deployments text[] NOT NULL DEFAULT '{}';
@@ -234,6 +235,8 @@ CREATE TABLE IF NOT EXISTS tenant_deployments (
   PRIMARY KEY (tenant_slug, app_id)
 );
 CREATE INDEX IF NOT EXISTS tenant_deployments_tenant_idx ON tenant_deployments(tenant_slug);
+ALTER TABLE tenant_deployments ADD COLUMN IF NOT EXISTS infra_state text NOT NULL DEFAULT '';  -- '' | provisioning | ready | failed
+ALTER TABLE tenant_deployments ADD COLUMN IF NOT EXISTS waiting     boolean NOT NULL DEFAULT false; -- held for unmet dependencies
 
 -- One-time migration from the legacy tenant-private applications model: adopt the
 -- old tenant_slug as the owner, enable the app for that tenant (carrying its

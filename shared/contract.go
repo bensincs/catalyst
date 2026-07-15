@@ -103,10 +103,11 @@ type DesiredApplication struct {
 	Chart          string `json:"chart"`          // chart name
 	TargetRevision string `json:"targetRevision"` // chart version
 	Values         string `json:"values,omitempty"`
-	// Azure infra + wiring. Bicep is provisioned before the chart; its outputs are
-	// injected into the Helm values per Wiring.
-	Bicep  string     `json:"bicep,omitempty"`
-	Wiring []WireLink `json:"wiring,omitempty"`
+	// Azure infra + wiring. InfraTemplate is the compiled ARM template (from the
+	// deployment's Bicep); the reconciler provisions it before the chart and
+	// injects its outputs into the Helm values per Wiring.
+	InfraTemplate string     `json:"infraTemplate,omitempty"`
+	Wiring        []WireLink `json:"wiring,omitempty"`
 	// DependsOn are ids of other entities (apps/agents) that must converge first;
 	// Wave is the derived Argo sync-wave (0 = no deps) that enforces the order.
 	DependsOn []string `json:"dependsOn,omitempty"`
@@ -203,8 +204,9 @@ type ClusterStatus struct {
 // mirror Argo's own vocabulary (Synced/OutOfSync; Healthy/Progressing/Degraded).
 type ApplicationStatus struct {
 	ID           string `json:"id"`
-	SyncStatus   string `json:"syncStatus"`   // Synced | OutOfSync | Unknown | pending
-	HealthStatus string `json:"healthStatus"` // Healthy | Progressing | Degraded | Missing | pending
+	SyncStatus   string `json:"syncStatus"`           // Synced | OutOfSync | Unknown | pending
+	HealthStatus string `json:"healthStatus"`         // Healthy | Progressing | Degraded | Missing | pending
+	InfraState   string `json:"infraState,omitempty"` // "" | provisioning | ready | failed (Bicep infra)
 }
 
 // Heartbeat is the reconciler's periodic report: the in-tenant install identity

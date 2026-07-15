@@ -487,3 +487,74 @@ func TestAssignWaves(t *testing.T) {
 	}
 	assignWaves(cyc)
 }
+
+// A deployment is HELD out of desired state until its dependencies are satisfied
+// (an app-dep must be an enabled app), and flagged waiting; once satisfied both
+// deploy, ordered by wave.
+func TestDeploymentDependencyHold(t *testing.T) {
+	st, ctx := testStore(t)
+	defer st.Close()
+
+	const (
+		appA = "zz-dh-a"
+		appB = "zz-dh-b"
+		slug = "zz-dh-tenant"
+		tid  = "zz-dh-tid-0004"
+	)
+	cleanup := func() {
+		st.pool.Exec(ctx, `DELETE FROM tenant_deployments WHERE tenant_slug = $1`, slug)
+		st.pool.Exec(ctx, `DELETE FROM applications WHERE id IN ($1,$2)`, appA, appB)
+		st.pool.Exec(ctx, `DELETE FROM tenants WHERE id = $1`, slug)
+	}
+	cleanup()
+	defer cleanup()
+
+	mk := func(id, name string, deps []string) {
+		if err := st.CreateApplication(ctx, model.Application{
+			ID: id, Name: name, Owner: "", Namespace: "web", RepoURL: "https://r", Chart: "c", DependsOn: deps,
+		}, "oid"); err != nil {
+			t.Fatalf("create %s: %v", id, err)
+		}
+	}
+	mk(appA, "A", nil)
+	mk(appB, "B", []string{appA})
+	if _, err := st.pool.Exec(ctx,
+		`INSERT INTO tenants (id, name, tenant_id, enrollment, entitled_deployments) VALUES ($1,'DH',$2,'bound',ARRAY[$3,$4])`,
+		slug, tid, appA, appB); err != nil {
+		t.Fatalf("tenant: %v", err)
+	}
+
+	// Enable only B; its dep A isn't enabled → B is held + flagged waiting.
+	if err := st.EnableDeployment(ctx, slug, appB); err != nil {
+		t.Fatalf("enable B: %v", err)
+	}
+	if ds, _ := st.SyncDesired(ctx, tid); len(ds.Applications) != 0 {
+		t.Fatalf("B should be held while A is disabled: %+v", ds.Applications)
+	}
+	apps, _ := st.ApplicationsForTenant(ctx, slug)
+	waiting := false
+	for _, a := range apps {
+		if a.ID == appB {
+			waiting = a.Waiting
+		}
+	}
+	if !waiting {
+		t.Fatalf("B should be flagged waiting")
+	}
+
+	// Enable A → both deploy; A at wave 0, B at wave 1.
+	if err := st.EnableDeployment(ctx, slug, appA); err != nil {
+		t.Fatalf("enable A: %v", err)
+	}
+	ds, _ := st.SyncDesired(ctx, tid)
+	if len(ds.Applications) != 2 {
+		t.Fatalf("both should be deployable once A is enabled: %+v", ds.Applications)
+	}
+	wave := map[string]int{}
+	for _, a := range ds.Applications {
+		wave[a.ID] = a.Wave
+	}
+	if wave[appA] != 0 || wave[appB] != 1 {
+		t.Fatalf("waves wrong: A=%d B=%d", wave[appA], wave[appB])
+	}
+}

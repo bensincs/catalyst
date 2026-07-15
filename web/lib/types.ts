@@ -140,6 +140,8 @@ export interface Application {
   health?: Health; // per-tenant lifecycle when enabled: reconciling | live | blocked
   syncStatus?: string; // Argo sync when enabled
   healthStatus?: string; // Argo health when enabled
+  infraState?: string; // Bicep infra: "" | provisioning | ready | failed
+  waiting?: boolean; // enabled but held until dependencies converge
 }
 
 export interface TenantContextInfo {

@@ -16,8 +16,19 @@ COPY control-plane ./control-plane
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" \
     -o /out/api ./control-plane/cmd/api
 
-FROM gcr.io/distroless/static-debian12:nonroot
+# The API compiles a deployment's Bicep → ARM at save time, so the runtime image
+# ships the pinned Bicep CLI. Bicep's self-contained binary needs glibc + libicu,
+# so this stage is debian-slim (not distroless-static). Still runs as non-root.
+FROM debian:12-slim
+ARG BICEP_VERSION=v0.30.23
+ADD --chmod=0755 https://github.com/Azure/bicep/releases/download/${BICEP_VERSION}/bicep-linux-x64 /usr/local/bin/bicep
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates libicu72 \
+ && rm -rf /var/lib/apt/lists/* \
+ && useradd -r -u 65532 -m -d /home/nonroot nonroot \
+ && /usr/local/bin/bicep --version
 COPY --from=build /out/api /api
-USER nonroot:nonroot
+USER 65532:65532
+ENV HOME=/home/nonroot
 EXPOSE 8080
 ENTRYPOINT ["/api"]

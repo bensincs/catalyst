@@ -11,10 +11,28 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/inception42/cortex/control-plane/internal/auth"
+	"github.com/inception42/cortex/control-plane/internal/bicep"
 	"github.com/inception42/cortex/control-plane/internal/model"
 	"github.com/inception42/cortex/control-plane/internal/store"
 	"github.com/inception42/cortex/shared"
 )
+
+// compileAppInfra compiles a deployment's Bicep into an ARM template (stored for
+// the reconciler to provision). Invalid Bicep is a 400; a missing toolchain
+// degrades gracefully — the definition still saves, infra is just skipped.
+func (s *Server) compileAppInfra(w http.ResponseWriter, r *http.Request, app *model.Application) bool {
+	arm, err := bicep.Compile(r.Context(), app.Bicep)
+	if err != nil {
+		if errors.Is(err, bicep.ErrNoCompiler) {
+			app.ArmTemplate = ""
+			return true
+		}
+		writeErr(w, http.StatusBadRequest, "invalid Bicep: "+err.Error())
+		return false
+	}
+	app.ArmTemplate = arm
+	return true
+}
 
 type Server struct {
 	store           *store.Store
@@ -831,6 +849,9 @@ func (s *Server) handleCreateApplication(w http.ResponseWriter, r *http.Request)
 		Wiring:         body.Wiring,
 		DependsOn:      body.DependsOn,
 	}
+	if !s.compileAppInfra(w, r, &app) {
+		return
+	}
 	if err := s.store.CreateApplication(r.Context(), app, id.OID); err != nil {
 		if isDup(err) {
 			writeErr(w, http.StatusConflict, "a deployment with that name already exists")
@@ -875,7 +896,7 @@ func (s *Server) handleUpdateApplication(w http.ResponseWriter, r *http.Request)
 	if ns == "" {
 		ns = "default"
 	}
-	if err := s.store.UpdateApplication(r.Context(), model.Application{
+	upd := model.Application{
 		ID:             appID,
 		Name:           strings.TrimSpace(body.Name),
 		Description:    strings.TrimSpace(body.Description),
@@ -887,7 +908,11 @@ func (s *Server) handleUpdateApplication(w http.ResponseWriter, r *http.Request)
 		Bicep:          body.Bicep,
 		Wiring:         body.Wiring,
 		DependsOn:      body.DependsOn,
-	}); err != nil {
+	}
+	if !s.compileAppInfra(w, r, &upd) {
+		return
+	}
+	if err := s.store.UpdateApplication(r.Context(), upd); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			writeErr(w, http.StatusNotFound, "deployment not found")
 			return

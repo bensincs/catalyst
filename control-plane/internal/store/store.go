@@ -1050,31 +1050,88 @@ func (s *Store) SyncDesired(ctx context.Context, tid string) (shared.DesiredStat
 
 	// Deployments ENABLED in this tenant — the reconciler provisions each app's
 	// Bicep infra, wires its outputs into the Helm values, and stamps an Argo CD
-	// Application. Wave (below) orders them so dependencies converge first.
+	// Application. Dependencies are enforced two ways: app→app deps are ordered by
+	// Wave (Argo sync-waves), and app→agent deps HOLD the app until the agent is
+	// live (agents aren't cluster resources, so sync-waves can't order them).
 	arows, err := s.pool.Query(ctx,
 		`SELECT a.id, a.name, a.namespace, a.repo_url, a.chart, a.target_revision, a.values,
-		        a.bicep, a.wiring, a.depends_on
+		        a.arm_template, a.wiring, a.depends_on
 		 FROM applications a JOIN tenant_deployments td ON td.app_id = a.id AND td.tenant_slug = $1
 		 ORDER BY td.sort_order`, t.ID)
 	if err != nil {
 		return out, err
 	}
 	defer arows.Close()
+	all := []shared.DesiredApplication{}
 	for arows.Next() {
 		var da shared.DesiredApplication
 		var wraw []byte
 		if err := arows.Scan(&da.ID, &da.Name, &da.Namespace, &da.RepoURL, &da.Chart, &da.TargetRevision, &da.Values,
-			&da.Bicep, &wraw, &da.DependsOn); err != nil {
+			&da.InfraTemplate, &wraw, &da.DependsOn); err != nil {
 			return out, err
 		}
 		da.Wiring = wiringFromRaw(wraw)
-		out.Applications = append(out.Applications, da)
+		all = append(all, da)
 	}
 	if err := arows.Err(); err != nil {
 		return out, err
 	}
-	// Order deploys: a deployment's Wave is 1 + the max Wave of its enabled
-	// dependencies, so Argo sync-waves converge dependencies first.
+	// Which agents are live in this tenant (an app→agent dep is met once its
+	// agent is live).
+	liveAgents := map[string]bool{}
+	if lrows, err := s.pool.Query(ctx, `SELECT agent_id FROM agents WHERE tenant_slug = $1 AND health = 'live'`, t.ID); err == nil {
+		for lrows.Next() {
+			var id string
+			if lrows.Scan(&id) == nil {
+				liveAgents[id] = true
+			}
+		}
+		lrows.Close()
+	}
+	// An app is deployable only when every dependency is satisfied: an app-dep
+	// must be an enabled + (transitively) deployable app, an agent-dep must be
+	// live. Held apps are excluded from desired state and flagged waiting.
+	byID := make(map[string]shared.DesiredApplication, len(all))
+	enabledApp := map[string]bool{}
+	for _, da := range all {
+		byID[da.ID] = da
+		enabledApp[da.ID] = true
+	}
+	memo := map[string]bool{}
+	visiting := map[string]bool{}
+	var ready func(id string) bool
+	ready = func(id string) bool {
+		if v, ok := memo[id]; ok {
+			return v
+		}
+		if visiting[id] {
+			return false // dependency cycle — unsatisfiable
+		}
+		visiting[id] = true
+		ok := true
+		for _, dep := range byID[id].DependsOn {
+			if liveAgents[dep] {
+				continue
+			}
+			if enabledApp[dep] && ready(dep) {
+				continue
+			}
+			ok = false
+			break
+		}
+		visiting[id] = false
+		memo[id] = ok
+		return ok
+	}
+	for _, da := range all {
+		deployable := ready(da.ID)
+		_, _ = s.pool.Exec(ctx, `UPDATE tenant_deployments SET waiting = $3 WHERE tenant_slug = $1 AND app_id = $2`,
+			t.ID, da.ID, !deployable)
+		if deployable {
+			out.Applications = append(out.Applications, da)
+		}
+	}
+	// Order the deployable apps so their app→app dependencies converge first.
 	assignWaves(out.Applications)
 	return out, nil
 }
@@ -1149,13 +1206,14 @@ func (s *Store) ApplyHeartbeat(ctx context.Context, hb shared.Heartbeat) error {
 			return err
 		}
 	}
-	// Record each Argo Application's per-tenant sync/health + derived lifecycle
-	// (a deployment removed between sync and heartbeat is a harmless no-op).
+	// Record each Argo Application's per-tenant sync/health + derived lifecycle +
+	// Bicep infra state (a deployment removed between sync and heartbeat is a
+	// harmless no-op).
 	for _, a := range hb.Applications {
 		if _, err := s.pool.Exec(ctx,
-			`UPDATE tenant_deployments SET sync_status = $3, health_status = $4, health = $5
+			`UPDATE tenant_deployments SET sync_status = $3, health_status = $4, health = $5, infra_state = $6
 			 WHERE tenant_slug = $1 AND app_id = $2`,
-			t.ID, a.ID, a.SyncStatus, a.HealthStatus, deriveDeploymentHealth(a.SyncStatus, a.HealthStatus)); err != nil {
+			t.ID, a.ID, a.SyncStatus, a.HealthStatus, deriveDeploymentHealth(a.SyncStatus, a.HealthStatus), a.InfraState); err != nil {
 			return err
 		}
 	}
@@ -1169,13 +1227,13 @@ func (s *Store) ApplyHeartbeat(ctx context.Context, hb shared.Heartbeat) error {
 var ErrDeploymentNotAccessible = errors.New("deployment not accessible to tenant")
 
 const applicationCols = `a.id, a.name, a.description, a.owner_tenant, a.namespace,
-	a.repo_url, a.chart, a.target_revision, a.values, a.bicep, a.wiring, a.depends_on, a.created_by, a.created_at`
+	a.repo_url, a.chart, a.target_revision, a.values, a.bicep, a.arm_template, a.wiring, a.depends_on, a.created_by, a.created_at`
 
 // appScanDest scans the fixed columns; wiring (jsonb) is captured raw and
 // unmarshalled by the caller via wiringFromRaw.
 func appScanDest(a *model.Application, wiringRaw *[]byte) []any {
 	return []any{&a.ID, &a.Name, &a.Description, &a.Owner, &a.Namespace,
-		&a.RepoURL, &a.Chart, &a.TargetRevision, &a.Values, &a.Bicep, wiringRaw, &a.DependsOn, &a.CreatedBy, &a.CreatedAt}
+		&a.RepoURL, &a.Chart, &a.TargetRevision, &a.Values, &a.Bicep, &a.ArmTemplate, wiringRaw, &a.DependsOn, &a.CreatedBy, &a.CreatedAt}
 }
 
 func wiringFromRaw(raw []byte) []shared.WireLink {
@@ -1295,7 +1353,8 @@ func (s *Store) ApplicationsForTenant(ctx context.Context, slug string) ([]model
 	}
 	rows, err := s.pool.Query(ctx,
 		`SELECT `+applicationCols+`,
-		        (td.app_id IS NOT NULL) AS enabled, coalesce(td.sync_status,''), coalesce(td.health_status,'')
+		        (td.app_id IS NOT NULL) AS enabled, coalesce(td.sync_status,''), coalesce(td.health_status,''),
+		        coalesce(td.infra_state,''), coalesce(td.waiting,false)
 		 FROM applications a
 		 LEFT JOIN tenant_deployments td ON td.app_id = a.id AND td.tenant_slug = $1
 		 WHERE a.owner_tenant = $1 OR (a.owner_tenant = '' AND a.id = ANY($2))
@@ -1309,8 +1368,9 @@ func (s *Store) ApplicationsForTenant(ctx context.Context, slug string) ([]model
 		var a model.Application
 		var wraw []byte
 		var enabled bool
-		var sync, health string
-		if err := rows.Scan(append(appScanDest(&a, &wraw), &enabled, &sync, &health)...); err != nil {
+		var sync, health, infraState string
+		var waiting bool
+		if err := rows.Scan(append(appScanDest(&a, &wraw), &enabled, &sync, &health, &infraState, &waiting)...); err != nil {
 			return nil, err
 		}
 		a.Wiring = wiringFromRaw(wraw)
@@ -1321,6 +1381,8 @@ func (s *Store) ApplicationsForTenant(ctx context.Context, slug string) ([]model
 		if enabled {
 			a.SyncStatus, a.HealthStatus = sync, health
 			a.Health = deriveDeploymentHealth(sync, health)
+			a.InfraState = infraState
+			a.Waiting = waiting
 		}
 		out = append(out, a)
 	}
@@ -1342,10 +1404,10 @@ func (s *Store) ApplicationByID(ctx context.Context, id string) (model.Applicati
 // CreateApplication inserts a deployment definition (Owner "" = platform-authored).
 func (s *Store) CreateApplication(ctx context.Context, a model.Application, createdBy string) error {
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO applications (id, name, description, owner_tenant, namespace, repo_url, chart, target_revision, values, bicep, wiring, depends_on, created_by)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+		`INSERT INTO applications (id, name, description, owner_tenant, namespace, repo_url, chart, target_revision, values, bicep, arm_template, wiring, depends_on, created_by)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
 		a.ID, a.Name, a.Description, a.Owner, a.Namespace, a.RepoURL, a.Chart, a.TargetRevision, a.Values,
-		a.Bicep, wiringJSON(a.Wiring), depsArray(a.DependsOn), createdBy)
+		a.Bicep, a.ArmTemplate, wiringJSON(a.Wiring), depsArray(a.DependsOn), createdBy)
 	return err
 }
 
@@ -1355,10 +1417,10 @@ func (s *Store) CreateApplication(ctx context.Context, a model.Application, crea
 func (s *Store) UpdateApplication(ctx context.Context, a model.Application) error {
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE applications SET name = $2, description = $3, namespace = $4, repo_url = $5,
-		   chart = $6, target_revision = $7, values = $8, bicep = $9, wiring = $10, depends_on = $11
+		   chart = $6, target_revision = $7, values = $8, bicep = $9, arm_template = $10, wiring = $11, depends_on = $12
 		 WHERE id = $1`,
 		a.ID, a.Name, a.Description, a.Namespace, a.RepoURL, a.Chart, a.TargetRevision, a.Values,
-		a.Bicep, wiringJSON(a.Wiring), depsArray(a.DependsOn))
+		a.Bicep, a.ArmTemplate, wiringJSON(a.Wiring), depsArray(a.DependsOn))
 	if err != nil {
 		return err
 	}
