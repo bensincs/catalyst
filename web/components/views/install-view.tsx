@@ -42,21 +42,19 @@ const DEPLOY_URL =
 // portal can fetch it and the customer can download it.
 const DELEGATION_TEMPLATE_PATH = "/onboarding/lighthouse-delegation.json";
 
-// Published by Cortex — the managing tenant + control-plane service principal a
-// customer delegates their cortex-infra resource group to via Azure Lighthouse.
-const CORTEX_TENANT_ID = process.env.NEXT_PUBLIC_CORTEX_TENANT_ID ?? "<your Cortex tenant id>";
-const CORTEX_SP_OBJECT_ID =
-  process.env.NEXT_PUBLIC_CORTEX_SP_OBJECT_ID ?? "<Cortex control-plane service principal object id>";
-
 export function InstallView({
   tenant,
   agentCount,
   infra,
+  cortexTenantId,
+  cortexPrincipalId,
   now,
 }: {
   tenant: TenantContextInfo;
   agentCount: number;
   infra: InfraSummary;
+  cortexTenantId: string;
+  cortexPrincipalId: string;
   now: number;
 }) {
   const lc = LIFECYCLE_META[tenant.lifecycle];
@@ -133,7 +131,12 @@ export function InstallView({
       </section>
 
       {/* Infrastructure delegation — how the control plane gets to provision infra */}
-      <DelegationSection subscriptionId={tenant.subscriptionId} region={tenant.region} />
+      <DelegationSection
+        subscriptionId={tenant.subscriptionId}
+        region={tenant.region}
+        cortexTenantId={cortexTenantId}
+        cortexPrincipalId={cortexPrincipalId}
+      />
 
       {/* Identity manifest — what runs where, and as whom */}
       <section aria-label="Install identity" className={styles.manifestWrap}>
@@ -163,13 +166,23 @@ export function InstallView({
 
 // DelegationSection is the whole onboarding: one Azure Lighthouse delegation that
 // hands provisioning of the entire footprint to the Cortex control plane.
-function DelegationSection({ subscriptionId, region }: { subscriptionId: string; region: string }) {
+function DelegationSection({
+  subscriptionId,
+  region,
+  cortexTenantId,
+  cortexPrincipalId,
+}: {
+  subscriptionId: string;
+  region: string;
+  cortexTenantId: string;
+  cortexPrincipalId: string;
+}) {
   const cmd = [
     "az deployment sub create \\",
     `  --subscription ${subscriptionId || "<your-subscription-id>"} --location ${region || "<region>"} \\`,
     "  --template-file lighthouse-delegation.json \\",
-    `  -p controlPlaneTenantId=${CORTEX_TENANT_ID} \\`,
-    `  -p controlPlanePrincipalId=${CORTEX_SP_OBJECT_ID}`,
+    `  -p controlPlaneTenantId=${cortexTenantId} \\`,
+    `  -p controlPlanePrincipalId=${cortexPrincipalId}`,
   ].join("\n");
 
   return (
@@ -183,8 +196,8 @@ function DelegationSection({ subscriptionId, region }: { subscriptionId: string;
       </p>
 
       <dl className={styles.manifest}>
-        <Fact icon={Fingerprint} label="Cortex tenant (managing)" value={CORTEX_TENANT_ID} mono />
-        <Fact icon={ShieldCheck} label="Control-plane principal" value={CORTEX_SP_OBJECT_ID} mono />
+        <Fact icon={Fingerprint} label="Cortex tenant (managing)" value={cortexTenantId} mono />
+        <Fact icon={ShieldCheck} label="Control-plane principal" value={cortexPrincipalId} mono />
         <Fact icon={Cloud} label="Scope" value="Subscription · Contributor + limited User Access Admin" />
       </dl>
 

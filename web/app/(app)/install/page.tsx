@@ -33,6 +33,13 @@ export default async function InstallPage() {
   };
 
   return (
-    <InstallView tenant={ctx.tenant} agentCount={ctx.agents.length} infra={infra} now={Date.now()} />
+    <InstallView
+      tenant={ctx.tenant}
+      agentCount={ctx.agents.length}
+      infra={infra}
+      cortexTenantId={process.env.PLATFORM_TENANT_ID ?? "<your Cortex tenant id>"}
+      cortexPrincipalId={process.env.CORTEX_SP_OBJECT_ID ?? "<Cortex control-plane service principal object id>"}
+      now={Date.now()}
+    />
   );
 }
