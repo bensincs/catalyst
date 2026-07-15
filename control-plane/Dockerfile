@@ -21,8 +21,11 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" \
 # so this stage is debian-slim (not distroless-static). Still runs as non-root.
 FROM debian:12-slim
 ARG BICEP_VERSION=v0.30.23
-ADD --chmod=0755 https://github.com/Azure/bicep/releases/download/${BICEP_VERSION}/bicep-linux-x64 /usr/local/bin/bicep
-RUN apt-get update \
+# ADD from a URL works in the classic (non-BuildKit) builder ACR uses; chmod in a
+# separate RUN so we don't depend on BuildKit's `ADD --chmod`.
+ADD https://github.com/Azure/bicep/releases/download/${BICEP_VERSION}/bicep-linux-x64 /usr/local/bin/bicep
+RUN chmod 0755 /usr/local/bin/bicep \
+ && apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates libicu72 \
  && rm -rf /var/lib/apt/lists/* \
  && useradd -r -u 65532 -m -d /home/nonroot nonroot \

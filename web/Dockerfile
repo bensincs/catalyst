@@ -25,10 +25,11 @@ ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
 # Next standalone output: a minimal server.js + traced node_modules, plus the
-# static assets it does not inline. (No public/ assets today — add
-# `COPY --from=build /app/public ./public` here if you introduce them.)
+# static assets it does not inline, and the public/ folder (served at the root —
+# e.g. /onboarding/lighthouse-delegation.json).
 COPY --from=build /app/.next/standalone ./
 COPY --from=build /app/.next/static ./.next/static
+COPY --from=build /app/public ./public
 USER node
 EXPOSE 3000
 CMD ["node", "server.js"]
