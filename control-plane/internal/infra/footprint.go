@@ -13,7 +13,7 @@ import (
 )
 
 // footprintTemplate is the per-tenant footprint (reconciler + Foundry + AKS),
-// compiled from reconciler/infra/main.bicep. The control plane deploys it into
+// compiled from onboarding/footprint.bicep. The control plane deploys it into
 // each enabled, delegated tenant's subscription — the customer never runs it.
 //
 //go:embed footprint.json

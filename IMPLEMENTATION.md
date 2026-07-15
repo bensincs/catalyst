@@ -76,8 +76,8 @@ cortex/
 │   └── web/                  # Next.js console (platform + tenant admin)
 ├── reconciler/               # Go: loop, foundry REST client, arm ops, state cache
 │   ├── cmd/reconciler/
-│   ├── internal/{loop,foundry,arm,enroll,cache}/
-│   └── infra/                # Managed Application package (main.bicep + createUiDefinition.json)
+│   └── internal/{loop,foundry,arm,enroll,cache}/
+├── onboarding/               # Lighthouse delegation + per-tenant footprint (footprint.bicep)
 ├── shared/                   # Go: models, foundry client, auth helpers (imported by both)
 │   └── {model,foundry,azauth}/
 ├── catalog/                  # Seed agent definitions (versioned JSON), CI-validated
@@ -222,25 +222,23 @@ Go binary, continuous loop (default 60s; jittered). See `PLAN.md §7` for the lo
 
 ---
 
-## 8. The Cortex managed application
+## 8. The per-tenant footprint
 
-`reconciler/infra/` — a `Microsoft.Solutions` Managed Application published to Partner Center.
+`onboarding/footprint.bicep` — the in-tenant reconciler + its Foundry project. It is **not** a
+Marketplace Managed Application; the control plane compiles it to
+`control-plane/internal/infra/footprint.json` (`go:embed`) and deploys it into each enabled,
+delegated tenant's subscription over **Azure Lighthouse**. Onboarding is a single subscription-wide
+delegation (`onboarding/lighthouse-delegation.bicep`); the customer never runs the footprint itself.
 
-**`createUiDefinition.json`** collects: company name, admin group/users for tenant-admin, Foundry region,
-model choice, consent acknowledgement. **Enrollment token + control-plane URL** are passed through (the
-`/tenant/install` response injects them).
-
-**`mainTemplate` (Bicep) deploys:**
+**The footprint (Bicep) deploys:**
 - User-assigned **managed identity** (reconciler).
 - **Foundry** account (`Microsoft.CognitiveServices/accounts`, kind=Foundry) + **project** + default model deployment.
-- **Container App** (reconciler image from our ACR) with the MI, env: `CONTROL_PLANE_URL`, `ENROLL_TOKEN` (secure), `TENANT_ID`.
-- **Key Vault** (stores the issued client cert) + **Storage** (local cache) + **App Insights**.
-- **Role assignments**: reconciler MI → `Foundry User` at project scope; Storage/KV data roles; (publish path) `Azure Bot Service Contributor` on a bot RG.
+- **Container Apps** environment (with Log Analytics) + the **reconciler** container app (wired to the control-plane URL + `CORTEX_API_SCOPE`).
+- **Role assignment**: reconciler MI → `Foundry User` at project scope.
 
-**Permissions mode (D13):** decide publisher-managed vs customer-managed. Recommend **customer-managed** (no
-deny assignment; agents survive if the relationship ends; we don't need managed-RG access because the
-reconciler self-updates by pulling advertised image tags). **Update path (I7):** managed-app definition
-versioning + reconciler self-update (control plane advertises the target image SHA in `/sync`).
+**Auth is identity-based end to end** — no shared key, no enrollment token: the reconciler presents its
+managed identity's Entra token for `CORTEX_API_SCOPE`, and the control plane maps the token's `tid` to the
+tenant. **Update path:** the control plane advertises the target reconciler image; the reconciler self-updates.
 
 ---
 

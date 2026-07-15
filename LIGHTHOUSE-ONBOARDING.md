@@ -70,7 +70,7 @@ One customer action: **deploy the Cortex onboarding template** into their subscr
 "Deploy to Azure" / `az deployment sub create`). That single subscription-scoped deployment does two
 things:
 
-1. **In-tenant footprint** (today's `reconciler/infra/main.bicep`): AKS, the reconciler container app, its
+1. **In-tenant footprint** (`onboarding/footprint.bicep`): AKS, the reconciler container app, its
    user-assigned managed identity, and the identity's **data-plane** role grants (Foundry, AKS). The
    identity **no longer needs `Contributor` for infra**.
 2. **Lighthouse delegation** (`onboarding/lighthouse-delegation.bicep`): a

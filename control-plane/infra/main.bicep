@@ -2,7 +2,7 @@
 //
 // Deploys the multi-tenant control plane: the Go control-plane API and the
 // Next.js console (BFF), each fronted by a custom domain, backed by Azure
-// Database for PostgreSQL Flexible Server. Mirrors reconciler/infra/main.bicep
+// Database for PostgreSQL Flexible Server. Mirrors onboarding/footprint.bicep
 // (Log Analytics + managed environment + container apps, a user-assigned
 // identity used to pull images from the registry).
 //

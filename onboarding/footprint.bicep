@@ -1,7 +1,9 @@
-// Cortex — in-tenant reconciler + its Microsoft Foundry project (self-contained).
+// Cortex — the per-tenant footprint: the in-tenant reconciler + its Microsoft
+// Foundry project (self-contained).
 //
-// Installed into the customer's own subscription — as an Azure Marketplace
-// Managed Application, or directly via Bicep (see DEPLOYMENT.md). It deploys:
+// The customer never runs this directly. The Cortex control plane compiles it to
+// control-plane/internal/infra/footprint.json (go:embed) and deploys it into each
+// enabled, delegated tenant's subscription over Azure Lighthouse. It deploys:
 //   • a user-assigned managed identity (the reconciler's Entra identity),
 //   • a Microsoft Foundry account + project + a model deployment,
 //   • a role assignment granting the identity the Foundry agents data plane,
@@ -20,6 +22,10 @@
 // (deployment context), the Foundry account name (unique per resource group), and
 // the project endpoint (derived from that name). The only required input is the
 // organization display name; everything else has a sensible default.
+//
+// Regenerate the embedded ARM template after editing this file:
+//   az bicep build --file onboarding/footprint.bicep \
+//     --outfile control-plane/internal/infra/footprint.json
 
 targetScope = 'resourceGroup'
 

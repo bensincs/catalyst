@@ -13,10 +13,10 @@ domains on `msft.ae`.
                      ▼
              cortex-cp-pg-*.postgres.database.azure.com   PostgreSQL (database: cortex)
 
- in-tenant reconcilers (reconciler/infra) ──▶ https://api.catalyst.msft.ae  (/recon/*)
+ in-tenant reconcilers (onboarding/footprint.bicep) ─▶ https://api.catalyst.msft.ae  (/recon/*)
 ```
 
-The API is public because the in-tenant reconcilers (shipped by `reconciler/infra/`)
+The API is public because the in-tenant reconcilers (shipped by `onboarding/footprint.bicep`)
 call it from customer subscriptions. Both services authenticate against the same
 Entra app registration; no shared secrets cross the boundary.
 
@@ -256,10 +256,10 @@ open https://catalyst.msft.ae                    # sign in with Entra
 
 - **Entra redirect URI** — confirm `https://catalyst.msft.ae/api/auth/callback/microsoft-entra-id`
   is present on the app registration (Step 1.5).
-- **Point reconcilers at production** — when installing the reconciler managed app
-  (`reconciler/infra/`), set
-  `controlPlaneUrl=https://api.catalyst.msft.ae` and
-  `cortexApiScope=api://<client-id>/.default`.
+- **Point reconcilers at production** — the control plane stamps these into every
+  footprint it provisions (`onboarding/footprint.bicep`), so set the API's
+  `CONTROL_PLANE_PUBLIC_URL=https://api.catalyst.msft.ae` and
+  `CORTEX_API_SCOPE=api://<client-id>/.default`.
 - **First sign-in** — the API auto-migrates its schema on boot (`SEED_DEMO=false`,
   so no demo data). Sign in from your `CORTEX_PLATFORM_TENANT_ID` to land as a
   Platform Admin; the Fleet starts empty until a tenant enrolls.
