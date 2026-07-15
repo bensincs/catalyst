@@ -32,7 +32,7 @@ export async function createCatalogAgent(input: {
   model: string;
   definition: AgentDefinition;
 }): Promise<ActionResult> {
-  return run(() => apiSend("POST", "/api/catalog", input), ["/catalog"]);
+  return run(() => apiSend("POST", "/api/catalog", input), ["/agents"]);
 }
 
 export async function publishVersion(
@@ -41,7 +41,7 @@ export async function publishVersion(
 ): Promise<ActionResult> {
   return run(
     () => apiSend("POST", `/api/catalog/${encodeURIComponent(agentId)}/versions`, input),
-    ["/catalog"],
+    ["/agents"],
   );
 }
 
@@ -51,7 +51,7 @@ export async function setEntitlements(
 ): Promise<ActionResult> {
   return run(
     () => apiSend("PATCH", `/api/tenants/${encodeURIComponent(slug)}/entitlements`, { entitledAgents }),
-    [`/tenants/${slug}`, "/catalog"],
+    [`/tenants/${slug}`, "/agents"],
   );
 }
 
@@ -67,13 +67,13 @@ export async function enableAgent(input: {
   catalogAgentId: string;
   publishTo: string[];
 }): Promise<ActionResult> {
-  return run(() => apiSend("POST", "/api/tenant/agents", input), ["/", "/catalog", "/agents"]);
+  return run(() => apiSend("POST", "/api/tenant/agents", input), ["/", "/agents"]);
 }
 
 export async function disableAgent(agentId: string): Promise<ActionResult> {
   return run(
     () => apiSend("DELETE", `/api/tenant/agents/${encodeURIComponent(agentId)}`),
-    ["/", "/catalog", "/agents"],
+    ["/", "/agents"],
   );
 }
 
@@ -153,7 +153,7 @@ export async function createApplication(input: {
   wiring: WireLink[];
   dependsOn: string[];
 }): Promise<ActionResult> {
-  return run(() => apiSend("POST", "/api/applications", input), ["/deployments", "/catalog"]);
+  return run(() => apiSend("POST", "/api/applications", input), ["/deployments"]);
 }
 
 export async function updateApplication(
@@ -173,7 +173,7 @@ export async function updateApplication(
 ): Promise<ActionResult> {
   return run(
     () => apiSend("PATCH", `/api/applications/${encodeURIComponent(id)}`, input),
-    ["/deployments", "/catalog"],
+    ["/deployments"],
   );
 }
 

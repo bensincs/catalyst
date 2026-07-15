@@ -1,24 +1,14 @@
 "use client";
 
-import { useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
-import { Boxes, GitBranch, Package, Plus } from "lucide-react";
-import { PageHeader } from "@/components/ui/page-header";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { Field, TextInput, Textarea, Select, Checkbox } from "@/components/ui/form";
-import { EmptyState } from "@/components/ui/empty-state";
-import { StatusBadge } from "@/components/ui/status";
-import { useToast } from "@/components/providers/toast-provider";
-import {
-  createCatalogAgent,
-  disableAgent,
-  enableAgent,
-  publishVersion,
-  type ActionResult,
-} from "@/lib/actions";
-import type { AgentDefinition, AgentType, CatalogAgent, MemoryStore, PublishTarget, Role } from "@/lib/types";
+import type { AgentDefinition, AgentType, CatalogAgent, MemoryStore, PublishTarget } from "@/lib/types";
 import styles from "./catalog-view.module.css";
+
+// The agent authoring surface: type tags plus the New agent / Publish version /
+// Enable modals. Rendered inline on the unified Agents page (see agents-view).
 
 const MODELS = ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "jais-30b", "o3-mini"];
 const PROMPT_TOOLS: { id: string; label: string; hint: string }[] = [
@@ -33,7 +23,7 @@ const TARGETS: { id: PublishTarget; label: string; hint: string }[] = [
   { id: "m365", label: "M365 Copilot", hint: "Guided admin publish (preview)" },
 ];
 
-function TypeTag({ type }: { type: AgentType }) {
+export function TypeTag({ type }: { type: AgentType }) {
   return (
     <span className={styles.typeTag} data-type={type}>
       {type === "hosted" ? "Hosted" : "Prompt"}
@@ -41,266 +31,12 @@ function TypeTag({ type }: { type: AgentType }) {
   );
 }
 
-export function CatalogView({ role, agents, memoryStores }: { role: Role; agents: CatalogAgent[]; memoryStores: MemoryStore[] }) {
-  const router = useRouter();
-  const { toast } = useToast();
-  const [pending, startTransition] = useTransition();
-
-  const runAction = (fn: () => Promise<ActionResult>, success: string, onDone?: () => void) => {
-    startTransition(async () => {
-      const res = await fn();
-      if (res.ok) {
-        toast({ title: success, tone: "success" });
-        onDone?.();
-        router.refresh();
-      } else {
-        toast({ title: "Couldn't complete that", description: res.error, tone: "danger" });
-      }
-    });
-  };
-
-  return role === "platform" ? (
-    <PlatformCatalog agents={agents} pending={pending} runAction={runAction} memoryStores={memoryStores} />
-  ) : (
-    <TenantCatalog agents={agents} pending={pending} runAction={runAction} memoryStores={memoryStores} />
-  );
-}
-
-type RunAction = (fn: () => Promise<ActionResult>, success: string, onDone?: () => void) => void;
-
-/* ── Platform: author + publish ───────────────────────────────────────────── */
-
-function PlatformCatalog({
-  agents,
-  pending,
-  runAction,
-  memoryStores,
-}: {
-  agents: CatalogAgent[];
-  pending: boolean;
-  runAction: RunAction;
-  memoryStores: MemoryStore[];
-}) {
-  const [newOpen, setNewOpen] = useState(false);
-  const [publishFor, setPublishFor] = useState<CatalogAgent | null>(null);
-
-  return (
-    <div>
-      <PageHeader
-        title="Catalog"
-        description="Author agents once, publish versions, and gate rollout — every enrolled tenant's reconciler picks up what it's entitled to."
-        actions={
-          <Button variant="primary" icon={Plus} onClick={() => setNewOpen(true)}>
-            New agent
-          </Button>
-        }
-      />
-
-      {agents.length === 0 ? (
-        <div className={styles.panelEmpty}>
-          <EmptyState
-            icon={Boxes}
-            title="Author your first agent"
-            description="Define an agent and its model, publish a version, then entitle tenants to enable it. The reconciler brings it live in each tenant's own Foundry project."
-            action={
-              <Button variant="primary" icon={Plus} onClick={() => setNewOpen(true)}>
-                New agent
-              </Button>
-            }
-          />
-        </div>
-      ) : (
-        <ul className={styles.list} role="list">
-          {agents.map((a) => (
-            <li key={a.id} className={styles.row}>
-              <div className={styles.rowIcon} aria-hidden>
-                <Package size={17} strokeWidth={2} />
-              </div>
-              <div className={styles.rowMain}>
-                <div className={styles.rowTop}>
-                  <span className={styles.rowName}>{a.name}</span>
-                  <TypeTag type={a.type} />
-                  <span className={styles.versionTag + " mono"}>v{a.latestVersion}</span>
-                  <span className={styles.count}>
-                    {a.versions.length} version{a.versions.length === 1 ? "" : "s"}
-                  </span>
-                </div>
-                {a.description && <p className={styles.rowDesc}>{a.description}</p>}
-                <div className={styles.rowMeta}>
-                  <span className={styles.metaKey}>model</span>
-                  <span className="mono">{a.model}</span>
-                </div>
-              </div>
-              <Button size="sm" icon={GitBranch} onClick={() => setPublishFor(a)}>
-                Publish version
-              </Button>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      <NewAgentModal
-        open={newOpen}
-        pending={pending}
-        onClose={() => setNewOpen(false)}
-        stores={memoryStores}
-        onSubmit={(input) =>
-          runAction(() => createCatalogAgent(input), `Created ${input.name}`, () => setNewOpen(false))
-        }
-      />
-      <PublishModal
-        key={publishFor?.id ?? "none"}
-        agent={publishFor}
-        pending={pending}
-        onClose={() => setPublishFor(null)}
-        stores={memoryStores}
-        onSubmit={(agent, input) =>
-          runAction(
-            () => publishVersion(agent.id, input),
-            `Published ${agent.name} v${input.version}`,
-            () => setPublishFor(null),
-          )
-        }
-      />
-    </div>
-  );
-}
-
-/* ── Tenant: author own + browse entitled + enable ────────────────────────── */
-
-function OwnershipTag({ agent }: { agent: CatalogAgent }) {
+export function OwnershipTag({ agent }: { agent: CatalogAgent }) {
   const label = agent.owned ? "Yours" : "Platform";
   return (
     <span className={styles.typeTag} data-type={agent.owned ? "prompt" : "hosted"}>
       {label}
     </span>
-  );
-}
-
-function TenantCatalog({
-  agents,
-  pending,
-  runAction,
-  memoryStores,
-}: {
-  agents: CatalogAgent[];
-  pending: boolean;
-  runAction: RunAction;
-  memoryStores: MemoryStore[];
-}) {
-  const [enableFor, setEnableFor] = useState<CatalogAgent | null>(null);
-  const [newOpen, setNewOpen] = useState(false);
-  const [publishFor, setPublishFor] = useState<CatalogAgent | null>(null);
-
-  return (
-    <div>
-      <PageHeader
-        title="Catalog"
-        description="Agents your platform team entitled you to, plus the ones you author yourself. Enable one and the reconciler provisions it in your own Foundry project."
-        actions={
-          <Button variant="primary" icon={Plus} onClick={() => setNewOpen(true)}>
-            New agent
-          </Button>
-        }
-      />
-
-      {agents.length === 0 ? (
-        <div className={styles.panelEmpty}>
-          <EmptyState
-            icon={Boxes}
-            title="No agents yet"
-            description="Author your own agent, or ask your platform team to entitle your tenant to one. Enabled agents are provisioned into your own Foundry project."
-            action={
-              <Button variant="primary" icon={Plus} onClick={() => setNewOpen(true)}>
-                New agent
-              </Button>
-            }
-          />
-        </div>
-      ) : (
-        <ul className={styles.list} role="list">
-          {agents.map((a) => (
-            <li key={a.id} className={styles.row}>
-              <div className={styles.rowIcon} aria-hidden>
-                <Package size={17} strokeWidth={2} />
-              </div>
-              <div className={styles.rowMain}>
-                <div className={styles.rowTop}>
-                  <span className={styles.rowName}>{a.name}</span>
-                  <TypeTag type={a.type} />
-                  <OwnershipTag agent={a} />
-                  <span className={styles.versionTag + " mono"}>v{a.latestVersion}</span>
-                </div>
-                {a.description && <p className={styles.rowDesc}>{a.description}</p>}
-                <div className={styles.rowMeta}>
-                  <span className={styles.metaKey}>model</span>
-                  <span className="mono">{a.model}</span>
-                </div>
-              </div>
-              <div className={styles.enabledRow}>
-                {a.owned && (
-                  <Button size="sm" icon={GitBranch} onClick={() => setPublishFor(a)}>
-                    Publish version
-                  </Button>
-                )}
-                {a.enabled ? (
-                  <>
-                    <StatusBadge tone="success" label="Enabled" variant="plain" />
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => runAction(() => disableAgent(a.id), `Disabled ${a.name}`)}
-                    >
-                      Disable
-                    </Button>
-                  </>
-                ) : (
-                  <Button size="sm" variant="primary" icon={Plus} onClick={() => setEnableFor(a)}>
-                    Enable
-                  </Button>
-                )}
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      <NewAgentModal
-        open={newOpen}
-        pending={pending}
-        onClose={() => setNewOpen(false)}
-        stores={memoryStores}
-        onSubmit={(input) =>
-          runAction(() => createCatalogAgent(input), `Created ${input.name}`, () => setNewOpen(false))
-        }
-      />
-      <PublishModal
-        key={publishFor?.id ?? "none"}
-        agent={publishFor}
-        pending={pending}
-        onClose={() => setPublishFor(null)}
-        stores={memoryStores}
-        onSubmit={(agent, input) =>
-          runAction(
-            () => publishVersion(agent.id, input),
-            `Published ${agent.name} v${input.version}`,
-            () => setPublishFor(null),
-          )
-        }
-      />
-      <EnableModal
-        agent={enableFor}
-        pending={pending}
-        onClose={() => setEnableFor(null)}
-        onSubmit={(agent, publishTo) =>
-          runAction(
-            () => enableAgent({ catalogAgentId: agent.id, publishTo }),
-            `Enabled ${agent.name}`,
-            () => setEnableFor(null),
-          )
-        }
-      />
-    </div>
   );
 }
 
@@ -428,7 +164,7 @@ function DefinitionFields({
   );
 }
 
-function NewAgentModal({
+export function NewAgentModal({
   open,
   pending,
   onClose,
@@ -493,7 +229,7 @@ function NewAgentModal({
   );
 }
 
-function PublishModal({
+export function PublishModal({
   agent,
   pending,
   onClose,
@@ -571,7 +307,7 @@ function PublishModal({
   );
 }
 
-function EnableModal({
+export function EnableModal({
   agent,
   pending,
   onClose,

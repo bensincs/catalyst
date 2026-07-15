@@ -34,6 +34,8 @@
 
 .list {
   margin: 0;
+  padding: 0;
+  list-style: none;
   background: var(--surface);
   border-radius: var(--radius-xl);
   box-shadow: var(--shadow-sm);
@@ -42,65 +44,70 @@
 
 .row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 14px;
-  padding: 13px 16px;
+  padding: 16px 18px;
   border-bottom: 1px solid var(--border);
-  transition: background var(--dur-fast) var(--ease-out-quart);
 }
-.list li:last-child .row {
+.list .row:last-child {
   border-bottom: none;
 }
-.row:hover {
-  background: var(--surface-hover);
-}
 
-.icon {
+.rowIcon {
   display: grid;
   place-items: center;
-  width: 28px;
-  height: 28px;
+  width: 34px;
+  height: 34px;
   flex: none;
   border-radius: var(--radius-md);
   background: var(--surface-sunken);
   border: 1px solid var(--border);
+  color: var(--text-secondary);
 }
 
-.main {
+.rowMain {
   flex: 1;
   min-width: 0;
 }
-.nameRow {
+
+.rowTop {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 9px;
+  flex-wrap: wrap;
 }
-.name {
+.rowName {
   font-size: var(--text-body);
-  font-weight: 560;
+  font-weight: 600;
   color: var(--text);
 }
-.beta {
-  padding: 1px 6px;
-  border-radius: var(--radius-full);
-  background: var(--info-bg);
-  color: var(--info-ink);
-  font-size: 10px;
+.rowNameLink {
+  font-size: var(--text-body);
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
+  color: var(--text);
+  text-decoration: none;
+  border-radius: var(--radius-sm);
+  transition: color var(--dur-fast) var(--ease-out-quart);
 }
-.meta {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  margin-top: 2px;
+.rowNameLink:hover {
+  color: var(--accent-ink);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.versionTag {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  padding: 1px 7px;
+  border-radius: var(--radius-full);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+}
+.count {
   font-size: var(--text-caption);
   color: var(--text-muted);
 }
-.sep {
-  color: var(--border-strong);
-}
+
 /* converging: actual → desired version */
 .drift {
   display: inline-flex;
@@ -110,51 +117,79 @@
   border-radius: var(--radius-full);
   background: var(--info-bg);
   color: var(--info-ink);
+  font-size: 11px;
   font-weight: 600;
 }
 .drift svg {
   animation: agents-spin 1.6s linear infinite;
 }
 
-.publish {
+.rowDesc {
+  margin-top: 4px;
+  font-size: var(--text-body-sm);
+  color: var(--text-muted);
+  line-height: 1.5;
+  max-width: 68ch;
+}
+
+.chips {
   display: flex;
-  gap: 5px;
-  flex: none;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 8px;
 }
 .chip {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 3px 8px;
-  border-radius: var(--radius-full);
+  gap: 5px;
+  padding: 2px 8px;
+  font-size: var(--text-caption);
+  color: var(--text-secondary);
   background: var(--surface-sunken);
   border: 1px solid var(--border);
-  font-size: 11px;
-  font-weight: 540;
-  color: var(--text-secondary);
+  border-radius: var(--radius-full);
+}
+.chip .mono {
+  color: var(--text);
+}
+.metaKey {
+  color: var(--text-muted);
 }
 
-.status {
+.rowActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   flex: none;
-  width: 104px;
 }
-
-.chevron {
+.manage {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
   flex: none;
+  border-radius: var(--radius-md);
   color: var(--text-disabled);
   transition:
-    transform var(--dur-fast) var(--ease-out-quart),
-    color var(--dur-fast) var(--ease-out-quart);
+    color var(--dur-fast) var(--ease-out-quart),
+    background var(--dur-fast) var(--ease-out-quart),
+    transform var(--dur-fast) var(--ease-out-quart);
 }
-.row:hover .chevron {
-  color: var(--text-muted);
-  transform: translateX(2px);
+.manage:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+  transform: translateX(1px);
 }
 
-@media (max-width: 680px) {
-  .publish,
-  .status {
-    display: none;
+@media (max-width: 640px) {
+  .row {
+    flex-wrap: wrap;
+  }
+  .rowActions {
+    flex-basis: 100%;
+    margin-top: 12px;
+    justify-content: flex-end;
   }
 }
 
@@ -162,8 +197,5 @@
   .drift svg,
   .driftMeta svg {
     animation: none;
-  }
-  .row:hover .chevron {
-    transform: none;
   }
 }

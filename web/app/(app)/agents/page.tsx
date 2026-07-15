@@ -1,21 +1,13 @@
-import { Bot } from "lucide-react";
-import { getMe, getMyContext } from "@/lib/api";
+import { getCatalog, getMe, getMemoryStores, getMyContext } from "@/lib/api";
 import { AgentsView } from "@/components/views/agents-view";
-import { PlaceholderPage } from "@/components/views/placeholder-page";
+
+export const dynamic = "force-dynamic";
 
 export default async function AgentsPage() {
   const me = await getMe();
-  if (me.role !== "tenant") {
-    return (
-      <PlaceholderPage
-        title="Agents"
-        description="Enabled agents in a tenant."
-        icon={Bot}
-        emptyTitle="Open a tenant to see its agents"
-        emptyBody="As a platform admin, drill into a tenant from the Fleet to see the agents running in it."
-      />
-    );
-  }
-  const ctx = await getMyContext();
-  return <AgentsView agents={ctx.agents} />;
+  const [agents, stores] = await Promise.all([getCatalog(), getMemoryStores()]);
+  // Tenants also see the agents actually running in their project (health,
+  // drift, publish targets); the platform view is the catalog it authors.
+  const enabled = me.role === "tenant" ? (await getMyContext()).agents : [];
+  return <AgentsView role={me.role} agents={agents} enabled={enabled} memoryStores={stores} />;
 }
