@@ -191,10 +191,11 @@ type Application struct {
 	Chart          string            `json:"chart"`
 	TargetRevision string            `json:"targetRevision"`
 	Values         string            `json:"values,omitempty"`
-	Bicep          string            `json:"bicep,omitempty"` // Azure infra module (provisioned before the chart)
-	ArmTemplate    string            `json:"-"`               // compiled ARM template (from Bicep); reconciler-only
-	Wiring         []shared.WireLink `json:"wiring"`          // Bicep output → Helm values path
-	DependsOn      []string          `json:"dependsOn"`       // ids of apps/agents that must converge first
+	BicepModule    string            `json:"bicepModule,omitempty"` // OCI ref to a published Bicep module
+	ArmTemplate    string            `json:"-"`                     // resolved ARM template; reconciler-only
+	BicepOutputs   []string          `json:"bicepOutputs"`          // resolved module output names (for wiring)
+	Wiring         []shared.WireLink `json:"wiring"`                // Bicep output → Helm values path
+	DependsOn      []string          `json:"dependsOn"`             // ids of apps/agents that must converge first
 	CreatedBy      string            `json:"createdBy,omitempty"`
 	CreatedAt      time.Time         `json:"createdAt"`
 

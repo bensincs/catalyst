@@ -1,45 +1,25 @@
 "use client";
 
-import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { Cable, Plus, X } from "lucide-react";
 import type { WireLink } from "@/lib/types";
 import styles from "./wiring-editor.module.css";
 
-/** Parse output names from either Bicep source (`output <name> ...`) or a
- *  compiled ARM template (the `outputs` object). */
-export function parseBicepOutputs(bicep: string): string[] {
-  const s = bicep.trim();
-  if (s.startsWith("{")) {
-    try {
-      const t = JSON.parse(s) as { outputs?: Record<string, unknown> };
-      if (t && t.outputs && typeof t.outputs === "object") return Object.keys(t.outputs);
-    } catch {
-      /* not valid JSON yet */
-    }
-    return [];
-  }
-  const out: string[] = [];
-  const re = /(?:^|\n)\s*output\s+([A-Za-z_][A-Za-z0-9_]*)\b/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(bicep))) out.push(m[1]);
-  return Array.from(new Set(out));
-}
-
 type Line = { key: string; d: string; mx: number; my: number; active: boolean };
 
-/** An interactive board that wires Bicep outputs (left) to Helm value paths
- *  (right). Click an output, then a Helm path, to connect them; the connectors
- *  are live bezier curves that track the nodes. */
+/** An interactive board that wires a Bicep module's outputs (left, resolved by
+ *  the platform from the OCI module) to Helm value paths (right). Click an
+ *  output, then a Helm path, to connect them; the connectors are live bezier
+ *  curves that track the nodes. */
 export function WiringEditor({
-  bicep,
+  outputs,
   wiring,
   onChange,
 }: {
-  bicep: string;
+  outputs: string[];
   wiring: WireLink[];
   onChange: (w: WireLink[]) => void;
 }) {
-  const outputs = useMemo(() => parseBicepOutputs(bicep), [bicep]);
   const [paths, setPaths] = useState<string[]>(() =>
     Array.from(new Set(wiring.map((w) => w.helmPath).filter(Boolean))),
   );
@@ -157,7 +137,8 @@ export function WiringEditor({
           </div>
           {outputs.length === 0 ? (
             <p className={styles.hint}>
-              Declare <code>output</code> values in the Azure infra module to wire them.
+              No outputs yet — set an OCI Bicep-module reference and save; the platform resolves its
+              <code>output</code> values here.
             </p>
           ) : (
             outputs.map((o) => (

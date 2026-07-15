@@ -1227,13 +1227,14 @@ func (s *Store) ApplyHeartbeat(ctx context.Context, hb shared.Heartbeat) error {
 var ErrDeploymentNotAccessible = errors.New("deployment not accessible to tenant")
 
 const applicationCols = `a.id, a.name, a.description, a.owner_tenant, a.namespace,
-	a.repo_url, a.chart, a.target_revision, a.values, a.bicep, a.arm_template, a.wiring, a.depends_on, a.created_by, a.created_at`
+	a.repo_url, a.chart, a.target_revision, a.values, a.bicep, a.bicep_outputs, a.wiring, a.depends_on, a.created_by, a.created_at`
 
 // appScanDest scans the fixed columns; wiring (jsonb) is captured raw and
-// unmarshalled by the caller via wiringFromRaw.
+// unmarshalled by the caller via wiringFromRaw. arm_template is not scanned here
+// (it's reconciler-only, read directly in SyncDesired).
 func appScanDest(a *model.Application, wiringRaw *[]byte) []any {
 	return []any{&a.ID, &a.Name, &a.Description, &a.Owner, &a.Namespace,
-		&a.RepoURL, &a.Chart, &a.TargetRevision, &a.Values, &a.Bicep, &a.ArmTemplate, wiringRaw, &a.DependsOn, &a.CreatedBy, &a.CreatedAt}
+		&a.RepoURL, &a.Chart, &a.TargetRevision, &a.Values, &a.BicepModule, &a.BicepOutputs, wiringRaw, &a.DependsOn, &a.CreatedBy, &a.CreatedAt}
 }
 
 func wiringFromRaw(raw []byte) []shared.WireLink {
@@ -1404,10 +1405,10 @@ func (s *Store) ApplicationByID(ctx context.Context, id string) (model.Applicati
 // CreateApplication inserts a deployment definition (Owner "" = platform-authored).
 func (s *Store) CreateApplication(ctx context.Context, a model.Application, createdBy string) error {
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO applications (id, name, description, owner_tenant, namespace, repo_url, chart, target_revision, values, bicep, arm_template, wiring, depends_on, created_by)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+		`INSERT INTO applications (id, name, description, owner_tenant, namespace, repo_url, chart, target_revision, values, bicep, arm_template, bicep_outputs, wiring, depends_on, created_by)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
 		a.ID, a.Name, a.Description, a.Owner, a.Namespace, a.RepoURL, a.Chart, a.TargetRevision, a.Values,
-		a.Bicep, a.ArmTemplate, wiringJSON(a.Wiring), depsArray(a.DependsOn), createdBy)
+		a.BicepModule, a.ArmTemplate, depsArray(a.BicepOutputs), wiringJSON(a.Wiring), depsArray(a.DependsOn), createdBy)
 	return err
 }
 
@@ -1417,10 +1418,11 @@ func (s *Store) CreateApplication(ctx context.Context, a model.Application, crea
 func (s *Store) UpdateApplication(ctx context.Context, a model.Application) error {
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE applications SET name = $2, description = $3, namespace = $4, repo_url = $5,
-		   chart = $6, target_revision = $7, values = $8, bicep = $9, arm_template = $10, wiring = $11, depends_on = $12
+		   chart = $6, target_revision = $7, values = $8, bicep = $9, arm_template = $10,
+		   bicep_outputs = $11, wiring = $12, depends_on = $13
 		 WHERE id = $1`,
 		a.ID, a.Name, a.Description, a.Namespace, a.RepoURL, a.Chart, a.TargetRevision, a.Values,
-		a.Bicep, a.ArmTemplate, wiringJSON(a.Wiring), depsArray(a.DependsOn))
+		a.BicepModule, a.ArmTemplate, depsArray(a.BicepOutputs), wiringJSON(a.Wiring), depsArray(a.DependsOn))
 	if err != nil {
 		return err
 	}

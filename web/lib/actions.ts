@@ -149,7 +149,7 @@ export async function createApplication(input: {
   chart: string;
   targetRevision: string;
   values: string;
-  bicep: string;
+  bicepModule: string;
   wiring: WireLink[];
   dependsOn: string[];
 }): Promise<ActionResult> {
@@ -166,7 +166,7 @@ export async function updateApplication(
     chart: string;
     targetRevision: string;
     values: string;
-    bicep: string;
+    bicepModule: string;
     wiring: WireLink[];
     dependsOn: string[];
   },

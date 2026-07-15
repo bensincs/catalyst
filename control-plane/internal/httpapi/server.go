@@ -17,20 +17,21 @@ import (
 	"github.com/inception42/cortex/shared"
 )
 
-// compileAppInfra compiles a deployment's Bicep into an ARM template (stored for
-// the reconciler to provision). Invalid Bicep is a 400; a missing toolchain
-// degrades gracefully — the definition still saves, infra is just skipped.
-func (s *Server) compileAppInfra(w http.ResponseWriter, r *http.Request, app *model.Application) bool {
-	arm, err := bicep.Compile(r.Context(), app.Bicep)
+// resolveAppInfra resolves a deployment's OCI Bicep-module reference into a
+// deployable ARM template + its output names (stored for the reconciler + the
+// wiring UI). A bad reference or invalid module is a 400; a missing toolchain
+// degrades gracefully — the definition still saves, infra is just unresolved.
+func (s *Server) resolveAppInfra(w http.ResponseWriter, r *http.Request, app *model.Application) bool {
+	arm, outputs, err := bicep.Resolve(r.Context(), app.BicepModule)
 	if err != nil {
 		if errors.Is(err, bicep.ErrNoCompiler) {
-			app.ArmTemplate = ""
+			app.ArmTemplate, app.BicepOutputs = "", nil
 			return true
 		}
-		writeErr(w, http.StatusBadRequest, "invalid Bicep: "+err.Error())
+		writeErr(w, http.StatusBadRequest, "bicep module: "+err.Error())
 		return false
 	}
-	app.ArmTemplate = arm
+	app.ArmTemplate, app.BicepOutputs = arm, outputs
 	return true
 }
 
@@ -805,7 +806,7 @@ func (s *Server) handleCreateApplication(w http.ResponseWriter, r *http.Request)
 		Chart          string            `json:"chart"`
 		TargetRevision string            `json:"targetRevision"`
 		Values         string            `json:"values"`
-		Bicep          string            `json:"bicep"`
+		BicepModule    string            `json:"bicepModule"`
 		Wiring         []shared.WireLink `json:"wiring"`
 		DependsOn      []string          `json:"dependsOn"`
 	}
@@ -845,11 +846,11 @@ func (s *Server) handleCreateApplication(w http.ResponseWriter, r *http.Request)
 		Chart:          strings.TrimSpace(body.Chart),
 		TargetRevision: strings.TrimSpace(body.TargetRevision),
 		Values:         body.Values,
-		Bicep:          body.Bicep,
+		BicepModule:    strings.TrimSpace(body.BicepModule),
 		Wiring:         body.Wiring,
 		DependsOn:      body.DependsOn,
 	}
-	if !s.compileAppInfra(w, r, &app) {
+	if !s.resolveAppInfra(w, r, &app) {
 		return
 	}
 	if err := s.store.CreateApplication(r.Context(), app, id.OID); err != nil {
@@ -877,7 +878,7 @@ func (s *Server) handleUpdateApplication(w http.ResponseWriter, r *http.Request)
 		Chart          string            `json:"chart"`
 		TargetRevision string            `json:"targetRevision"`
 		Values         string            `json:"values"`
-		Bicep          string            `json:"bicep"`
+		BicepModule    string            `json:"bicepModule"`
 		Wiring         []shared.WireLink `json:"wiring"`
 		DependsOn      []string          `json:"dependsOn"`
 	}
@@ -905,11 +906,11 @@ func (s *Server) handleUpdateApplication(w http.ResponseWriter, r *http.Request)
 		Chart:          strings.TrimSpace(body.Chart),
 		TargetRevision: strings.TrimSpace(body.TargetRevision),
 		Values:         body.Values,
-		Bicep:          body.Bicep,
+		BicepModule:    strings.TrimSpace(body.BicepModule),
 		Wiring:         body.Wiring,
 		DependsOn:      body.DependsOn,
 	}
-	if !s.compileAppInfra(w, r, &upd) {
+	if !s.resolveAppInfra(w, r, &upd) {
 		return
 	}
 	if err := s.store.UpdateApplication(r.Context(), upd); err != nil {

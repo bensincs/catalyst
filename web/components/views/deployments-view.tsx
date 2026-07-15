@@ -236,8 +236,8 @@ function DefinitionChips({ app, showRuntime }: { app: Application; showRuntime: 
       <span className={styles.chip}>
         ns <span className="mono">{app.namespace}</span>
       </span>
-      {app.bicep ? (
-        <span className={styles.chip} title="Backed by an Azure Bicep module">
+      {app.bicepModule ? (
+        <span className={styles.chip} title={`Azure infra: ${app.bicepModule}`}>
           <Cloud size={12} strokeWidth={2.2} /> Azure infra
           {app.wiring.length > 0 ? ` · ${app.wiring.length} wired` : ""}
         </span>
@@ -326,7 +326,7 @@ function DeploymentModal({
     chart: string;
     targetRevision: string;
     values: string;
-    bicep: string;
+    bicepModule: string;
     wiring: WireLink[];
     dependsOn: string[];
   }) => void;
@@ -339,7 +339,7 @@ function DeploymentModal({
   const [targetRevision, setTargetRevision] = useState(app?.targetRevision ?? "");
   const [namespace, setNamespace] = useState(app?.namespace ?? "");
   const [values, setValues] = useState(app?.values ?? "");
-  const [bicep, setBicep] = useState(app?.bicep ?? "");
+  const [bicepModule, setBicepModule] = useState(app?.bicepModule ?? "");
   const [wiring, setWiring] = useState<WireLink[]>(app?.wiring ?? []);
   const [dependsOn, setDependsOn] = useState<string[]>(app?.dependsOn ?? []);
 
@@ -354,7 +354,7 @@ function DeploymentModal({
       chart: chart.trim(),
       targetRevision: targetRevision.trim(),
       values,
-      bicep,
+      bicepModule: bicepModule.trim(),
       wiring,
       dependsOn,
     });
@@ -420,26 +420,23 @@ function DeploymentModal({
 
       <p className={styles.groupLabel}>Azure infrastructure (Bicep)</p>
       <Field
-        label="Bicep module"
+        label="Bicep module reference"
         htmlFor="dep-bicep"
-        hint="Provisioned in the tenant's resource group before the chart. Declare output values to wire into Helm."
+        hint="An OCI reference to a published Bicep module — provisioned in the tenant's resource group before the chart. Its outputs resolve on save."
       >
-        <Textarea
+        <TextInput
           id="dep-bicep"
-          value={bicep}
-          onChange={(e) => setBicep(e.target.value)}
+          value={bicepModule}
+          onChange={(e) => setBicepModule(e.target.value)}
           spellCheck={false}
-          className={styles.codeArea}
-          placeholder={
-            "param location string = resourceGroup().location\n\nresource db 'Microsoft.DBforPostgreSQL/flexibleServers@2023-03-01-preview' = {\n  name: 'app-db'\n  location: location\n  // …\n}\n\noutput host string = db.properties.fullyQualifiedDomainName"
-          }
+          placeholder="br:cortexcpacrzo7yflmq.azurecr.io/bicep/postgres:1.2.0"
         />
       </Field>
 
-      {bicep.trim() !== "" && (
+      {bicepModule.trim() !== "" && (
         <>
           <p className={styles.groupLabel}>Wire outputs → Helm values</p>
-          <WiringEditor bicep={bicep} wiring={wiring} onChange={setWiring} />
+          <WiringEditor outputs={app?.bicepOutputs ?? []} wiring={wiring} onChange={setWiring} />
         </>
       )}
 
