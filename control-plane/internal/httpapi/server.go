@@ -12,6 +12,7 @@ import (
 
 	"github.com/inception42/cortex/control-plane/internal/auth"
 	"github.com/inception42/cortex/control-plane/internal/bicep"
+	"github.com/inception42/cortex/control-plane/internal/chart"
 	"github.com/inception42/cortex/control-plane/internal/model"
 	"github.com/inception42/cortex/control-plane/internal/store"
 	"github.com/inception42/cortex/shared"
@@ -101,6 +102,7 @@ func (s *Server) Router() http.Handler {
 			r.Get("/applications", s.handleApplications)
 			r.Post("/applications", s.handleCreateApplication)
 			r.Post("/applications/inspect", s.handleInspectModule)
+			r.Post("/applications/inspect-chart", s.handleInspectChart)
 			r.Patch("/applications/{id}", s.handleUpdateApplication)
 			r.Delete("/applications/{id}", s.handleDeleteApplication)
 
@@ -821,6 +823,37 @@ func (s *Server) handleInspectModule(w http.ResponseWriter, r *http.Request) {
 		outputs = []bicep.OutputSpec{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"params": params, "outputs": outputs, "resolved": true})
+}
+
+// handleInspectChart reads a Helm chart's default values + optional JSON Schema so
+// the console can render a typed values builder. Missing toolchain degrades to the
+// raw YAML editor client-side; a bad ref / unreachable chart is a 400.
+func (s *Server) handleInspectChart(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		RepoURL string `json:"repoURL"`
+		Chart   string `json:"chart"`
+		Version string `json:"version"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	iface, err := chart.Inspect(r.Context(), body.RepoURL, body.Chart, body.Version)
+	if err != nil {
+		if errors.Is(err, chart.ErrNoHelm) {
+			writeJSON(w, http.StatusOK, map[string]any{"resolved": false})
+			return
+		}
+		writeErr(w, http.StatusBadRequest, "chart: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"resolved":    true,
+		"name":        iface.Name,
+		"version":     iface.Version,
+		"description": iface.Description,
+		"defaults":    iface.Defaults,
+		"schema":      iface.Schema,
+	})
 }
 
 func (s *Server) handleCreateApplication(w http.ResponseWriter, r *http.Request) {
