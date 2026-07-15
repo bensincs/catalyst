@@ -58,6 +58,10 @@ interface ApiCluster {
   ingressInstalled?: boolean;
   gatewayIP?: string;
   ingressIssuer?: string;
+  infraDelegated?: boolean;
+  infraDetail?: string;
+  footprintState?: string;
+  footprintDetail?: string;
   nodeCount?: number;
   detail?: string;
 }
@@ -227,6 +231,10 @@ function toCluster(c?: ApiCluster | null): ClusterInfo {
     ingressInstalled: Boolean(c?.ingressInstalled),
     gatewayIP: c?.gatewayIP,
     ingressIssuer: c?.ingressIssuer,
+    infraDelegated: Boolean(c?.infraDelegated),
+    infraDetail: c?.infraDetail,
+    footprintState: c?.footprintState,
+    footprintDetail: c?.footprintDetail,
     nodeCount: c?.nodeCount ?? 0,
     detail: c?.detail,
   };

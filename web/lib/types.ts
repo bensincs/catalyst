@@ -92,6 +92,10 @@ export interface ClusterInfo {
   ingressInstalled: boolean;
   gatewayIP?: string;
   ingressIssuer?: string; // Entra issuer the ingress enforces ("" ⇒ closed)
+  infraDelegated: boolean; // control plane can reach the tenant's Lighthouse-delegated RG
+  infraDetail?: string; // human note about delegation reachability
+  footprintState?: string; // "" | provisioning | ready | failed (reconciler + Foundry provisioned by control plane)
+  footprintDetail?: string;
   nodeCount: number;
   detail?: string;
 }

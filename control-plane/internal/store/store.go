@@ -76,7 +76,7 @@ const tenantCols = `id, name, coalesce(tenant_id,''), region, plan, enrollment, 
 	agent_count, reconciling_count, monthly_calls, drift, last_heartbeat,
 	subscription_id, reconciler_identity, foundry_project, reconciler_version, installed_at, enabled,
 	cluster_name, cluster_phase, cluster_k8s_version, cluster_argo_installed, cluster_node_count, cluster_detail,
-	cluster_ingress_installed, cluster_gateway_ip, cluster_ingress_issuer`
+	cluster_ingress_installed, cluster_gateway_ip, cluster_ingress_issuer, infra_delegated, infra_detail, footprint_state, footprint_detail`
 
 func scanTenant(row pgx.Row) (model.Tenant, error) {
 	var t model.Tenant
@@ -85,7 +85,7 @@ func scanTenant(row pgx.Row) (model.Tenant, error) {
 		&t.Version, &t.AgentCount, &t.ReconcilingCount, &t.MonthlyCalls, &t.Drift, &t.LastHeartbeat,
 		&t.SubscriptionID, &t.ReconcilerIdentity, &t.FoundryProject, &t.ReconcilerVersion, &installedAt, &t.Enabled,
 		&t.Cluster.Name, &t.Cluster.Phase, &t.Cluster.K8sVersion, &t.Cluster.ArgoInstalled, &t.Cluster.NodeCount, &t.Cluster.Detail,
-		&t.Cluster.IngressInstalled, &t.Cluster.GatewayIP, &t.Cluster.IngressIssuer)
+		&t.Cluster.IngressInstalled, &t.Cluster.GatewayIP, &t.Cluster.IngressIssuer, &t.Cluster.InfraDelegated, &t.Cluster.InfraDetail, &t.Cluster.FootprintState, &t.Cluster.FootprintDetail)
 	if installedAt != "" {
 		t.InstalledAt = &installedAt
 	}
@@ -850,7 +850,7 @@ func (s *Store) TenantsRegistry(ctx context.Context) ([]model.TenantRegistryRow,
 			&r.Version, &r.AgentCount, &r.ReconcilingCount, &r.MonthlyCalls, &r.Drift, &r.LastHeartbeat,
 			&r.SubscriptionID, &r.ReconcilerIdentity, &r.FoundryProject, &r.ReconcilerVersion, &installedAt, &r.Enabled,
 			&r.Cluster.Name, &r.Cluster.Phase, &r.Cluster.K8sVersion, &r.Cluster.ArgoInstalled, &r.Cluster.NodeCount, &r.Cluster.Detail,
-			&r.Cluster.IngressInstalled, &r.Cluster.GatewayIP, &r.Cluster.IngressIssuer,
+			&r.Cluster.IngressInstalled, &r.Cluster.GatewayIP, &r.Cluster.IngressIssuer, &r.Cluster.InfraDelegated, &r.Cluster.InfraDetail, &r.Cluster.FootprintState, &r.Cluster.FootprintDetail,
 			&r.EntitledAgents, &r.EntitledStores, &r.EntitledDeployments); err != nil {
 			return nil, err
 		}
@@ -1199,6 +1199,67 @@ func (s *Store) SetInfraState(ctx context.Context, tenantSlug, appID, state stri
 	_, err := s.pool.Exec(ctx,
 		`UPDATE tenant_deployments SET infra_state = $3, infra_outputs = $4 WHERE tenant_slug = $1 AND app_id = $2`,
 		tenantSlug, appID, state, raw)
+	return err
+}
+
+// RecordDelegatedTenant registers a subscription discovered via Lighthouse as a
+// tenant (created disabled — a platform admin must enable it before its footprint
+// is provisioned), recording its subscription. Returns the tenant slug.
+func (s *Store) RecordDelegatedTenant(ctx context.Context, tid, name, subscriptionID string) (string, error) {
+	t, err := s.EnsureTenantForTID(ctx, tid, name)
+	if err != nil {
+		return "", err
+	}
+	_, err = s.pool.Exec(ctx,
+		`UPDATE tenants SET subscription_id = coalesce(nullif($2,''), subscription_id) WHERE id = $1`,
+		t.ID, subscriptionID)
+	return t.ID, err
+}
+
+// SetInfraDelegation records whether the control plane can reach the tenant's
+// delegated subscription (control-plane worker → DB).
+func (s *Store) SetInfraDelegation(ctx context.Context, slug string, delegated bool, detail string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE tenants SET infra_delegated = $2, infra_detail = $3 WHERE id = $1`, slug, delegated, detail)
+	return err
+}
+
+// FootprintTarget is an enabled, delegated tenant whose footprint the control
+// plane should provision.
+type FootprintTarget struct {
+	Slug           string
+	TenantID       string
+	SubscriptionID string
+	Name           string
+	State          string // current footprint_state
+}
+
+// FootprintTargets returns enabled tenants that have a subscription but no ready
+// footprint yet.
+func (s *Store) FootprintTargets(ctx context.Context) ([]FootprintTarget, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, coalesce(tenant_id,''), coalesce(subscription_id,''), name, coalesce(footprint_state,'')
+		 FROM tenants
+		 WHERE enabled = true AND coalesce(subscription_id,'') <> '' AND coalesce(footprint_state,'') <> 'ready'`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []FootprintTarget
+	for rows.Next() {
+		var t FootprintTarget
+		if err := rows.Scan(&t.Slug, &t.TenantID, &t.SubscriptionID, &t.Name, &t.State); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// SetFootprintState records the provisioning state of a tenant's footprint.
+func (s *Store) SetFootprintState(ctx context.Context, slug, state, detail string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE tenants SET footprint_state = $2, footprint_detail = $3 WHERE id = $1`, slug, state, detail)
 	return err
 }
 

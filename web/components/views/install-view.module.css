@@ -84,6 +84,114 @@
   line-height: 1.4;
 }
 
+/* ── Staged system checks (vertical) ── */
+.checks {
+  background: var(--surface);
+  border-radius: var(--radius-island);
+  box-shadow: var(--shadow-sm);
+  padding: 4px 8px;
+  margin-bottom: var(--space-base);
+}
+.check {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.checks .check:last-child {
+  border-bottom: none;
+}
+.checkMark {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border-radius: var(--radius-full);
+  border: 1.5px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text-muted);
+}
+.check[data-status="ok"] .checkMark {
+  background: var(--success-bg);
+  border-color: transparent;
+  color: var(--success-ink);
+}
+.check[data-status="working"] .checkMark {
+  background: var(--info-bg);
+  border-color: transparent;
+  color: var(--info-ink);
+}
+.check[data-status="working"] .checkMark svg {
+  animation: install-spin 1.6s linear infinite;
+}
+.check[data-status="warn"] .checkMark {
+  background: var(--warning-bg);
+  border-color: transparent;
+  color: var(--warning-ink);
+}
+.check[data-status="failed"] .checkMark {
+  background: var(--danger-bg);
+  border-color: transparent;
+  color: var(--danger-ink);
+}
+@keyframes install-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.checkText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+.checkTitle {
+  font-size: var(--text-body-sm);
+  font-weight: 600;
+  color: var(--text);
+}
+.check[data-status="pending"] .checkTitle {
+  color: var(--text-muted);
+}
+.checkNote {
+  font-size: var(--text-caption);
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+.checkState {
+  flex: none;
+  font-size: var(--text-caption);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-muted);
+}
+.check[data-status="ok"] .checkState {
+  color: var(--success-ink);
+}
+.check[data-status="working"] .checkState {
+  color: var(--info-ink);
+}
+.check[data-status="warn"] .checkState {
+  color: var(--warning-ink);
+}
+.check[data-status="failed"] .checkState {
+  color: var(--danger-ink);
+}
+@media (max-width: 560px) {
+  .checkState {
+    display: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .check[data-status="working"] .checkMark svg {
+    animation: none;
+  }
+}
+
 /* ── Reconciler status strip ── */
 .reconciler {
   display: flex;

@@ -19,14 +19,21 @@ type Config struct {
 	PlatformTenantID string
 	CORSOrigin       string
 
-	// Platform Azure service principal — used to provision each deployment's Bicep
-	// infra cross-tenant into the customer's Lighthouse-delegated resource group.
-	// When unset, infra provisioning is disabled (deployments with infra stay held).
+	// Platform Azure service principal — used to discover Lighthouse-delegated
+	// subscriptions and provision the tenant footprint + each deployment's Bicep
+	// infra cross-tenant. When unset, all cross-tenant provisioning is disabled.
 	AzureTenantID      string
 	AzureClientID      string
 	AzureClientSecret  string
-	InfraResourceGroup string // delegated RG the control plane deploys infra into
+	InfraResourceGroup string // delegated RG the control plane deploys app infra into
+	FootprintRG        string // RG the control plane deploys the tenant footprint into
+	InfraRegion        string // region for created resource groups
 	InfraPollSeconds   int
+
+	// Footprint parameters injected into each tenant's reconciler.
+	ControlPlanePublicURL string // the reconciler → control plane base URL
+	CortexAPIScope        string // Entra scope for the control-plane API
+	ReconcilerImage       string // reconciler container image
 }
 
 // Load reads .env (if present) into the process env, then builds Config.
@@ -49,7 +56,13 @@ func Load() Config {
 		AzureClientID:      env("AZURE_CLIENT_ID", ""),
 		AzureClientSecret:  env("AZURE_CLIENT_SECRET", ""),
 		InfraResourceGroup: env("INFRA_RESOURCE_GROUP", "cortex-infra"),
+		FootprintRG:        env("FOOTPRINT_RESOURCE_GROUP", "cortex"),
+		InfraRegion:        env("INFRA_REGION", "uksouth"),
 		InfraPollSeconds:   envInt("INFRA_POLL_SECONDS", 30),
+
+		ControlPlanePublicURL: env("CONTROL_PLANE_PUBLIC_URL", "https://api.catalyst.msft.ae"),
+		CortexAPIScope:        env("CORTEX_API_SCOPE", ""),
+		ReconcilerImage:       env("RECONCILER_IMAGE", "ghcr.io/inception42/cortex-reconciler:latest"),
 	}
 }
 

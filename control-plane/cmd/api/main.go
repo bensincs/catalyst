@@ -73,18 +73,32 @@ func main() {
 	)
 	srv := httpapi.NewServer(st, authn, recon, cfg.CORSOrigin, cfg.EntraClientID, cfg.EntraIssuerHost)
 
-	// Infra worker: provisions each deployment's Bicep infra cross-tenant via
-	// Azure Lighthouse. Disabled (deployments with infra stay held) when no
-	// platform Azure service principal is configured.
+	// Infra worker: discovers Lighthouse-delegated subscriptions, provisions each
+	// enabled tenant's footprint (reconciler + Foundry + AKS) and each deployment's
+	// Bicep infra — all cross-tenant. Disabled when no platform SP is configured.
 	workerCtx, stopWorker := context.WithCancel(context.Background())
 	defer stopWorker()
-	if prov, err := infra.New(st, cfg.AzureTenantID, cfg.AzureClientID, cfg.AzureClientSecret, cfg.InfraResourceGroup); err != nil {
+	apiScope := cfg.CortexAPIScope
+	if apiScope == "" && cfg.EntraClientID != "" {
+		apiScope = "api://" + cfg.EntraClientID
+	}
+	if prov, err := infra.New(st, infra.Config{
+		TenantID:           cfg.AzureTenantID,
+		ClientID:           cfg.AzureClientID,
+		ClientSecret:       cfg.AzureClientSecret,
+		InfraResourceGroup: cfg.InfraResourceGroup,
+		FootprintRG:        cfg.FootprintRG,
+		Region:             cfg.InfraRegion,
+		ControlPlaneURL:    cfg.ControlPlanePublicURL,
+		APIScope:           apiScope,
+		ReconcilerImage:    cfg.ReconcilerImage,
+	}); err != nil {
 		slog.Error("infra provisioner init failed", "err", err)
 	} else if prov == nil {
-		slog.Info("infra provisioning disabled (set AZURE_TENANT_ID/AZURE_CLIENT_ID/AZURE_CLIENT_SECRET to enable)")
+		slog.Info("cross-tenant provisioning disabled (set AZURE_TENANT_ID/AZURE_CLIENT_ID/AZURE_CLIENT_SECRET to enable)")
 	} else {
 		go prov.Run(workerCtx, time.Duration(cfg.InfraPollSeconds)*time.Second)
-		slog.Info("infra provisioning enabled (Lighthouse)", "resourceGroup", cfg.InfraResourceGroup, "pollSeconds", cfg.InfraPollSeconds)
+		slog.Info("cross-tenant provisioning enabled (Lighthouse)", "footprintRG", cfg.FootprintRG, "infraRG", cfg.InfraResourceGroup, "region", cfg.InfraRegion)
 	}
 
 	httpServer := &http.Server{

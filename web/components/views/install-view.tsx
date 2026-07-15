@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  AlertTriangle,
   ArrowUpRight,
   Bot,
   Check,
@@ -8,15 +9,29 @@ import {
   Cpu,
   Fingerprint,
   Landmark,
+  Minus,
+  Radio,
+  RefreshCw,
   ServerCog,
   ShieldCheck,
+  X,
+  type LucideIcon,
 } from "lucide-react";
 import { PageHeader } from "@/components/ui/page-header";
 import { Button } from "@/components/ui/button";
 import { StatusBadge, StatusDot } from "@/components/ui/status";
 import { formatRelative } from "@/lib/format";
-import { LIFECYCLE_META, type Lifecycle, type TenantContextInfo } from "@/lib/types";
+import { LIFECYCLE_META, type ClusterInfo, type Lifecycle, type TenantContextInfo } from "@/lib/types";
 import styles from "./install-view.module.css";
+
+/** Aggregate provisioning state of a tenant's enabled deployments that carry
+ *  Azure infra (deployed by the control plane via Lighthouse). */
+export interface InfraSummary {
+  total: number;
+  ready: number;
+  provisioning: number;
+  failed: number;
+}
 
 const DEPLOY_URL =
   process.env.NEXT_PUBLIC_CORTEX_DEPLOY_URL ??
@@ -27,17 +42,16 @@ const DEPLOY_URL =
 const CORTEX_TENANT_ID = process.env.NEXT_PUBLIC_CORTEX_TENANT_ID ?? "<your Cortex tenant id>";
 const CORTEX_SP_OBJECT_ID =
   process.env.NEXT_PUBLIC_CORTEX_SP_OBJECT_ID ?? "<Cortex control-plane service principal object id>";
-const CORTEX_INFRA_RG = process.env.NEXT_PUBLIC_CORTEX_INFRA_RG ?? "cortex-infra";
-
-type StepState = "done" | "current" | "pending";
 
 export function InstallView({
   tenant,
   agentCount,
+  infra,
   now,
 }: {
   tenant: TenantContextInfo;
   agentCount: number;
+  infra: InfraSummary;
   now: number;
 }) {
   const lc = LIFECYCLE_META[tenant.lifecycle];
@@ -45,14 +59,21 @@ export function InstallView({
   const bound = tenant.enrollment === "bound";
   const live = tenant.lifecycle === "live";
 
-  const steps = buildSteps({ bound, live, degraded: tenant.lifecycle === "degraded", agentCount });
+  const checks = buildChecks({
+    bound,
+    live,
+    degraded: tenant.lifecycle === "degraded",
+    agentCount,
+    cluster: tenant.cluster,
+    infra,
+  });
   const deploy = () => window.open(DEPLOY_URL, "_blank", "noopener,noreferrer");
 
   return (
     <div>
       <PageHeader
         title="Install"
-        description="The Cortex app in your own Azure subscription — reconciler, Foundry project, and enrollment. Everything runs under your identity, in your tenant."
+        description="One Azure Lighthouse delegation is the whole install — Cortex then provisions the reconciler, Foundry, cluster, and app infrastructure into your subscription. Everything runs in your tenant."
         meta={<StatusBadge tone={lc.tone} label={lc.label} pulse={live} />}
         actions={
           bound ? (
@@ -61,27 +82,26 @@ export function InstallView({
             </Button>
           ) : (
             <Button variant="primary" icon={ShieldCheck} iconRight={ArrowUpRight} onClick={deploy}>
-              Deploy to Azure
+              Deploy delegation
             </Button>
           )
         }
       />
 
-      {/* Deployment lifecycle — desired vs. actual, made legible */}
-      <section className={styles.panel} aria-label="Deployment lifecycle">
-        <ol className={styles.steps} role="list">
-          {steps.map((s) => (
-            <li key={s.key} className={styles.step} data-state={s.state} data-tone={s.tone}>
-              <span className={styles.stepMark} aria-hidden>
-                {s.state === "done" ? <Check size={13} strokeWidth={3} /> : <s.icon size={14} strokeWidth={2} />}
-              </span>
-              <span className={styles.stepText}>
-                <span className={styles.stepTitle}>{s.title}</span>
-                <span className={styles.stepNote}>{s.note}</span>
-              </span>
-            </li>
-          ))}
-        </ol>
+      {/* Staged system checks — reads top to bottom as the install comes online */}
+      <section className={styles.checks} aria-label="Install status checks">
+        {checks.map((c) => (
+          <div key={c.key} className={styles.check} data-status={c.status}>
+            <span className={styles.checkMark} aria-hidden>
+              <CheckMark check={c} />
+            </span>
+            <span className={styles.checkText}>
+              <span className={styles.checkTitle}>{c.title}</span>
+              <span className={styles.checkNote}>{c.note}</span>
+            </span>
+            <span className={styles.checkState}>{STATUS_LABEL[c.status]}</span>
+          </div>
+        ))}
       </section>
 
       {/* Reconciler status */}
@@ -127,19 +147,17 @@ export function InstallView({
         </dl>
         <p className={styles.sovereign}>
           <ShieldCheck size={14} strokeWidth={2.2} aria-hidden />
-          Your <strong>data plane</strong> stays yours — models, agents, and knowledge run under the
-          reconciler&apos;s own identity, in your subscription. Cortex only manages application{" "}
-          <strong>infrastructure</strong>, and only inside the <span className="mono">{CORTEX_INFRA_RG}</span>{" "}
-          resource group you delegate below.
+          Your <strong>data plane</strong> stays yours — models, agents, and knowledge run under
+          identities Cortex creates <em>in your tenant</em>. Cortex holds delegated management of this
+          subscription (revocable anytime), but no standing access to your data.
         </p>
       </section>
     </div>
   );
 }
 
-// DelegationSection explains — and gives the exact values for — the Azure
-// Lighthouse delegation that lets the Cortex control plane provision each
-// deployment's Azure infrastructure into a dedicated resource group.
+// DelegationSection is the whole onboarding: one Azure Lighthouse delegation that
+// hands provisioning of the entire footprint to the Cortex control plane.
 function DelegationSection({ subscriptionId, region }: { subscriptionId: string; region: string }) {
   const cmd = [
     "az deployment sub create \\",
@@ -150,31 +168,30 @@ function DelegationSection({ subscriptionId, region }: { subscriptionId: string;
   ].join("\n");
 
   return (
-    <section aria-label="Infrastructure delegation" className={styles.manifestWrap}>
-      <h2 className={styles.sectionTitle}>Delegate infrastructure to Cortex (Azure Lighthouse)</h2>
+    <section aria-label="Lighthouse delegation" className={styles.manifestWrap}>
+      <h2 className={styles.sectionTitle}>Onboarding — delegate to Cortex (Azure Lighthouse)</h2>
       <p className={styles.delegationLead}>
-        Deployments can declare Azure infrastructure (storage, Key Vault, Postgres…). The Cortex control
-        plane provisions it <strong>for you</strong>, cross-tenant, into a dedicated{" "}
-        <span className="mono">{CORTEX_INFRA_RG}</span> resource group — so you never run those deployments
-        yourself. To enable that, delegate just that resource group to Cortex with Azure Lighthouse
-        (built-in <strong>Contributor</strong>, nothing else).
+        This one delegation <strong>is the entire install</strong>. Once it lands, the Cortex control plane
+        provisions the reconciler, Foundry, the cluster, and every deployment&apos;s infrastructure into your
+        subscription — cross-tenant, hands-off. You run nothing else. Publish it as a Marketplace managed
+        service offer, or run the command below.
       </p>
 
       <dl className={styles.manifest}>
         <Fact icon={Fingerprint} label="Cortex tenant (managing)" value={CORTEX_TENANT_ID} mono />
         <Fact icon={ShieldCheck} label="Control-plane principal" value={CORTEX_SP_OBJECT_ID} mono />
-        <Fact icon={Cloud} label="Delegated resource group" value={CORTEX_INFRA_RG} mono />
+        <Fact icon={Cloud} label="Scope" value="Subscription · Contributor + limited User Access Admin" />
       </dl>
 
-      <p className={styles.delegationStep}>Run as a subscription Owner (creates the RG + the delegation):</p>
+      <p className={styles.delegationStep}>Run as a subscription Owner:</p>
       <pre className={styles.cmd}>
         <code>{cmd}</code>
       </pre>
       <p className={styles.delegationNote}>
-        Least privilege: Cortex can only act inside <span className="mono">{CORTEX_INFRA_RG}</span>. Revoke
-        any time by deleting the delegation under <em>Service providers → Delegations</em> — your reconciler
-        (data plane) is unaffected. Prefer just-in-time? Grant the principal via PIM instead of standing
-        Contributor.
+        Least privilege: Contributor to build resources, plus a <em>limited</em> User Access Administrator
+        that can only grant the reconciler&apos;s managed identity its Foundry + AKS roles — nothing else, to
+        nobody else. Revoke anytime under <em>Service providers → Delegations</em>. Prefer just-in-time? Grant
+        the principal via PIM instead of standing access.
       </p>
     </section>
   );
@@ -213,56 +230,114 @@ function reconStatus(lifecycle: Lifecycle): {
   }
 }
 
-function buildSteps(x: {
+type CheckStatus = "ok" | "working" | "warn" | "failed" | "pending";
+
+interface Check {
+  key: string;
+  title: string;
+  note: string;
+  status: CheckStatus;
+  icon: LucideIcon; // shown while pending
+}
+
+const STATUS_LABEL: Record<CheckStatus, string> = {
+  ok: "OK",
+  working: "Working",
+  warn: "Stale",
+  failed: "Action needed",
+  pending: "Pending",
+};
+
+function CheckMark({ check }: { check: Check }) {
+  switch (check.status) {
+    case "ok":
+      return <Check size={14} strokeWidth={3} />;
+    case "failed":
+      return <X size={14} strokeWidth={3} />;
+    case "working":
+      return <RefreshCw size={13} strokeWidth={2.4} />;
+    case "warn":
+      return <AlertTriangle size={13} strokeWidth={2.4} />;
+    default:
+      return <Minus size={13} strokeWidth={2.4} />;
+  }
+}
+
+// buildChecks reads top-to-bottom as the install comes online. Onboarding is a
+// single Lighthouse delegation; everything after it is provisioned by the control
+// plane: directory → delegation → environment (reconciler + Foundry) → reconciler
+// heartbeat → application infra → agents.
+function buildChecks(x: {
   bound: boolean;
   live: boolean;
   degraded: boolean;
   agentCount: number;
-}) {
-  const s2: StepState = x.bound ? "done" : "current";
-  const s3: StepState = x.live ? "done" : x.bound ? "current" : "pending";
-  // Agents only count as "serving" once a live reconciler confirms them — a
-  // later step never lands done while an earlier one is still in flight.
-  const s4: StepState = x.live && x.agentCount > 0 ? "done" : x.live ? "current" : "pending";
-  const agentsNote =
-    x.live && x.agentCount > 0
-      ? `${x.agentCount} enabled and converged`
-      : x.agentCount > 0
-        ? `${x.agentCount} enabled · awaiting reconciler`
-        : "Enable agents from your catalog";
+  cluster: ClusterInfo;
+  infra: InfraSummary;
+}): Check[] {
+  const { live, degraded, agentCount, cluster, infra } = x;
+
+  const lighthouse: Check = cluster.infraDelegated
+    ? {
+        key: "lighthouse",
+        title: "Delegation active",
+        note: cluster.infraDetail || "Cortex manages this subscription via Azure Lighthouse.",
+        status: "ok",
+        icon: Radio,
+      }
+    : {
+        key: "lighthouse",
+        title: "Delegate via Lighthouse",
+        note: "Deploy the delegation below — the one step that hands provisioning to Cortex.",
+        status: "pending",
+        icon: Radio,
+      };
+
+  const fp = cluster.footprintState ?? "";
+  let environment: Check;
+  if (fp === "ready") {
+    environment = { key: "environment", title: "Environment provisioned", note: cluster.footprintDetail || "Reconciler, Foundry, and cluster deployed into your subscription.", status: "ok", icon: ServerCog };
+  } else if (fp === "provisioning") {
+    environment = { key: "environment", title: "Provisioning environment", note: cluster.footprintDetail || "Cortex is deploying the reconciler + Foundry into your subscription…", status: "working", icon: ServerCog };
+  } else if (fp === "failed") {
+    environment = { key: "environment", title: "Environment failed", note: cluster.footprintDetail || "The footprint deployment failed — check quota and the delegation's permissions.", status: "failed", icon: ServerCog };
+  } else if (!cluster.infraDelegated) {
+    environment = { key: "environment", title: "Environment", note: "Provisioned automatically by Cortex once you delegate.", status: "pending", icon: ServerCog };
+  } else {
+    environment = { key: "environment", title: "Environment", note: "Queued — a platform admin enables the tenant, then Cortex provisions it.", status: "pending", icon: ServerCog };
+  }
+
+  const reconciler: Check = live
+    ? { key: "reconciler", title: "Reconciler running", note: "Heartbeating desired vs. actual state.", status: "ok", icon: ShieldCheck }
+    : degraded
+      ? { key: "reconciler", title: "Reconciler unreachable", note: "The last heartbeat is stale — it may be restarting or blocked from the control plane.", status: "warn", icon: ShieldCheck }
+      : { key: "reconciler", title: "Reconciler", note: "Comes online once the environment is provisioned.", status: "pending", icon: ShieldCheck };
+
+  let infraCheck: Check;
+  if (infra.total === 0) {
+    infraCheck = { key: "infra", title: "Application infrastructure", note: "No deployment declares Azure infrastructure yet.", status: "pending", icon: Cloud };
+  } else if (infra.failed > 0) {
+    infraCheck = { key: "infra", title: "Infrastructure failed", note: `${infra.failed} of ${infra.total} deployment${infra.total === 1 ? "" : "s"} failed to provision — check its module + parameters.`, status: "failed", icon: Cloud };
+  } else if (infra.provisioning > 0) {
+    infraCheck = { key: "infra", title: "Provisioning infrastructure", note: `${infra.ready}/${infra.total} ready · ${infra.provisioning} deploying via Lighthouse…`, status: "working", icon: Cloud };
+  } else {
+    infraCheck = { key: "infra", title: "Application infrastructure", note: `${infra.total} deployment${infra.total === 1 ? "" : "s"} provisioned into your subscription.`, status: "ok", icon: Cloud };
+  }
+
+  const agents: Check =
+    live && agentCount > 0
+      ? { key: "agents", title: "Agents serving", note: `${agentCount} enabled and converged.`, status: "ok", icon: Bot }
+      : agentCount > 0
+        ? { key: "agents", title: "Agents converging", note: `${agentCount} enabled · awaiting reconciler.`, status: "working", icon: Bot }
+        : { key: "agents", title: "Agents", note: "Enable agents from your catalog.", status: "pending", icon: Bot };
+
   return [
-    {
-      key: "directory",
-      icon: Fingerprint,
-      title: "Directory connected",
-      note: "Signed in with Microsoft Entra",
-      state: "done" as StepState,
-      tone: "success" as const,
-    },
-    {
-      key: "deployed",
-      icon: ServerCog,
-      title: "App deployed",
-      note: x.bound ? "Reconciler enrolled in your subscription" : "Deploy the managed app to your subscription",
-      state: s2,
-      tone: "success" as const,
-    },
-    {
-      key: "live",
-      icon: ShieldCheck,
-      title: "Reconciler live",
-      note: x.degraded ? "Heartbeat stale — reconciler unreachable" : "Heartbeating desired vs. actual state",
-      state: s3,
-      tone: (x.degraded ? "warning" : "success") as "success" | "warning",
-    },
-    {
-      key: "agents",
-      icon: Bot,
-      title: "Agents serving",
-      note: agentsNote,
-      state: s4,
-      tone: "success" as const,
-    },
+    { key: "directory", title: "Directory connected", note: "Signed in with Microsoft Entra.", status: "ok", icon: Fingerprint },
+    lighthouse,
+    environment,
+    reconciler,
+    infraCheck,
+    agents,
   ];
 }
 

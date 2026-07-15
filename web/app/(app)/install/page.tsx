@@ -1,7 +1,9 @@
 import { ServerCog } from "lucide-react";
-import { getMe, getMyContext } from "@/lib/api";
-import { InstallView } from "@/components/views/install-view";
+import { getApplications, getMe, getMyContext } from "@/lib/api";
+import { InstallView, type InfraSummary } from "@/components/views/install-view";
 import { PlaceholderPage } from "@/components/views/placeholder-page";
+
+export const dynamic = "force-dynamic";
 
 export default async function InstallPage() {
   const me = await getMe();
@@ -16,6 +18,21 @@ export default async function InstallPage() {
       />
     );
   }
-  const ctx = await getMyContext();
-  return <InstallView tenant={ctx.tenant} agentCount={ctx.agents.length} now={Date.now()} />;
+  const [ctx, apps] = await Promise.all([getMyContext(), getApplications()]);
+
+  // Aggregate the provisioning state of the tenant's enabled deployments that
+  // carry Azure infra (deployed by the control plane via Lighthouse).
+  const withInfra = apps.filter((a) => a.enabled && (a.bicepModule ?? "").trim() !== "");
+  const ready = withInfra.filter((a) => a.infraState === "ready").length;
+  const failed = withInfra.filter((a) => a.infraState === "failed").length;
+  const infra: InfraSummary = {
+    total: withInfra.length,
+    ready,
+    failed,
+    provisioning: withInfra.length - ready - failed,
+  };
+
+  return (
+    <InstallView tenant={ctx.tenant} agentCount={ctx.agents.length} infra={infra} now={Date.now()} />
+  );
 }

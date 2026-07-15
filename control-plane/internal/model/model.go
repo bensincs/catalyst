@@ -169,6 +169,10 @@ type ClusterInfo struct {
 	IngressInstalled bool   `json:"ingressInstalled"`
 	GatewayIP        string `json:"gatewayIP,omitempty"`
 	IngressIssuer    string `json:"ingressIssuer,omitempty"`
+	InfraDelegated   bool   `json:"infraDelegated"`           // control plane can reach the tenant's Lighthouse-delegated RG
+	InfraDetail      string `json:"infraDetail,omitempty"`    // human note about delegation reachability
+	FootprintState   string `json:"footprintState,omitempty"` // "" | provisioning | ready | failed (reconciler + Foundry)
+	FootprintDetail  string `json:"footprintDetail,omitempty"`
 	NodeCount        int    `json:"nodeCount"`
 	Detail           string `json:"detail,omitempty"`
 }

@@ -1,0 +1,592 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.40.2.10011",
+      "templateHash": "10419887027033901385"
+    }
+  },
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Azure region for all resources."
+      }
+    },
+    "tenantName": {
+      "type": "string",
+      "metadata": {
+        "description": "Your organization display name (shown in the Cortex fleet)."
+      }
+    },
+    "controlPlaneUrl": {
+      "type": "string",
+      "defaultValue": "https://api.catalyst.msft.ae",
+      "metadata": {
+        "description": "Cortex control-plane API base URL."
+      }
+    },
+    "cortexApiScope": {
+      "type": "string",
+      "defaultValue": "api://33e1686e-d227-454a-9974-4978c567720b",
+      "metadata": {
+        "description": "Entra scope/resource for the Cortex control-plane API."
+      }
+    },
+    "plan": {
+      "type": "string",
+      "defaultValue": "enterprise",
+      "allowedValues": [
+        "team",
+        "enterprise",
+        "sovereign"
+      ],
+      "metadata": {
+        "description": "Plan tier."
+      }
+    },
+    "foundryAccountName": {
+      "type": "string",
+      "defaultValue": "[format('cortex-ai-{0}', uniqueString(resourceGroup().id))]",
+      "metadata": {
+        "description": "Foundry account (AI Services) name — must be globally unique. Defaults to a stable per-resource-group name."
+      }
+    },
+    "foundryProjectName": {
+      "type": "string",
+      "defaultValue": "agents-prod",
+      "metadata": {
+        "description": "Foundry project name the reconciler converges agents into."
+      }
+    },
+    "modelDeploymentName": {
+      "type": "string",
+      "defaultValue": "gpt-4o",
+      "metadata": {
+        "description": "Model deployment name agents reference as their model."
+      }
+    },
+    "modelName": {
+      "type": "string",
+      "defaultValue": "gpt-4o",
+      "metadata": {
+        "description": "Model to deploy for agents."
+      }
+    },
+    "modelVersion": {
+      "type": "string",
+      "defaultValue": "2024-11-20",
+      "metadata": {
+        "description": "Model version."
+      }
+    },
+    "modelSkuName": {
+      "type": "string",
+      "defaultValue": "GlobalStandard",
+      "metadata": {
+        "description": "Model deployment SKU (throughput type)."
+      }
+    },
+    "modelCapacity": {
+      "type": "int",
+      "defaultValue": 30,
+      "metadata": {
+        "description": "Model capacity, in thousands of tokens-per-minute. Foundry recommends >= 30 for agents/tools."
+      }
+    },
+    "embeddingDeploymentName": {
+      "type": "string",
+      "defaultValue": "text-embedding-3-small",
+      "metadata": {
+        "description": "Embedding model deployment name — required by memory stores to index memories."
+      }
+    },
+    "embeddingModelName": {
+      "type": "string",
+      "defaultValue": "text-embedding-3-small",
+      "metadata": {
+        "description": "Embedding model to deploy for memory stores."
+      }
+    },
+    "embeddingModelVersion": {
+      "type": "string",
+      "defaultValue": "1",
+      "metadata": {
+        "description": "Embedding model version."
+      }
+    },
+    "embeddingSkuName": {
+      "type": "string",
+      "defaultValue": "Standard",
+      "metadata": {
+        "description": "Embedding deployment SKU (throughput type)."
+      }
+    },
+    "embeddingCapacity": {
+      "type": "int",
+      "defaultValue": 30,
+      "metadata": {
+        "description": "Embedding capacity, in thousands of tokens-per-minute."
+      }
+    },
+    "deployCluster": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Deploy an AKS cluster for the tenant so the reconciler can bootstrap Argo CD and run Helm/GitOps workloads."
+      }
+    },
+    "clusterName": {
+      "type": "string",
+      "defaultValue": "cortex-aks",
+      "metadata": {
+        "description": "AKS cluster name."
+      }
+    },
+    "kubernetesVersion": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Kubernetes version (blank = the AKS default for the region)."
+      }
+    },
+    "nodeVmSize": {
+      "type": "string",
+      "defaultValue": "Standard_D2s_v5",
+      "metadata": {
+        "description": "AKS system node pool VM size."
+      }
+    },
+    "nodeCount": {
+      "type": "int",
+      "defaultValue": 2,
+      "minValue": 1,
+      "metadata": {
+        "description": "AKS system node count."
+      }
+    },
+    "argocdVersion": {
+      "type": "string",
+      "defaultValue": "v2.13.2",
+      "metadata": {
+        "description": "Argo CD version the reconciler bootstraps into the cluster."
+      }
+    },
+    "ingressTlsCredentialName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Name of the Kubernetes TLS secret (in the cortex-ingress namespace) the Envoy ingress terminates HTTPS from. Empty = HTTP only (JWT auth still enforced)."
+      }
+    },
+    "reconcilerImage": {
+      "type": "string",
+      "defaultValue": "ghcr.io/inception42/cortex-reconciler:latest",
+      "metadata": {
+        "description": "Reconciler container image (published by Cortex, or your own registry)."
+      }
+    },
+    "registryServer": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Private registry server for the reconciler image (e.g. myacr.azurecr.io). Empty = a public image pulled without auth. When set, the reconciler identity pulls with its own identity and needs AcrPull on the registry."
+      }
+    },
+    "reconcilerVersion": {
+      "type": "string",
+      "defaultValue": "0.1.0",
+      "metadata": {
+        "description": "Reconciler build/release version reported to the control plane (match the image tag)."
+      }
+    },
+    "pollIntervalSeconds": {
+      "type": "int",
+      "defaultValue": 30,
+      "minValue": 10,
+      "maxValue": 300,
+      "metadata": {
+        "description": "Reconcile + heartbeat interval, in seconds."
+      }
+    },
+    "deployReconcilerApp": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Deploy the in-Azure reconciler container app. Set false to deploy only the Foundry backing (account/project/model + identity + RBAC) and run the reconciler elsewhere — e.g. locally."
+      }
+    }
+  },
+  "variables": {
+    "prefix": "cortex",
+    "tenantId": "[tenant().tenantId]",
+    "subscriptionId": "[subscription().subscriptionId]",
+    "foundryProjectEndpoint": "[format('https://{0}.services.ai.azure.com/api/projects/{1}', parameters('foundryAccountName'), parameters('foundryProjectName'))]",
+    "foundryProjectDisplay": "[format('{0}/{1}', parameters('foundryAccountName'), parameters('foundryProjectName'))]",
+    "foundryUserRoleId": "53ca6127-db72-4b80-b1b0-d745d6d5456d",
+    "aksRbacClusterAdminRoleId": "b1ff04bb-8a4e-4dc4-8eb5-8693973ce19b",
+    "aksClusterUserRoleId": "4abbcc35-e782-43d8-92c5-2d3f1bd2253f"
+  },
+  "resources": [
+    {
+      "condition": "[parameters('deployReconcilerApp')]",
+      "type": "Microsoft.OperationalInsights/workspaces",
+      "apiVersion": "2023-09-01",
+      "name": "[format('{0}-recon-logs', variables('prefix'))]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "sku": {
+          "name": "PerGB2018"
+        },
+        "retentionInDays": 30
+      }
+    },
+    {
+      "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+      "apiVersion": "2023-01-31",
+      "name": "[format('{0}-recon', variables('prefix'))]",
+      "location": "[parameters('location')]"
+    },
+    {
+      "type": "Microsoft.CognitiveServices/accounts",
+      "apiVersion": "2026-05-01",
+      "name": "[parameters('foundryAccountName')]",
+      "location": "[parameters('location')]",
+      "kind": "AIServices",
+      "sku": {
+        "name": "S0"
+      },
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {
+        "customSubDomainName": "[parameters('foundryAccountName')]",
+        "allowProjectManagement": true,
+        "publicNetworkAccess": "Enabled",
+        "disableLocalAuth": true
+      }
+    },
+    {
+      "type": "Microsoft.CognitiveServices/accounts/projects",
+      "apiVersion": "2026-05-01",
+      "name": "[format('{0}/{1}', parameters('foundryAccountName'), parameters('foundryProjectName'))]",
+      "location": "[parameters('location')]",
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {
+        "displayName": "[parameters('foundryProjectName')]",
+        "description": "[format('Cortex-managed agents for {0}', parameters('tenantName'))]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.CognitiveServices/accounts', parameters('foundryAccountName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.CognitiveServices/accounts/deployments",
+      "apiVersion": "2024-10-01",
+      "name": "[format('{0}/{1}', parameters('foundryAccountName'), parameters('modelDeploymentName'))]",
+      "sku": {
+        "name": "[parameters('modelSkuName')]",
+        "capacity": "[parameters('modelCapacity')]"
+      },
+      "properties": {
+        "model": {
+          "format": "OpenAI",
+          "name": "[parameters('modelName')]",
+          "version": "[parameters('modelVersion')]"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.CognitiveServices/accounts', parameters('foundryAccountName'))]",
+        "[resourceId('Microsoft.CognitiveServices/accounts/projects', parameters('foundryAccountName'), parameters('foundryProjectName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.CognitiveServices/accounts/deployments",
+      "apiVersion": "2024-10-01",
+      "name": "[format('{0}/{1}', parameters('foundryAccountName'), parameters('embeddingDeploymentName'))]",
+      "sku": {
+        "name": "[parameters('embeddingSkuName')]",
+        "capacity": "[parameters('embeddingCapacity')]"
+      },
+      "properties": {
+        "model": {
+          "format": "OpenAI",
+          "name": "[parameters('embeddingModelName')]",
+          "version": "[parameters('embeddingModelVersion')]"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.CognitiveServices/accounts', parameters('foundryAccountName'))]",
+        "[resourceId('Microsoft.CognitiveServices/accounts/deployments', parameters('foundryAccountName'), parameters('modelDeploymentName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.CognitiveServices/accounts', parameters('foundryAccountName'))]",
+      "name": "[guid(resourceId('Microsoft.CognitiveServices/accounts', parameters('foundryAccountName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix'))), variables('foundryUserRoleId'))]",
+      "properties": {
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('foundryUserRoleId'))]",
+        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix'))), '2023-01-31').principalId]",
+        "principalType": "ServicePrincipal"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.CognitiveServices/accounts', parameters('foundryAccountName'))]",
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.CognitiveServices/accounts/projects', parameters('foundryAccountName'), parameters('foundryProjectName'))]",
+      "name": "[guid(resourceId('Microsoft.CognitiveServices/accounts/projects', parameters('foundryAccountName'), parameters('foundryProjectName')), variables('foundryUserRoleId'), 'project-mi')]",
+      "properties": {
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('foundryUserRoleId'))]",
+        "principalId": "[reference(resourceId('Microsoft.CognitiveServices/accounts/projects', parameters('foundryAccountName'), parameters('foundryProjectName')), '2026-05-01', 'full').identity.principalId]",
+        "principalType": "ServicePrincipal"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.CognitiveServices/accounts/projects', parameters('foundryAccountName'), parameters('foundryProjectName'))]"
+      ]
+    },
+    {
+      "condition": "[parameters('deployCluster')]",
+      "type": "Microsoft.ContainerService/managedClusters",
+      "apiVersion": "2024-09-01",
+      "name": "[parameters('clusterName')]",
+      "location": "[parameters('location')]",
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {
+        "dnsPrefix": "[parameters('clusterName')]",
+        "kubernetesVersion": "[if(empty(parameters('kubernetesVersion')), null(), parameters('kubernetesVersion'))]",
+        "enableRBAC": true,
+        "disableLocalAccounts": true,
+        "aadProfile": {
+          "managed": true,
+          "enableAzureRBAC": true,
+          "tenantID": "[variables('tenantId')]"
+        },
+        "agentPoolProfiles": [
+          {
+            "name": "system",
+            "mode": "System",
+            "count": "[parameters('nodeCount')]",
+            "vmSize": "[parameters('nodeVmSize')]",
+            "osType": "Linux",
+            "osSKU": "AzureLinux",
+            "type": "VirtualMachineScaleSets"
+          }
+        ]
+      }
+    },
+    {
+      "condition": "[parameters('deployCluster')]",
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.ContainerService/managedClusters', parameters('clusterName'))]",
+      "name": "[guid(parameters('clusterName'), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix'))), variables('aksRbacClusterAdminRoleId'))]",
+      "properties": {
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('aksRbacClusterAdminRoleId'))]",
+        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix'))), '2023-01-31').principalId]",
+        "principalType": "ServicePrincipal"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ContainerService/managedClusters', parameters('clusterName'))]",
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix')))]"
+      ]
+    },
+    {
+      "condition": "[parameters('deployCluster')]",
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.ContainerService/managedClusters', parameters('clusterName'))]",
+      "name": "[guid(parameters('clusterName'), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix'))), variables('aksClusterUserRoleId'))]",
+      "properties": {
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('aksClusterUserRoleId'))]",
+        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix'))), '2023-01-31').principalId]",
+        "principalType": "ServicePrincipal"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ContainerService/managedClusters', parameters('clusterName'))]",
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix')))]"
+      ]
+    },
+    {
+      "condition": "[parameters('deployReconcilerApp')]",
+      "type": "Microsoft.App/managedEnvironments",
+      "apiVersion": "2024-03-01",
+      "name": "[format('{0}-recon-env', variables('prefix'))]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "appLogsConfiguration": {
+          "destination": "log-analytics",
+          "logAnalyticsConfiguration": {
+            "customerId": "[reference(resourceId('Microsoft.OperationalInsights/workspaces', format('{0}-recon-logs', variables('prefix'))), '2023-09-01').customerId]",
+            "sharedKey": "[listKeys(resourceId('Microsoft.OperationalInsights/workspaces', format('{0}-recon-logs', variables('prefix'))), '2023-09-01').primarySharedKey]"
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces', format('{0}-recon-logs', variables('prefix')))]"
+      ]
+    },
+    {
+      "condition": "[parameters('deployReconcilerApp')]",
+      "type": "Microsoft.App/containerApps",
+      "apiVersion": "2024-03-01",
+      "name": "[format('{0}-reconciler', variables('prefix'))]",
+      "location": "[parameters('location')]",
+      "identity": {
+        "type": "UserAssigned",
+        "userAssignedIdentities": {
+          "[format('{0}', resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix'))))]": {}
+        }
+      },
+      "properties": {
+        "managedEnvironmentId": "[resourceId('Microsoft.App/managedEnvironments', format('{0}-recon-env', variables('prefix')))]",
+        "configuration": {
+          "activeRevisionsMode": "Single",
+          "registries": "[if(empty(parameters('registryServer')), createArray(), createArray(createObject('server', parameters('registryServer'), 'identity', resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix'))))))]"
+        },
+        "template": {
+          "containers": [
+            {
+              "name": "reconciler",
+              "image": "[parameters('reconcilerImage')]",
+              "resources": {
+                "cpu": "[json('0.25')]",
+                "memory": "0.5Gi"
+              },
+              "env": [
+                {
+                  "name": "CONTROL_PLANE_URL",
+                  "value": "[parameters('controlPlaneUrl')]"
+                },
+                {
+                  "name": "CORTEX_API_SCOPE",
+                  "value": "[parameters('cortexApiScope')]"
+                },
+                {
+                  "name": "AZURE_CLIENT_ID",
+                  "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix'))), '2023-01-31').clientId]"
+                },
+                {
+                  "name": "TENANT_ID",
+                  "value": "[variables('tenantId')]"
+                },
+                {
+                  "name": "TENANT_NAME",
+                  "value": "[parameters('tenantName')]"
+                },
+                {
+                  "name": "AZURE_REGION",
+                  "value": "[parameters('location')]"
+                },
+                {
+                  "name": "AZURE_SUBSCRIPTION_ID",
+                  "value": "[variables('subscriptionId')]"
+                },
+                {
+                  "name": "FOUNDRY_PROJECT",
+                  "value": "[variables('foundryProjectDisplay')]"
+                },
+                {
+                  "name": "FOUNDRY_PROJECT_ENDPOINT",
+                  "value": "[variables('foundryProjectEndpoint')]"
+                },
+                {
+                  "name": "RECONCILER_IDENTITY",
+                  "value": "[format('{0}-recon', variables('prefix'))]"
+                },
+                {
+                  "name": "RECONCILER_VERSION",
+                  "value": "[parameters('reconcilerVersion')]"
+                },
+                {
+                  "name": "PLAN",
+                  "value": "[parameters('plan')]"
+                },
+                {
+                  "name": "POLL_INTERVAL_SECONDS",
+                  "value": "[string(parameters('pollIntervalSeconds'))]"
+                },
+                {
+                  "name": "CLUSTER_ENABLED",
+                  "value": "[string(parameters('deployCluster'))]"
+                },
+                {
+                  "name": "CLUSTER_NAME",
+                  "value": "[parameters('clusterName')]"
+                },
+                {
+                  "name": "CLUSTER_RESOURCE_GROUP",
+                  "value": "[resourceGroup().name]"
+                },
+                {
+                  "name": "ARGOCD_VERSION",
+                  "value": "[parameters('argocdVersion')]"
+                },
+                {
+                  "name": "INGRESS_TLS_CREDENTIAL_NAME",
+                  "value": "[parameters('ingressTlsCredentialName')]"
+                }
+              ]
+            }
+          ],
+          "scale": {
+            "minReplicas": 1,
+            "maxReplicas": 1
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.CognitiveServices/accounts/deployments', parameters('foundryAccountName'), parameters('embeddingDeploymentName'))]",
+        "[resourceId('Microsoft.App/managedEnvironments', format('{0}-recon-env', variables('prefix')))]",
+        "[extensionResourceId(resourceId('Microsoft.CognitiveServices/accounts', parameters('foundryAccountName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.CognitiveServices/accounts', parameters('foundryAccountName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix'))), variables('foundryUserRoleId')))]",
+        "[resourceId('Microsoft.CognitiveServices/accounts/deployments', parameters('foundryAccountName'), parameters('modelDeploymentName'))]",
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix')))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "reconcilerPrincipalId": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix'))), '2023-01-31').principalId]"
+    },
+    "reconcilerClientId": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix'))), '2023-01-31').clientId]"
+    },
+    "reconcilerIdentity": {
+      "type": "string",
+      "value": "[format('{0}-recon', variables('prefix'))]"
+    },
+    "tenantId": {
+      "type": "string",
+      "value": "[variables('tenantId')]"
+    },
+    "subscriptionId": {
+      "type": "string",
+      "value": "[variables('subscriptionId')]"
+    },
+    "foundryAccountName": {
+      "type": "string",
+      "value": "[parameters('foundryAccountName')]"
+    },
+    "foundryProjectName": {
+      "type": "string",
+      "value": "[parameters('foundryProjectName')]"
+    },
+    "foundryProjectEndpoint": {
+      "type": "string",
+      "value": "[variables('foundryProjectEndpoint')]"
+    }
+  }
+}

@@ -33,30 +33,58 @@ const (
 	stateFailed       = "failed"
 )
 
-// Provisioner deploys deployment infra cross-tenant via Lighthouse.
+// Provisioner drives all cross-tenant Azure work from the control plane, via
+// Azure Lighthouse: it discovers newly-delegated subscriptions, provisions the
+// per-tenant footprint (reconciler + Foundry + AKS) into enabled tenants, and
+// provisions each deployment's application infra.
 type Provisioner struct {
 	cred  azcore.TokenCredential
 	http  *http.Client
-	rg    string
 	store *store.Store
+
+	managingTenantID string // the Cortex platform tenant (filters delegated subs)
+	infraRG          string // RG for per-deployment application infra
+	footprintRG      string // RG for the per-tenant footprint
+	region           string // region for created resource groups
+	controlPlaneURL  string // reconciler → control plane
+	apiScope         string // Entra scope for the control-plane API
+	reconcilerImage  string // reconciler container image
+}
+
+// Config is the platform Azure service principal + footprint parameters.
+type Config struct {
+	TenantID           string
+	ClientID           string
+	ClientSecret       string
+	InfraResourceGroup string
+	FootprintRG        string
+	Region             string
+	ControlPlaneURL    string
+	APIScope           string
+	ReconcilerImage    string
 }
 
 // New builds a Provisioner, or (nil, nil) when no platform Azure service principal
-// is configured — in which case infra provisioning is simply disabled and any
-// deployment that declares infra stays held (never served to a reconciler).
-func New(st *store.Store, tenantID, clientID, clientSecret, resourceGroup string) (*Provisioner, error) {
-	if tenantID == "" || clientID == "" || clientSecret == "" {
+// is configured — in which case all cross-tenant provisioning is disabled.
+func New(st *store.Store, cfg Config) (*Provisioner, error) {
+	if cfg.TenantID == "" || cfg.ClientID == "" || cfg.ClientSecret == "" {
 		return nil, nil
 	}
-	cred, err := azidentity.NewClientSecretCredential(tenantID, clientID, clientSecret, nil)
+	cred, err := azidentity.NewClientSecretCredential(cfg.TenantID, cfg.ClientID, cfg.ClientSecret, nil)
 	if err != nil {
 		return nil, err
 	}
 	return &Provisioner{
-		cred:  cred,
-		http:  &http.Client{Timeout: 60 * time.Second},
-		rg:    resourceGroup,
-		store: st,
+		cred:             cred,
+		http:             &http.Client{Timeout: 90 * time.Second},
+		store:            st,
+		managingTenantID: cfg.TenantID,
+		infraRG:          cfg.InfraResourceGroup,
+		footprintRG:      cfg.FootprintRG,
+		region:           cfg.Region,
+		controlPlaneURL:  cfg.ControlPlaneURL,
+		apiScope:         cfg.APIScope,
+		reconcilerImage:  cfg.ReconcilerImage,
 	}, nil
 }
 
@@ -76,6 +104,11 @@ func (p *Provisioner) Run(ctx context.Context, every time.Duration) {
 }
 
 func (p *Provisioner) reconcile(ctx context.Context) {
+	// 1. Discover delegated subscriptions → register (disabled) tenants.
+	p.discover(ctx)
+	// 2. Provision the footprint into ENABLED tenants that don't have it yet.
+	p.provisionFootprints(ctx)
+	// 3. Provision each enabled deployment's application infra.
 	targets, err := p.store.InfraTargets(ctx)
 	if err != nil {
 		slog.Warn("infra: list targets failed", "err", err)
@@ -91,7 +124,7 @@ func (p *Provisioner) reconcile(ctx context.Context) {
 // deployment is recorded failed. A submit error is left to retry next sweep.
 func (p *Provisioner) ensure(ctx context.Context, tgt store.InfraTarget) {
 	name := deploymentName(tgt.AppID)
-	if outs, pstate, found := p.outputs(ctx, tgt.SubscriptionID, name); found {
+	if outs, pstate, found := p.deploymentState(ctx, p.deploymentURL(tgt.SubscriptionID, name)); found {
 		switch {
 		case strings.EqualFold(pstate, "Succeeded"):
 			_ = p.store.SetInfraState(ctx, tgt.TenantSlug, tgt.AppID, stateReady, outs)
@@ -118,26 +151,7 @@ func (p *Provisioner) ensure(ctx context.Context, tgt store.InfraTarget) {
 func (p *Provisioner) deploymentURL(sub, name string) string {
 	return fmt.Sprintf(
 		"https://management.azure.com/subscriptions/%s/resourceGroups/%s/providers/Microsoft.Resources/deployments/%s?api-version=%s",
-		sub, p.rg, name, infraAPIVersion)
-}
-
-// outputs reads a deployment's provisioning state + outputs (found=false when it
-// doesn't exist yet). Output values keep their JSON type.
-func (p *Provisioner) outputs(ctx context.Context, sub, name string) (map[string]any, string, bool) {
-	var body struct {
-		Properties struct {
-			ProvisioningState string                         `json:"provisioningState"`
-			Outputs           map[string]struct{ Value any } `json:"outputs"`
-		} `json:"properties"`
-	}
-	if err := p.arm(ctx, http.MethodGet, p.deploymentURL(sub, name), nil, &body); err != nil {
-		return nil, "", false
-	}
-	outs := make(map[string]any, len(body.Properties.Outputs))
-	for k, v := range body.Properties.Outputs {
-		outs[k] = v.Value
-	}
-	return outs, body.Properties.ProvisioningState, true
+		sub, p.infraRG, name, infraAPIVersion)
 }
 
 func (p *Provisioner) submit(ctx context.Context, sub, name string, template map[string]any) error {

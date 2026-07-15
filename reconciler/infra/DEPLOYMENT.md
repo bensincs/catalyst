@@ -1,5 +1,12 @@
 # Cortex reconciler — direct deployment
 
+> **Primary onboarding is now a single Azure Lighthouse delegation** — see
+> [`../../onboarding/lighthouse-delegation.bicep`](../../onboarding/lighthouse-delegation.bicep)
+> and [`../../LIGHTHOUSE-ONBOARDING.md`](../../LIGHTHOUSE-ONBOARDING.md). After the customer delegates,
+> the Cortex control plane provisions this whole footprint (`main.bicep`) into their subscription
+> automatically. This guide is the **manual / dev / sovereign** path: deploy the footprint yourself
+> instead of letting the control plane do it.
+
 The reconciler normally ships as an **Azure Marketplace Managed Application**
 ([`main.bicep`](./main.bicep) + [`createUiDefinition.json`](./createUiDefinition.json)):
 a customer installs it into their own subscription and it runs in their tenant.

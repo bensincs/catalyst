@@ -1,11 +1,14 @@
 # Cortex — Lighthouse onboarding & the infra/data-plane split
 
-**Status:** Design + verification spike (no product code changed yet)
-**Decision:** Provision Azure **infrastructure from the control plane via Azure Lighthouse**; keep a
-**thin in-tenant reconciler for the data-plane** (Foundry agents/memory + in-cluster GitOps).
+**Status:** Implemented (control-plane provisioning; live cross-tenant path untested).
+**Model:** Onboarding is a **single subscription-wide Azure Lighthouse delegation**. The control plane
+then provisions **everything** cross-tenant — the reconciler + Foundry + AKS footprint into each enabled
+tenant, and every deployment's application infra. The reconciler still *runs* in-tenant for the Foundry
+**data plane** (which Lighthouse can't delegate); it's just deployed by the control plane, not the customer.
 
-This supersedes the earlier "move app Bicep infra to the control plane" note — that becomes **step one** of
-this onboarding architecture.
+> Earlier revisions of this doc scoped Lighthouse to app-infra only (RG-scoped). It's now the whole
+> footprint (subscription-scoped Contributor + a limited User Access Administrator for the reconciler
+> identity's role grants). The delegation Bicep + control-plane worker reflect this.
 
 ---
 
