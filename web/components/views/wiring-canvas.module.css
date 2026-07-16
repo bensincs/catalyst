@@ -203,6 +203,18 @@
   font-weight: 500;
 }
 
+.reqBadge {
+  flex: none;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--warning-ink, var(--warning));
+  background: var(--warning-bg);
+  border-radius: var(--radius-full);
+  padding: 1px 7px;
+}
+
 .nodeTag {
   flex: none;
   display: inline-flex;

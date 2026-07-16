@@ -149,7 +149,11 @@ export function DeploymentForm({
 
   const hasChart = repoURL.trim() !== "" && chart.trim() !== "";
   const hasModule = bicepModule.trim() !== "";
-  const valid = name.trim().length >= 2 && hasChart;
+  // A resolved module's required inputs must be set, or the save-time `bicep build`
+  // fails (BCP035). paramValues only holds inputs that were given a value.
+  const requiredParams = inspect.params.filter((p) => p.required).map((p) => p.name);
+  const missingRequired = requiredParams.filter((n) => !(n in paramValues));
+  const valid = name.trim().length >= 2 && hasChart && missingRequired.length === 0;
 
   const toggleDep = (id: string) =>
     setDependsOn((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
@@ -302,6 +306,7 @@ export function DeploymentForm({
           >
             <WiringCanvas
               targets={paramNames}
+              requiredTargets={requiredParams}
               allowAddTarget
               sourceLabel="Static inputs"
               targetLabel="Bicep inputs"
@@ -315,6 +320,12 @@ export function DeploymentForm({
                 setParamValues(params);
               }}
             />
+            {missingRequired.length > 0 && (
+              <p className={styles.reqWarn}>
+                {missingRequired.length} required input{missingRequired.length === 1 ? "" : "s"} still unset — wire a value into{" "}
+                <span className="mono">{missingRequired.join(", ")}</span> before saving.
+              </p>
+            )}
           </Section>
         )}
 

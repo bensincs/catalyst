@@ -55,6 +55,7 @@ export function WiringCanvas({
   outputs = NONE,
   targets,
   suggestions = NONE,
+  requiredTargets = NONE,
   allowAddTarget = true,
   sourceLabel = "Sources",
   targetLabel = "Values",
@@ -67,6 +68,7 @@ export function WiringCanvas({
   outputs?: string[];
   targets: string[];
   suggestions?: string[];
+  requiredTargets?: string[];
   allowAddTarget?: boolean;
   sourceLabel?: string;
   targetLabel?: string;
@@ -94,6 +96,7 @@ export function WiringCanvas({
   const listId = useRef(`wire-${Math.random().toString(36).slice(2, 7)}`).current;
 
   const chartSet = useMemo(() => new Set(targets), [targets]);
+  const requiredSet = useMemo(() => new Set(requiredTargets), [requiredTargets]);
   const allTargets = useMemo(() => Array.from(new Set([...targets, ...extraPaths])), [targets, extraPaths]);
 
   // Auto-order the targets so each wired target sits at ~the same row as its
@@ -382,6 +385,7 @@ export function WiringCanvas({
                   >
                     <span className={styles.port} aria-hidden />
                     <span className={`${styles.nodeLabel} mono`}>{p}</span>
+                    {requiredSet.has(p) && !pathWired(p) && <span className={styles.reqBadge}>required</span>}
                     {custom && (
                       <button
                         type="button"

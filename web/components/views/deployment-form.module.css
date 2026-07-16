@@ -190,6 +190,12 @@
   color: var(--danger-ink, var(--danger));
   margin: 4px 0 0;
 }
+.reqWarn {
+  font-size: var(--text-caption);
+  color: var(--warning-ink, var(--warning));
+  line-height: 1.5;
+  margin: 2px 0 0;
+}
 
 /* ── Deploy-after chips ─────────────────────────────────────────────────── */
 .depGrid {
