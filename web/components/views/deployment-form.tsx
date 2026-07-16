@@ -95,10 +95,14 @@ export function DeploymentForm({
     let cancelled = false;
     setInspect((s) => ({ ...s, loading: true, error: undefined }));
     const t = setTimeout(async () => {
-      const r = await inspectModule(ref);
-      if (cancelled) return;
-      if (r.ok) setInspect({ loading: false, resolved: r.resolved, params: r.params, outputs: r.outputs });
-      else setInspect({ loading: false, resolved: false, params: [], outputs: [], error: r.error });
+      try {
+        const r = await inspectModule(ref);
+        if (cancelled) return;
+        if (r.ok) setInspect({ loading: false, resolved: r.resolved, params: r.params, outputs: r.outputs });
+        else setInspect({ loading: false, resolved: false, params: [], outputs: [], error: r.error });
+      } catch {
+        if (!cancelled) setInspect({ loading: false, resolved: false, params: [], outputs: [], error: "Couldn't inspect the module." });
+      }
     }, 500);
     return () => {
       cancelled = true;
@@ -116,10 +120,17 @@ export function DeploymentForm({
     let cancelled = false;
     setChartLoading(true);
     const t = setTimeout(async () => {
-      const r = await inspectChart(repo, c, targetRevision.trim());
-      if (cancelled) return;
-      setChartLoading(false);
-      setHelmPaths(r.ok && r.resolved && r.iface ? flattenPaths(r.iface.defaults) : []);
+      try {
+        const r = await inspectChart(repo, c, targetRevision.trim());
+        if (cancelled) return;
+        setChartLoading(false);
+        setHelmPaths(r.ok && r.resolved && r.iface ? flattenPaths(r.iface.defaults) : []);
+      } catch {
+        if (!cancelled) {
+          setChartLoading(false);
+          setHelmPaths([]);
+        }
+      }
     }, 600);
     return () => {
       cancelled = true;
