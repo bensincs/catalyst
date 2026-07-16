@@ -54,11 +54,11 @@ param foundryProjectName string = 'agents-prod'
 @description('Model deployment name agents reference as their model.')
 param modelDeploymentName string = 'gpt-4o'
 
-@description('Chat model to deploy. gpt-4o versions are being retired for new deployments; gpt-4.1 is current. The deployment NAME stays gpt-4o (modelDeploymentName) so existing agents/stores keep resolving.')
-param modelName string = 'gpt-4.1'
+@description('Chat model to deploy. Must be a currently-deployable (GenerallyAvailable) model — gpt-4o/gpt-4.1 are retired for new deployments in this region. The deployment NAME stays gpt-4o (modelDeploymentName) so existing agents/stores keep resolving.')
+param modelName string = 'gpt-5'
 
-@description('Chat model version, pinned to a currently-deployable version. Empty lets Azure pick the model default.')
-param modelVersion string = '2025-04-14'
+@description('Chat model version. Must be a currently-deployable version of modelName.')
+param modelVersion string = '2025-08-07'
 
 @description('Model deployment SKU (throughput type).')
 param modelSkuName string = 'GlobalStandard'
