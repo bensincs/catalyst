@@ -285,13 +285,44 @@ func build(ctx context.Context, dir, source string) (string, error) {
 		return "", err
 	}
 	if b, err := cmd.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("bicep build failed: %s", strings.TrimSpace(string(b)))
+		return "", fmt.Errorf("%s", cleanBicepError(string(b)))
 	}
 	arm, err := os.ReadFile(out)
 	if err != nil {
 		return "", err
 	}
 	return string(arm), nil
+}
+
+// cleanBicepError distills raw bicep CLI output (upgrade warnings, temp-file
+// paths, doc-link suffixes) down to the meaningful error, so callers can surface
+// a readable message. The synthetic wrapper's BCP035 on "params" specifically
+// means the module has required inputs that weren't provided.
+func cleanBicepError(raw string) string {
+	var out []string
+	for _, ln := range strings.Split(raw, "\n") {
+		ln = strings.TrimSpace(ln)
+		if ln == "" || strings.HasPrefix(ln, "WARNING") {
+			continue
+		}
+		if strings.Contains(ln, "BCP035") && strings.Contains(ln, `"params"`) {
+			return "this module has required inputs that aren't set"
+		}
+		if i := strings.Index(ln, "Error "); i >= 0 { // drop the "<path>(l,c) : " prefix
+			ln = ln[i:]
+		}
+		if j := strings.Index(ln, " [https://"); j >= 0 { // drop the aka.ms doc link
+			ln = ln[:j]
+		}
+		ln = strings.TrimPrefix(ln, "ERROR: ")
+		if ln != "" {
+			out = append(out, ln)
+		}
+	}
+	if len(out) == 0 {
+		return strings.TrimSpace(raw)
+	}
+	return strings.Join(out, "; ")
 }
 
 func compileCmd(ctx context.Context, in, out string) (*exec.Cmd, error) {
@@ -358,7 +389,7 @@ func Inspect(ctx context.Context, ref string) ([]ParamSpec, []OutputSpec, error)
 		return nil, nil, err
 	}
 	if b, err := cmd.CombinedOutput(); err != nil {
-		return nil, nil, fmt.Errorf("bicep restore failed: %s", strings.TrimSpace(string(b)))
+		return nil, nil, fmt.Errorf("%s", cleanBicepError(string(b)))
 	}
 	arm, err := readCachedModule(s)
 	if err != nil {
