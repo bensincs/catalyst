@@ -20,10 +20,42 @@ import (
 var footprintTemplate []byte
 
 const (
-	subsAPIVersion = "2022-12-01" // Microsoft.Resources subscriptions
-	rgAPIVersion   = "2021-04-01" // Microsoft.Resources/resourceGroups
-	footprintName  = "cortex-footprint"
+	subsAPIVersion      = "2022-12-01" // Microsoft.Resources subscriptions
+	rgAPIVersion        = "2021-04-01" // Microsoft.Resources/resourceGroups
+	providersAPIVersion = "2021-04-01" // Microsoft.Resources/providers
+	footprintName       = "cortex-footprint"
 )
+
+// footprintProviders are the resource providers the footprint (and the AKS
+// node resources it creates) need registered in a delegated subscription.
+// Cross-tenant deployments fail pre-flight ("The following resource provider(s)
+// … are not registered") until they are — and a freshly-delegated customer sub
+// usually hasn't registered them. Contributor (granted by the Lighthouse
+// delegation) can register them, so the control plane does it itself rather than
+// asking the customer to. Registering an already-registered provider is a no-op.
+var footprintProviders = []string{
+	"Microsoft.CognitiveServices",   // Foundry account/project/deployments
+	"Microsoft.ContainerService",    // AKS
+	"Microsoft.App",                 // reconciler container app + environment
+	"Microsoft.ManagedIdentity",     // reconciler user-assigned identity
+	"Microsoft.OperationalInsights", // Log Analytics (container app env)
+	"Microsoft.Compute",             // AKS node VMSS
+	"Microsoft.Network",             // AKS networking
+	"Microsoft.Storage",             // AKS/agent storage
+}
+
+// registerProviders registers the footprint's resource providers in the
+// subscription (idempotent, best-effort). ARM registration is asynchronous —
+// a provider moves Registering → Registered within seconds — so a submit in the
+// same sweep may still be rejected; the next sweep then succeeds.
+func (p *Provisioner) registerProviders(ctx context.Context, sub string) {
+	for _, ns := range footprintProviders {
+		url := fmt.Sprintf("https://management.azure.com/subscriptions/%s/providers/%s/register?api-version=%s", sub, ns, providersAPIVersion)
+		if err := p.arm(ctx, http.MethodPost, url, nil, nil); err != nil {
+			slog.Warn("provision: register provider failed", "sub", sub, "provider", ns, "err", trunc(err.Error()))
+		}
+	}
+}
 
 // discover lists the subscriptions delegated to the Cortex platform tenant via
 // Lighthouse and registers each as a (disabled) tenant, recording its
@@ -114,6 +146,9 @@ func (p *Provisioner) ensureFootprint(ctx context.Context, t store.FootprintTarg
 		}
 		return
 	}
+	// A freshly delegated subscription usually hasn't registered the resource
+	// providers the footprint uses — register them (idempotent) before deploying.
+	p.registerProviders(ctx, t.SubscriptionID)
 	if err := p.createResourceGroup(ctx, t.SubscriptionID, p.footprintRG); err != nil {
 		slog.Warn("provision: create footprint RG failed", "tenant", t.Slug, "err", trunc(err.Error()))
 		return
