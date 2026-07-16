@@ -190,7 +190,7 @@ func (p *Provisioner) arm(ctx context.Context, method, url string, body []byte, 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
 		return fmt.Errorf("arm %s %d: %s", method, resp.StatusCode, strings.TrimSpace(string(b)))
 	}
 	if out != nil {

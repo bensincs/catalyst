@@ -154,7 +154,7 @@ func (p *Provisioner) ensureFootprint(ctx context.Context, t store.FootprintTarg
 		return
 	}
 	if err := p.submitFootprint(ctx, t.SubscriptionID, t.Name); err != nil {
-		slog.Warn("provision: submit footprint failed", "tenant", t.Slug, "err", trunc(err.Error()))
+		slog.Warn("provision: submit footprint failed", "tenant", t.Slug, "err", err.Error())
 		_ = p.store.SetFootprintState(ctx, t.Slug, "failed", trunc(err.Error()))
 		return
 	}
