@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.40.2.10011",
-      "templateHash": "10419887027033901385"
+      "templateHash": "11732223561627199855"
     }
   },
   "parameters": {
@@ -333,7 +333,8 @@
       "properties": {
         "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('foundryUserRoleId'))]",
         "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix'))), '2023-01-31').principalId]",
-        "principalType": "ServicePrincipal"
+        "principalType": "ServicePrincipal",
+        "delegatedManagedIdentityResourceId": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix')))]"
       },
       "dependsOn": [
         "[resourceId('Microsoft.CognitiveServices/accounts', parameters('foundryAccountName'))]",
@@ -348,7 +349,8 @@
       "properties": {
         "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('foundryUserRoleId'))]",
         "principalId": "[reference(resourceId('Microsoft.CognitiveServices/accounts/projects', parameters('foundryAccountName'), parameters('foundryProjectName')), '2026-05-01', 'full').identity.principalId]",
-        "principalType": "ServicePrincipal"
+        "principalType": "ServicePrincipal",
+        "delegatedManagedIdentityResourceId": "[resourceId('Microsoft.CognitiveServices/accounts/projects', parameters('foundryAccountName'), parameters('foundryProjectName'))]"
       },
       "dependsOn": [
         "[resourceId('Microsoft.CognitiveServices/accounts/projects', parameters('foundryAccountName'), parameters('foundryProjectName'))]"
@@ -395,7 +397,8 @@
       "properties": {
         "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('aksRbacClusterAdminRoleId'))]",
         "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix'))), '2023-01-31').principalId]",
-        "principalType": "ServicePrincipal"
+        "principalType": "ServicePrincipal",
+        "delegatedManagedIdentityResourceId": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix')))]"
       },
       "dependsOn": [
         "[resourceId('Microsoft.ContainerService/managedClusters', parameters('clusterName'))]",
@@ -411,7 +414,8 @@
       "properties": {
         "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('aksClusterUserRoleId'))]",
         "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix'))), '2023-01-31').principalId]",
-        "principalType": "ServicePrincipal"
+        "principalType": "ServicePrincipal",
+        "delegatedManagedIdentityResourceId": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix')))]"
       },
       "dependsOn": [
         "[resourceId('Microsoft.ContainerService/managedClusters', parameters('clusterName'))]",

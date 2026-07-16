@@ -231,6 +231,10 @@ resource foundryRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', foundryUserRoleId)
     principalId: reconIdentity.properties.principalId
     principalType: 'ServicePrincipal'
+    // Cross-tenant (Lighthouse) role assignment of a DELEGATED role to a managed
+    // identity requires this — the resource id of the identity being granted the
+    // role — or ARM rejects it with "Authorization failed".
+    delegatedManagedIdentityResourceId: reconIdentity.id
   }
 }
 
@@ -246,6 +250,7 @@ resource projectFoundryRoleAssignment 'Microsoft.Authorization/roleAssignments@2
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', foundryUserRoleId)
     principalId: foundryProject.identity.principalId
     principalType: 'ServicePrincipal'
+    delegatedManagedIdentityResourceId: foundryProject.id
   }
 }
 
@@ -295,6 +300,7 @@ resource aksAdminAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01'
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', aksRbacClusterAdminRoleId)
     principalId: reconIdentity.properties.principalId
     principalType: 'ServicePrincipal'
+    delegatedManagedIdentityResourceId: reconIdentity.id
   }
 }
 
@@ -305,6 +311,7 @@ resource aksUserAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' 
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', aksClusterUserRoleId)
     principalId: reconIdentity.properties.principalId
     principalType: 'ServicePrincipal'
+    delegatedManagedIdentityResourceId: reconIdentity.id
   }
 }
 
