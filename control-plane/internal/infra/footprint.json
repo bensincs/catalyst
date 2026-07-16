@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.40.2.10011",
-      "templateHash": "6018304927351022710"
+      "templateHash": "7833445259424527537"
     }
   },
   "parameters": {
@@ -71,16 +71,16 @@
     },
     "modelName": {
       "type": "string",
-      "defaultValue": "gpt-4o",
+      "defaultValue": "gpt-4.1",
       "metadata": {
-        "description": "Model to deploy for agents."
+        "description": "Chat model to deploy. gpt-4o versions are being retired for new deployments; gpt-4.1 is current. The deployment NAME stays gpt-4o (modelDeploymentName) so existing agents/stores keep resolving."
       }
     },
     "modelVersion": {
       "type": "string",
-      "defaultValue": "",
+      "defaultValue": "2025-04-14",
       "metadata": {
-        "description": "Model version. Empty lets Azure pick the current default version, avoiding failures from a deprecated pinned version."
+        "description": "Chat model version, pinned to a currently-deployable version. Empty lets Azure pick the model default."
       }
     },
     "modelSkuName": {
