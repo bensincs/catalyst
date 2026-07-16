@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.40.2.10011",
-      "templateHash": "11732223561627199855"
+      "templateHash": "6018304927351022710"
     }
   },
   "parameters": {
@@ -78,9 +78,9 @@
     },
     "modelVersion": {
       "type": "string",
-      "defaultValue": "2024-11-20",
+      "defaultValue": "",
       "metadata": {
-        "description": "Model version."
+        "description": "Model version. Empty lets Azure pick the current default version, avoiding failures from a deprecated pinned version."
       }
     },
     "modelSkuName": {
@@ -113,9 +113,9 @@
     },
     "embeddingModelVersion": {
       "type": "string",
-      "defaultValue": "1",
+      "defaultValue": "",
       "metadata": {
-        "description": "Embedding model version."
+        "description": "Embedding model version. Empty lets Azure pick the current default version."
       }
     },
     "embeddingSkuName": {
@@ -294,11 +294,7 @@
         "capacity": "[parameters('modelCapacity')]"
       },
       "properties": {
-        "model": {
-          "format": "OpenAI",
-          "name": "[parameters('modelName')]",
-          "version": "[parameters('modelVersion')]"
-        }
+        "model": "[union(createObject('format', 'OpenAI', 'name', parameters('modelName')), if(empty(parameters('modelVersion')), createObject(), createObject('version', parameters('modelVersion'))))]"
       },
       "dependsOn": [
         "[resourceId('Microsoft.CognitiveServices/accounts', parameters('foundryAccountName'))]",
@@ -314,11 +310,7 @@
         "capacity": "[parameters('embeddingCapacity')]"
       },
       "properties": {
-        "model": {
-          "format": "OpenAI",
-          "name": "[parameters('embeddingModelName')]",
-          "version": "[parameters('embeddingModelVersion')]"
-        }
+        "model": "[union(createObject('format', 'OpenAI', 'name', parameters('embeddingModelName')), if(empty(parameters('embeddingModelVersion')), createObject(), createObject('version', parameters('embeddingModelVersion'))))]"
       },
       "dependsOn": [
         "[resourceId('Microsoft.CognitiveServices/accounts', parameters('foundryAccountName'))]",

@@ -57,8 +57,8 @@ param modelDeploymentName string = 'gpt-4o'
 @description('Model to deploy for agents.')
 param modelName string = 'gpt-4o'
 
-@description('Model version.')
-param modelVersion string = '2024-11-20'
+@description('Model version. Empty lets Azure pick the current default version, avoiding failures from a deprecated pinned version.')
+param modelVersion string = ''
 
 @description('Model deployment SKU (throughput type).')
 param modelSkuName string = 'GlobalStandard'
@@ -72,8 +72,8 @@ param embeddingDeploymentName string = 'text-embedding-3-small'
 @description('Embedding model to deploy for memory stores.')
 param embeddingModelName string = 'text-embedding-3-small'
 
-@description('Embedding model version.')
-param embeddingModelVersion string = '1'
+@description('Embedding model version. Empty lets Azure pick the current default version.')
+param embeddingModelVersion string = ''
 
 @description('Embedding deployment SKU (throughput type).')
 param embeddingSkuName string = 'Standard'
@@ -193,11 +193,10 @@ resource modelDeployment 'Microsoft.CognitiveServices/accounts/deployments@2024-
     capacity: modelCapacity
   }
   properties: {
-    model: {
+    model: union({
       format: 'OpenAI'
       name: modelName
-      version: modelVersion
-    }
+    }, empty(modelVersion) ? {} : { version: modelVersion })
   }
   dependsOn: [ foundryProject ]
 }
@@ -214,11 +213,10 @@ resource embeddingDeployment 'Microsoft.CognitiveServices/accounts/deployments@2
     capacity: embeddingCapacity
   }
   properties: {
-    model: {
+    model: union({
       format: 'OpenAI'
       name: embeddingModelName
-      version: embeddingModelVersion
-    }
+    }, empty(embeddingModelVersion) ? {} : { version: embeddingModelVersion })
   }
   dependsOn: [ modelDeployment ]
 }
