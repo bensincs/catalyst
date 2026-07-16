@@ -11,6 +11,10 @@ type Line = { key: string; d: string; active: boolean };
 let seq = 0;
 const uid = () => `st${seq++}`;
 
+// Stable empty-array default: a fresh `[]` default on each render would change
+// identity every time and drive the layout effect into an infinite update loop.
+const NONE: string[] = [];
+
 function seed(initialStatic: Record<string, string>, initialWired: Record<string, string>, targets: string[]) {
   const statics: Static[] = [];
   const links: Link[] = [];
@@ -48,9 +52,9 @@ function build(statics: Static[], links: Link[]) {
  *  target to set it. Emits a target→static-text map and a target→output-name map;
  *  the parent turns those into its own fields. */
 export function WiringCanvas({
-  outputs = [],
+  outputs = NONE,
   targets,
-  suggestions = [],
+  suggestions = NONE,
   allowAddTarget = true,
   sourceLabel = "Sources",
   targetLabel = "Values",
