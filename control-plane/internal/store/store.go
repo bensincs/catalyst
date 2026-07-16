@@ -596,14 +596,7 @@ func (s *Store) DeleteMemoryStore(ctx context.Context, id string) error {
 }
 
 func (s *Store) SetStoreEntitlements(ctx context.Context, slug string, storeIDs []string) error {
-	tag, err := s.pool.Exec(ctx, `UPDATE tenants SET entitled_stores = $2 WHERE id = $1`, slug, storeIDs)
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return s.setEntitlements(ctx, slug, model.DepMemoryStore, storeIDs)
 }
 
 var ErrStoreNotAccessible = errors.New("memory store not accessible")
@@ -836,7 +829,7 @@ func (s *Store) autoEntitleStores(ctx context.Context, slug string, agentIDs []s
 
 func (s *Store) TenantsRegistry(ctx context.Context) ([]model.TenantRegistryRow, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT `+tenantCols+`, entitled_agents, entitled_stores, entitled_deployments FROM tenants WHERE is_platform = false ORDER BY name`)
+		`SELECT `+tenantCols+`, entitled_agents, entitled_stores, entitled_deployments, entitled_infrastructure FROM tenants WHERE is_platform = false ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -851,7 +844,7 @@ func (s *Store) TenantsRegistry(ctx context.Context) ([]model.TenantRegistryRow,
 			&r.SubscriptionID, &r.ReconcilerIdentity, &r.FoundryProject, &r.ReconcilerVersion, &installedAt, &r.Enabled,
 			&r.Cluster.Name, &r.Cluster.Phase, &r.Cluster.K8sVersion, &r.Cluster.ArgoInstalled, &r.Cluster.NodeCount, &r.Cluster.Detail,
 			&r.Cluster.IngressInstalled, &r.Cluster.GatewayIP, &r.Cluster.IngressIssuer, &r.Cluster.InfraDelegated, &r.Cluster.InfraDetail, &r.Cluster.FootprintState, &r.Cluster.FootprintDetail,
-			&r.EntitledAgents, &r.EntitledStores, &r.EntitledDeployments); err != nil {
+			&r.EntitledAgents, &r.EntitledStores, &r.EntitledDeployments, &r.EntitledInfrastructure); err != nil {
 			return nil, err
 		}
 		if installedAt != "" {
@@ -867,22 +860,19 @@ func (s *Store) TenantsRegistry(ctx context.Context) ([]model.TenantRegistryRow,
 		if r.EntitledDeployments == nil {
 			r.EntitledDeployments = []string{}
 		}
+		if r.EntitledInfrastructure == nil {
+			r.EntitledInfrastructure = []string{}
+		}
 		r.EntitledCount = len(r.EntitledAgents)
 		out = append(out, r)
 	}
 	return out, rows.Err()
 }
 
+// SetEntitlements sets a tenant's entitled agents, guarding removals (can't
+// un-entitle an enabled or still-depended-on agent) and cascading to deps.
 func (s *Store) SetEntitlements(ctx context.Context, slug string, agentIDs []string) error {
-	tag, err := s.pool.Exec(ctx, `UPDATE tenants SET entitled_agents = $2 WHERE id = $1`, slug, agentIDs)
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-	// Ensure the tenant is entitled to every memory store these agents need.
-	return s.autoEntitleStores(ctx, slug, agentIDs)
+	return s.setEntitlements(ctx, slug, model.DepAgent, agentIDs)
 }
 
 /* ── Enable / disable / install (tenant desired state) ──────────────────── */
@@ -929,32 +919,35 @@ func (s *Store) EnableAgent(ctx context.Context, slug, catalogAgentID string, pu
 	// reconciler pulls this, converges it in Foundry, and reports back — so a new
 	// agent starts 'reconciling' (converging), never a fabricated 'healthy'.
 	if _, err := s.pool.Exec(ctx,
-		`INSERT INTO agents (id, tenant_slug, agent_id, name, version, channel, model, health, publish_to, calls_30d, sort_order)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,'reconciling',$8,0,
+		`INSERT INTO agents (id, tenant_slug, agent_id, name, version, channel, model, health, publish_to, calls_30d, auto, sort_order)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,'reconciling',$8,0,false,
 		         coalesce((SELECT max(sort_order)+1 FROM agents WHERE tenant_slug=$2),1))
-		 ON CONFLICT (id) DO NOTHING`,
+		 ON CONFLICT (id) DO UPDATE SET auto = false`,
 		slug+":"+catalogAgentID, slug, catalogAgentID, name, version, channel, agentModel, publishTo); err != nil {
 		return err
 	}
-	// Auto-enable any memory store this agent binds to, so the reconciler
-	// provisions it alongside the agent.
-	if refs, err := s.agentStoreRefs(ctx, []string{catalogAgentID}); err != nil {
-		return err
-	} else if err := s.autoEnableStores(ctx, slug, refs); err != nil {
+	// Auto-enable the agent's dependencies (its memory store) — entitling +
+	// enabling them so the reconciler provisions them alongside the agent.
+	if err := s.autoEnableDeps(ctx, slug, model.DepAgent, catalogAgentID); err != nil {
 		return err
 	}
 	return s.recountAgents(ctx, slug)
 }
 
 func (s *Store) DisableAgent(ctx context.Context, slug, catalogAgentID string) error {
+	// Refuse while an enabled application still depends on this agent.
+	deps, err := s.enabledDependents(ctx, slug, model.DepAgent, catalogAgentID)
+	if err != nil {
+		return err
+	}
+	if len(deps) > 0 {
+		return ErrInUse
+	}
 	if _, err := s.pool.Exec(ctx,
 		`DELETE FROM agents WHERE tenant_slug = $1 AND agent_id = $2`, slug, catalogAgentID); err != nil {
 		return err
 	}
-	if err := s.pruneAutoStores(ctx, slug); err != nil {
-		return err
-	}
-	return s.recountAgents(ctx, slug)
+	return s.pruneAutoDeps(ctx, slug)
 }
 
 // MarkInstalled was a pre-reconciler stub that faked the in-tenant install by
@@ -1049,46 +1042,57 @@ func (s *Store) SyncDesired(ctx context.Context, tid string) (shared.DesiredStat
 		return out, err
 	}
 
-	// Deployments ENABLED in this tenant. The control plane provisions each app's
-	// Azure infra (via Lighthouse) and merges its outputs into the Helm values
-	// BEFORE the app is served here — so the reconciler just stamps the Argo CD
-	// Application. Dependencies are enforced two ways: app→app deps are ordered by
-	// Wave (Argo sync-waves), and app→agent deps HOLD the app until the agent is
-	// live. An app with unresolved infra is also held until its infra is ready.
+	// Applications ENABLED in this tenant. Each app's Azure infrastructure is a
+	// separate entity it DEPENDS on (provisioned by the control plane); its outputs
+	// are merged into the Helm values here. An app is HELD (waiting, excluded from
+	// desired state) until every dependency is satisfied: an infrastructure dep
+	// must be enabled + 'ready', an application dep enabled + (transitively) ready,
+	// an agent dep 'live'. App→app order is then enforced via Argo sync-waves.
 	arows, err := s.pool.Query(ctx,
-		`SELECT a.id, a.name, a.namespace, a.repo_url, a.chart, a.target_revision, a.values,
-		        a.arm_template, a.wiring, a.depends_on,
-		        coalesce(td.infra_state,''), coalesce(td.infra_outputs,'{}')
+		`SELECT a.id, a.name, a.namespace, a.repo_url, a.chart, a.target_revision, a.values, a.wiring, a.dependencies
 		 FROM applications a JOIN tenant_deployments td ON td.app_id = a.id AND td.tenant_slug = $1
 		 ORDER BY td.sort_order`, t.ID)
 	if err != nil {
 		return out, err
 	}
 	defer arows.Close()
-	all := []shared.DesiredApplication{}
-	type infraInfo struct {
-		armTemplate string
-		wiring      []shared.WireLink
-		outputs     map[string]any
-		state       string
+	type appInfo struct {
+		da     shared.DesiredApplication
+		wiring []shared.WireLink
+		deps   []model.Dependency
 	}
-	infraByID := map[string]infraInfo{}
+	apps := []appInfo{}
+	enabledApp := map[string]bool{}
 	for arows.Next() {
 		var da shared.DesiredApplication
-		var armTemplate, infraState string
-		var wraw, oraw []byte
-		if err := arows.Scan(&da.ID, &da.Name, &da.Namespace, &da.RepoURL, &da.Chart, &da.TargetRevision, &da.Values,
-			&armTemplate, &wraw, &da.DependsOn, &infraState, &oraw); err != nil {
+		var wraw, draw []byte
+		if err := arows.Scan(&da.ID, &da.Name, &da.Namespace, &da.RepoURL, &da.Chart, &da.TargetRevision, &da.Values, &wraw, &draw); err != nil {
 			return out, err
 		}
-		infraByID[da.ID] = infraInfo{armTemplate: armTemplate, wiring: wiringFromRaw(wraw), outputs: paramsFromRaw(oraw), state: infraState}
-		all = append(all, da)
+		apps = append(apps, appInfo{da: da, wiring: wiringFromRaw(wraw), deps: depsFromRaw(draw)})
+		enabledApp[da.ID] = true
 	}
 	if err := arows.Err(); err != nil {
 		return out, err
 	}
-	// Which agents are live in this tenant (an app→agent dep is met once its
-	// agent is live).
+
+	// Enabled infrastructure state + resolved outputs in this tenant.
+	infraState := map[string]string{}
+	infraOutputs := map[string]map[string]any{}
+	if irows, err := s.pool.Query(ctx,
+		`SELECT infra_id, coalesce(infra_state,''), coalesce(infra_outputs,'{}') FROM tenant_infrastructure WHERE tenant_slug = $1`, t.ID); err == nil {
+		for irows.Next() {
+			var id, st string
+			var oraw []byte
+			if irows.Scan(&id, &st, &oraw) == nil {
+				infraState[id] = st
+				infraOutputs[id] = paramsFromRaw(oraw)
+			}
+		}
+		irows.Close()
+	}
+
+	// Which agents are live in this tenant (an app→agent dep is met once live).
 	liveAgents := map[string]bool{}
 	if lrows, err := s.pool.Query(ctx, `SELECT agent_id FROM agents WHERE tenant_slug = $1 AND health = 'live'`, t.ID); err == nil {
 		for lrows.Next() {
@@ -1099,14 +1103,10 @@ func (s *Store) SyncDesired(ctx context.Context, tid string) (shared.DesiredStat
 		}
 		lrows.Close()
 	}
-	// An app is deployable only when every dependency is satisfied: an app-dep
-	// must be an enabled + (transitively) deployable app, an agent-dep must be
-	// live. Held apps are excluded from desired state and flagged waiting.
-	byID := make(map[string]shared.DesiredApplication, len(all))
-	enabledApp := map[string]bool{}
-	for _, da := range all {
-		byID[da.ID] = da
-		enabledApp[da.ID] = true
+
+	byID := make(map[string]appInfo, len(apps))
+	for _, a := range apps {
+		byID[a.da.ID] = a
 	}
 	memo := map[string]bool{}
 	visiting := map[string]bool{}
@@ -1120,57 +1120,70 @@ func (s *Store) SyncDesired(ctx context.Context, tid string) (shared.DesiredStat
 		}
 		visiting[id] = true
 		ok := true
-		for _, dep := range byID[id].DependsOn {
-			if liveAgents[dep] {
-				continue
+		for _, dep := range byID[id].deps {
+			switch dep.Kind {
+			case model.DepInfrastructure:
+				if infraState[dep.ID] != "ready" {
+					ok = false
+				}
+			case model.DepAgent:
+				if !liveAgents[dep.ID] {
+					ok = false
+				}
+			case model.DepApplication:
+				if !enabledApp[dep.ID] || !ready(dep.ID) {
+					ok = false
+				}
 			}
-			if enabledApp[dep] && ready(dep) {
-				continue
+			if !ok {
+				break
 			}
-			ok = false
-			break
 		}
 		visiting[id] = false
 		memo[id] = ok
 		return ok
 	}
-	for _, da := range all {
-		info := infraByID[da.ID]
-		infraReady := strings.TrimSpace(info.armTemplate) == "" || info.state == "ready"
-		deployable := ready(da.ID) && infraReady
+	for _, a := range apps {
+		deployable := ready(a.da.ID)
 		_, _ = s.pool.Exec(ctx, `UPDATE tenant_deployments SET waiting = $3 WHERE tenant_slug = $1 AND app_id = $2`,
-			t.ID, da.ID, !deployable)
-		if deployable {
-			// Merge the control-plane-provisioned infra outputs into the values.
-			da.Values = applyWiring(da.Values, info.wiring, info.outputs)
-			out.Applications = append(out.Applications, da)
+			t.ID, a.da.ID, !deployable)
+		if !deployable {
+			continue
 		}
+		da := a.da
+		da.Values = applyWiring(da.Values, a.wiring, infraOutputs)
+		for _, dep := range a.deps { // only app→app edges gate cluster ordering
+			if dep.Kind == model.DepApplication {
+				da.DependsOn = append(da.DependsOn, dep.ID)
+			}
+		}
+		out.Applications = append(out.Applications, da)
 	}
 	// Order the deployable apps so their app→app dependencies converge first.
 	assignWaves(out.Applications)
 	return out, nil
 }
 
-// InfraTarget is one enabled deployment that carries Azure infra (a resolved ARM
-// template), for the control-plane infra worker to provision cross-tenant.
+// InfraTarget is one enabled infrastructure entity (a resolved ARM template) for
+// the control-plane infra worker to provision cross-tenant.
 type InfraTarget struct {
 	TenantSlug     string
 	TenantID       string
 	SubscriptionID string
-	AppID          string
+	InfraID        string
 	ArmTemplate    string
 	State          string // current infra_state
 }
 
-// InfraTargets returns every enabled deployment (across tenants) that has infra to
-// provision and a known subscription to provision it into.
+// InfraTargets returns every enabled infrastructure entity (across tenants) that
+// has a resolved ARM template and a known subscription to provision it into.
 func (s *Store) InfraTargets(ctx context.Context) ([]InfraTarget, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT t.id, coalesce(t.tenant_id,''), coalesce(t.subscription_id,''), a.id, a.arm_template, coalesce(td.infra_state,'')
-		 FROM tenant_deployments td
-		 JOIN applications a ON a.id = td.app_id
-		 JOIN tenants t ON t.id = td.tenant_slug
-		 WHERE a.arm_template <> '' AND coalesce(t.subscription_id,'') <> ''`)
+		`SELECT t.id, coalesce(t.tenant_id,''), coalesce(t.subscription_id,''), i.id, i.arm_template, coalesce(ti.infra_state,'')
+		 FROM tenant_infrastructure ti
+		 JOIN infrastructure i ON i.id = ti.infra_id
+		 JOIN tenants t ON t.id = ti.tenant_slug
+		 WHERE i.arm_template <> '' AND coalesce(t.subscription_id,'') <> ''`)
 	if err != nil {
 		return nil, err
 	}
@@ -1178,7 +1191,7 @@ func (s *Store) InfraTargets(ctx context.Context) ([]InfraTarget, error) {
 	var out []InfraTarget
 	for rows.Next() {
 		var it InfraTarget
-		if err := rows.Scan(&it.TenantSlug, &it.TenantID, &it.SubscriptionID, &it.AppID, &it.ArmTemplate, &it.State); err != nil {
+		if err := rows.Scan(&it.TenantSlug, &it.TenantID, &it.SubscriptionID, &it.InfraID, &it.ArmTemplate, &it.State); err != nil {
 			return nil, err
 		}
 		out = append(out, it)
@@ -1186,19 +1199,27 @@ func (s *Store) InfraTargets(ctx context.Context) ([]InfraTarget, error) {
 	return out, rows.Err()
 }
 
-// SetInfraState records the provisioning state + resolved outputs of a deployment's
-// infra (control-plane worker → DB). SyncDesired then merges the outputs into the
-// Helm values and only serves the app once state is "ready".
-func (s *Store) SetInfraState(ctx context.Context, tenantSlug, appID, state string, outputs map[string]any) error {
+// SetInfraState records the provisioning state + resolved outputs of an enabled
+// infrastructure entity (control-plane worker → DB). SyncDesired merges the
+// outputs into dependent apps' Helm values and holds an app until its infra is
+// "ready".
+func (s *Store) SetInfraState(ctx context.Context, tenantSlug, infraID, state string, outputs map[string]any) error {
 	raw := []byte("{}")
 	if len(outputs) > 0 {
 		if b, err := json.Marshal(outputs); err == nil {
 			raw = b
 		}
 	}
+	health := shared.StatusReconciling
+	switch state {
+	case "ready":
+		health = shared.StatusLive
+	case "failed":
+		health = shared.StatusBlocked
+	}
 	_, err := s.pool.Exec(ctx,
-		`UPDATE tenant_deployments SET infra_state = $3, infra_outputs = $4 WHERE tenant_slug = $1 AND app_id = $2`,
-		tenantSlug, appID, state, raw)
+		`UPDATE tenant_infrastructure SET infra_state = $3, infra_outputs = $4, health = $5 WHERE tenant_slug = $1 AND infra_id = $2`,
+		tenantSlug, infraID, state, raw, health)
 	return err
 }
 
@@ -1263,10 +1284,11 @@ func (s *Store) SetFootprintState(ctx context.Context, slug, state, detail strin
 	return err
 }
 
-// applyWiring merges provisioned infra outputs into a chart's Helm values at the
-// wired paths (types preserved; malformed values left untouched). Pure + defensive.
-func applyWiring(values string, wiring []shared.WireLink, outputs map[string]any) string {
-	if len(wiring) == 0 || len(outputs) == 0 {
+// applyWiring merges an application's infrastructure-dependency outputs into its
+// Helm values at the wired paths (types preserved; malformed values left
+// untouched). infraOutputs is keyed by infrastructure id → its resolved outputs.
+func applyWiring(values string, wiring []shared.WireLink, infraOutputs map[string]map[string]any) string {
+	if len(wiring) == 0 || len(infraOutputs) == 0 {
 		return values
 	}
 	m := map[string]any{}
@@ -1277,7 +1299,11 @@ func applyWiring(values string, wiring []shared.WireLink, outputs map[string]any
 	}
 	changed := false
 	for _, w := range wiring {
-		v, ok := outputs[w.BicepOutput]
+		outs := infraOutputs[w.Infrastructure]
+		if outs == nil {
+			continue
+		}
+		v, ok := outs[w.BicepOutput]
 		if !ok || strings.TrimSpace(w.HelmPath) == "" {
 			continue
 		}
@@ -1400,14 +1426,13 @@ func (s *Store) ApplyHeartbeat(ctx context.Context, hb shared.Heartbeat) error {
 var ErrDeploymentNotAccessible = errors.New("deployment not accessible to tenant")
 
 const applicationCols = `a.id, a.name, a.description, a.owner_tenant, a.namespace,
-	a.repo_url, a.chart, a.target_revision, a.values, a.bicep, a.bicep_params, a.bicep_outputs, a.wiring, a.depends_on, a.created_by, a.created_at`
+	a.repo_url, a.chart, a.target_revision, a.values, a.wiring, a.dependencies, a.created_by, a.created_at`
 
-// appScanDest scans the fixed columns; bicep_params + wiring (jsonb) are captured
-// raw and unmarshalled by the caller (paramsFromRaw / wiringFromRaw). arm_template
-// is not scanned here (it's reconciler-only, read directly in SyncDesired).
-func appScanDest(a *model.Application, paramsRaw, wiringRaw *[]byte) []any {
+// appScanDest scans the fixed columns; wiring + dependencies (jsonb) are captured
+// raw and unmarshalled by the caller (wiringFromRaw / depsFromRaw).
+func appScanDest(a *model.Application, wiringRaw, depsRaw *[]byte) []any {
 	return []any{&a.ID, &a.Name, &a.Description, &a.Owner, &a.Namespace,
-		&a.RepoURL, &a.Chart, &a.TargetRevision, &a.Values, &a.BicepModule, paramsRaw, &a.BicepOutputs, wiringRaw, &a.DependsOn, &a.CreatedBy, &a.CreatedAt}
+		&a.RepoURL, &a.Chart, &a.TargetRevision, &a.Values, wiringRaw, depsRaw, &a.CreatedBy, &a.CreatedAt}
 }
 
 func paramsFromRaw(raw []byte) map[string]any {
@@ -1521,12 +1546,12 @@ func (s *Store) ApplicationList(ctx context.Context) ([]model.Application, error
 	out := []model.Application{}
 	for rows.Next() {
 		var a model.Application
-		var wraw, praw []byte
-		if err := rows.Scan(append(appScanDest(&a, &praw, &wraw), &a.OwnerName)...); err != nil {
+		var wraw, draw []byte
+		if err := rows.Scan(append(appScanDest(&a, &wraw, &draw), &a.OwnerName)...); err != nil {
 			return nil, err
 		}
 		a.Wiring = wiringFromRaw(wraw)
-		a.BicepParams = paramsFromRaw(praw)
+		a.Dependencies = depsFromRaw(draw)
 		a.Platform = a.Owner == ""
 		out = append(out, a)
 	}
@@ -1551,7 +1576,7 @@ func (s *Store) ApplicationsForTenant(ctx context.Context, slug string) ([]model
 	rows, err := s.pool.Query(ctx,
 		`SELECT `+applicationCols+`,
 		        (td.app_id IS NOT NULL) AS enabled, coalesce(td.sync_status,''), coalesce(td.health_status,''),
-		        coalesce(td.infra_state,''), coalesce(td.waiting,false)
+		        coalesce(td.waiting,false)
 		 FROM applications a
 		 LEFT JOIN tenant_deployments td ON td.app_id = a.id AND td.tenant_slug = $1
 		 WHERE a.owner_tenant = $1 OR (a.owner_tenant = '' AND a.id = ANY($2))
@@ -1563,15 +1588,15 @@ func (s *Store) ApplicationsForTenant(ctx context.Context, slug string) ([]model
 	out := []model.Application{}
 	for rows.Next() {
 		var a model.Application
-		var wraw, praw []byte
+		var wraw, draw []byte
 		var enabled bool
-		var sync, health, infraState string
+		var sync, health string
 		var waiting bool
-		if err := rows.Scan(append(appScanDest(&a, &praw, &wraw), &enabled, &sync, &health, &infraState, &waiting)...); err != nil {
+		if err := rows.Scan(append(appScanDest(&a, &wraw, &draw), &enabled, &sync, &health, &waiting)...); err != nil {
 			return nil, err
 		}
 		a.Wiring = wiringFromRaw(wraw)
-		a.BicepParams = paramsFromRaw(praw)
+		a.Dependencies = depsFromRaw(draw)
 		a.Platform = a.Owner == ""
 		a.Owned = a.Owner == slug
 		a.Entitled = entitledSet[a.ID]
@@ -1579,7 +1604,6 @@ func (s *Store) ApplicationsForTenant(ctx context.Context, slug string) ([]model
 		if enabled {
 			a.SyncStatus, a.HealthStatus = sync, health
 			a.Health = deriveDeploymentHealth(sync, health)
-			a.InfraState = infraState
 			a.Waiting = waiting
 		}
 		out = append(out, a)
@@ -1589,38 +1613,36 @@ func (s *Store) ApplicationsForTenant(ctx context.Context, slug string) ([]model
 
 func (s *Store) ApplicationByID(ctx context.Context, id string) (model.Application, error) {
 	var a model.Application
-	var wraw, praw []byte
-	err := s.pool.QueryRow(ctx, `SELECT `+applicationCols+` FROM applications a WHERE a.id = $1`, id).Scan(appScanDest(&a, &praw, &wraw)...)
+	var wraw, draw []byte
+	err := s.pool.QueryRow(ctx, `SELECT `+applicationCols+` FROM applications a WHERE a.id = $1`, id).Scan(appScanDest(&a, &wraw, &draw)...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return a, ErrNotFound
 	}
 	a.Wiring = wiringFromRaw(wraw)
-	a.BicepParams = paramsFromRaw(praw)
+	a.Dependencies = depsFromRaw(draw)
 	a.Platform = a.Owner == ""
 	return a, err
 }
 
-// CreateApplication inserts a deployment definition (Owner "" = platform-authored).
+// CreateApplication inserts a Helm deployment definition (Owner "" = platform).
 func (s *Store) CreateApplication(ctx context.Context, a model.Application, createdBy string) error {
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO applications (id, name, description, owner_tenant, namespace, repo_url, chart, target_revision, values, bicep, arm_template, bicep_params, bicep_outputs, wiring, depends_on, created_by)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+		`INSERT INTO applications (id, name, description, owner_tenant, namespace, repo_url, chart, target_revision, values, wiring, dependencies, created_by)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
 		a.ID, a.Name, a.Description, a.Owner, a.Namespace, a.RepoURL, a.Chart, a.TargetRevision, a.Values,
-		a.BicepModule, a.ArmTemplate, paramsJSON(a.BicepParams), depsArray(a.BicepOutputs), wiringJSON(a.Wiring), depsArray(a.DependsOn), createdBy)
+		wiringJSON(a.Wiring), depsJSON(a.Dependencies), createdBy)
 	return err
 }
 
-// UpdateApplication updates the full deployment definition. Unlike a memory
-// store, a deployment's chart/infra/wiring/deps are tunable — Argo re-syncs and
-// the Bicep re-deploys on the next reconcile.
+// UpdateApplication updates the full Helm deployment definition (chart, values,
+// wiring, dependencies). Argo re-syncs on the next reconcile.
 func (s *Store) UpdateApplication(ctx context.Context, a model.Application) error {
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE applications SET name = $2, description = $3, namespace = $4, repo_url = $5,
-		   chart = $6, target_revision = $7, values = $8, bicep = $9, arm_template = $10,
-		   bicep_params = $11, bicep_outputs = $12, wiring = $13, depends_on = $14
+		   chart = $6, target_revision = $7, values = $8, wiring = $9, dependencies = $10
 		 WHERE id = $1`,
 		a.ID, a.Name, a.Description, a.Namespace, a.RepoURL, a.Chart, a.TargetRevision, a.Values,
-		a.BicepModule, a.ArmTemplate, paramsJSON(a.BicepParams), depsArray(a.BicepOutputs), wiringJSON(a.Wiring), depsArray(a.DependsOn))
+		wiringJSON(a.Wiring), depsJSON(a.Dependencies))
 	if err != nil {
 		return err
 	}
@@ -1646,14 +1668,7 @@ func (s *Store) DeleteApplication(ctx context.Context, id string) error {
 }
 
 func (s *Store) SetDeploymentEntitlements(ctx context.Context, slug string, appIDs []string) error {
-	tag, err := s.pool.Exec(ctx, `UPDATE tenants SET entitled_deployments = $2 WHERE id = $1`, slug, appIDs)
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return s.setEntitlements(ctx, slug, model.DepApplication, appIDs)
 }
 
 func (s *Store) deploymentAccessible(ctx context.Context, slug, appID string) (bool, error) {
@@ -1666,9 +1681,9 @@ func (s *Store) deploymentAccessible(ctx context.Context, slug, appID string) (b
 	return ok, err
 }
 
-// EnableDeployment marks a deployment enabled for a tenant (one it owns or is
-// entitled to), so the reconciler stamps it as an Argo Application in that
-// tenant's cluster.
+// EnableDeployment marks an application enabled for a tenant (one it owns or is
+// entitled to), then auto-enables every dependency it needs (infrastructure,
+// applications, agents) so the whole graph is installed together.
 func (s *Store) EnableDeployment(ctx context.Context, slug, appID string) error {
 	ok, err := s.deploymentAccessible(ctx, slug, appID)
 	if err != nil {
@@ -1677,16 +1692,27 @@ func (s *Store) EnableDeployment(ctx context.Context, slug, appID string) error 
 	if !ok {
 		return ErrDeploymentNotAccessible
 	}
-	_, err = s.pool.Exec(ctx,
-		`INSERT INTO tenant_deployments (tenant_slug, app_id, health, sort_order)
-		 VALUES ($1,$2,'reconciling',
+	if _, err = s.pool.Exec(ctx,
+		`INSERT INTO tenant_deployments (tenant_slug, app_id, health, auto, sort_order)
+		 VALUES ($1,$2,'reconciling',false,
 		         coalesce((SELECT max(sort_order)+1 FROM tenant_deployments WHERE tenant_slug=$1),1))
-		 ON CONFLICT (tenant_slug, app_id) DO NOTHING`,
-		slug, appID)
-	return err
+		 ON CONFLICT (tenant_slug, app_id) DO UPDATE SET auto = false`,
+		slug, appID); err != nil {
+		return err
+	}
+	return s.autoEnableDeps(ctx, slug, model.DepApplication, appID)
 }
 
+// DisableDeployment deactivates an application in a tenant. It refuses while an
+// enabled application still depends on it, then prunes any now-orphaned auto deps.
 func (s *Store) DisableDeployment(ctx context.Context, slug, appID string) error {
+	deps, err := s.enabledDependents(ctx, slug, model.DepApplication, appID)
+	if err != nil {
+		return err
+	}
+	if len(deps) > 0 {
+		return ErrInUse
+	}
 	tag, err := s.pool.Exec(ctx,
 		`DELETE FROM tenant_deployments WHERE tenant_slug = $1 AND app_id = $2`, slug, appID)
 	if err != nil {
@@ -1695,5 +1721,210 @@ func (s *Store) DisableDeployment(ctx context.Context, slug, appID string) error
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
 	}
+	return s.pruneAutoDeps(ctx, slug)
+}
+
+/* ── Infrastructure (Bicep/Azure catalog entities → control-plane provisioned) ── */
+
+// ErrInfrastructureNotAccessible is returned when a tenant tries to enable
+// infrastructure it neither owns nor is entitled to.
+var ErrInfrastructureNotAccessible = errors.New("infrastructure not accessible to tenant")
+
+const infraCols = `i.id, i.name, i.description, i.owner_tenant, i.bicep, i.bicep_params, i.bicep_outputs, i.dependencies, i.created_by, i.created_at`
+
+func infraScanDest(i *model.Infrastructure, paramsRaw, depsRaw *[]byte) []any {
+	return []any{&i.ID, &i.Name, &i.Description, &i.Owner, &i.BicepModule, paramsRaw, &i.BicepOutputs, depsRaw, &i.CreatedBy, &i.CreatedAt}
+}
+
+// InfrastructureList is the platform view: every infrastructure definition + owner.
+func (s *Store) InfrastructureList(ctx context.Context) ([]model.Infrastructure, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT `+infraCols+`, coalesce(t.name,'')
+		 FROM infrastructure i LEFT JOIN tenants t ON t.id = i.owner_tenant
+		 ORDER BY i.created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []model.Infrastructure{}
+	for rows.Next() {
+		var i model.Infrastructure
+		var praw, draw []byte
+		if err := rows.Scan(append(infraScanDest(&i, &praw, &draw), &i.OwnerName)...); err != nil {
+			return nil, err
+		}
+		i.BicepParams = paramsFromRaw(praw)
+		i.Dependencies = depsFromRaw(draw)
+		i.Platform = i.Owner == ""
+		out = append(out, i)
+	}
+	return out, rows.Err()
+}
+
+// InfrastructureForTenant returns the infrastructure a tenant can use — its own
+// plus the platform ones it's entitled to — each with per-tenant enable state +
+// runtime status.
+func (s *Store) InfrastructureForTenant(ctx context.Context, slug string) ([]model.Infrastructure, error) {
+	var entitled []string
+	if err := s.pool.QueryRow(ctx, `SELECT entitled_infrastructure FROM tenants WHERE id = $1`, slug).Scan(&entitled); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return []model.Infrastructure{}, nil
+		}
+		return nil, err
+	}
+	entitledSet := map[string]bool{}
+	for _, id := range entitled {
+		entitledSet[id] = true
+	}
+	rows, err := s.pool.Query(ctx,
+		`SELECT `+infraCols+`,
+		        (ti.infra_id IS NOT NULL) AS enabled, coalesce(ti.infra_state,''), coalesce(ti.health,''), coalesce(ti.auto,false)
+		 FROM infrastructure i
+		 LEFT JOIN tenant_infrastructure ti ON ti.infra_id = i.id AND ti.tenant_slug = $1
+		 WHERE i.owner_tenant = $1 OR (i.owner_tenant = '' AND i.id = ANY($2))
+		 ORDER BY i.created_at DESC`, slug, entitled)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []model.Infrastructure{}
+	for rows.Next() {
+		var i model.Infrastructure
+		var praw, draw []byte
+		var enabled, auto bool
+		var infraState, health string
+		if err := rows.Scan(append(infraScanDest(&i, &praw, &draw), &enabled, &infraState, &health, &auto)...); err != nil {
+			return nil, err
+		}
+		i.BicepParams = paramsFromRaw(praw)
+		i.Dependencies = depsFromRaw(draw)
+		i.Platform = i.Owner == ""
+		i.Owned = i.Owner == slug
+		i.Entitled = entitledSet[i.ID]
+		i.Enabled = enabled
+		if enabled {
+			i.InfraState = infraState
+			i.Health = health
+			i.Waiting = infraState != "ready" && infraState != "failed"
+		}
+		out = append(out, i)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) InfrastructureByID(ctx context.Context, id string) (model.Infrastructure, error) {
+	var i model.Infrastructure
+	var praw, draw []byte
+	err := s.pool.QueryRow(ctx, `SELECT `+infraCols+` FROM infrastructure i WHERE i.id = $1`, id).Scan(infraScanDest(&i, &praw, &draw)...)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return i, ErrNotFound
+	}
+	i.BicepParams = paramsFromRaw(praw)
+	i.Dependencies = depsFromRaw(draw)
+	i.Platform = i.Owner == ""
+	return i, err
+}
+
+// CreateInfrastructure inserts an infrastructure definition (Owner "" = platform).
+func (s *Store) CreateInfrastructure(ctx context.Context, i model.Infrastructure, createdBy string) error {
+	_, err := s.pool.Exec(ctx,
+		`INSERT INTO infrastructure (id, name, description, owner_tenant, bicep, arm_template, bicep_params, bicep_outputs, dependencies, created_by)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+		i.ID, i.Name, i.Description, i.Owner, i.BicepModule, i.ArmTemplate, paramsJSON(i.BicepParams), depsArray(i.BicepOutputs), depsJSON(i.Dependencies), createdBy)
+	return err
+}
+
+func (s *Store) UpdateInfrastructure(ctx context.Context, i model.Infrastructure) error {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE infrastructure SET name = $2, description = $3, bicep = $4, arm_template = $5,
+		   bicep_params = $6, bicep_outputs = $7, dependencies = $8
+		 WHERE id = $1`,
+		i.ID, i.Name, i.Description, i.BicepModule, i.ArmTemplate, paramsJSON(i.BicepParams), depsArray(i.BicepOutputs), depsJSON(i.Dependencies))
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
 	return nil
+}
+
+func (s *Store) DeleteInfrastructure(ctx context.Context, id string) error {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM infrastructure WHERE id = $1`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	_, _ = s.pool.Exec(ctx, `UPDATE tenants SET entitled_infrastructure = array_remove(entitled_infrastructure, $1)`, id)
+	_, _ = s.pool.Exec(ctx, `DELETE FROM tenant_infrastructure WHERE infra_id = $1`, id)
+	return nil
+}
+
+// InfrastructureOwner returns an infrastructure entity's owner ("" = platform).
+func (s *Store) InfrastructureOwner(ctx context.Context, id string) (string, error) {
+	var owner string
+	err := s.pool.QueryRow(ctx, `SELECT owner_tenant FROM infrastructure WHERE id = $1`, id).Scan(&owner)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	return owner, err
+}
+
+func (s *Store) SetInfrastructureEntitlements(ctx context.Context, slug string, ids []string) error {
+	return s.setEntitlements(ctx, slug, model.DepInfrastructure, ids)
+}
+
+func (s *Store) infrastructureAccessible(ctx context.Context, slug, id string) (bool, error) {
+	var ok bool
+	err := s.pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM infrastructure i WHERE i.id = $2 AND
+		   (i.owner_tenant = $1 OR (i.owner_tenant = '' AND i.id IN
+		     (SELECT unnest(entitled_infrastructure) FROM tenants WHERE id = $1))))`,
+		slug, id).Scan(&ok)
+	return ok, err
+}
+
+// EnableInfrastructure marks infrastructure enabled for a tenant (one it owns or
+// is entitled to), then auto-enables the infrastructure it depends on. The
+// control-plane infra worker provisions it cross-tenant.
+func (s *Store) EnableInfrastructure(ctx context.Context, slug, id string) error {
+	ok, err := s.infrastructureAccessible(ctx, slug, id)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return ErrInfrastructureNotAccessible
+	}
+	if _, err = s.pool.Exec(ctx,
+		`INSERT INTO tenant_infrastructure (tenant_slug, infra_id, health, auto, sort_order)
+		 VALUES ($1,$2,'reconciling',false,
+		         coalesce((SELECT max(sort_order)+1 FROM tenant_infrastructure WHERE tenant_slug=$1),1))
+		 ON CONFLICT (tenant_slug, infra_id) DO UPDATE SET auto = false`,
+		slug, id); err != nil {
+		return err
+	}
+	return s.autoEnableDeps(ctx, slug, model.DepInfrastructure, id)
+}
+
+// DisableInfrastructure deactivates infrastructure in a tenant. It refuses while
+// an enabled application or infrastructure still depends on it.
+func (s *Store) DisableInfrastructure(ctx context.Context, slug, id string) error {
+	deps, err := s.enabledDependents(ctx, slug, model.DepInfrastructure, id)
+	if err != nil {
+		return err
+	}
+	if len(deps) > 0 {
+		return ErrInUse
+	}
+	tag, err := s.pool.Exec(ctx,
+		`DELETE FROM tenant_infrastructure WHERE tenant_slug = $1 AND infra_id = $2`, slug, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return s.pruneAutoDeps(ctx, slug)
 }

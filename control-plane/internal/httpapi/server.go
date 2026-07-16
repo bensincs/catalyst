@@ -18,21 +18,36 @@ import (
 	"github.com/inception42/cortex/shared"
 )
 
-// resolveAppInfra resolves a deployment's OCI Bicep-module reference into a
-// deployable ARM template + its output names (stored for the reconciler + the
+// resolveInfra resolves an infrastructure entity's OCI Bicep-module reference
+// into a deployable ARM template + its output names (stored for the worker + the
 // wiring UI). A bad reference or invalid module is a 400; a missing toolchain
 // degrades gracefully — the definition still saves, infra is just unresolved.
-func (s *Server) resolveAppInfra(w http.ResponseWriter, r *http.Request, app *model.Application) bool {
-	arm, outputs, err := bicep.Resolve(r.Context(), app.BicepModule, app.BicepParams)
+func (s *Server) resolveInfra(w http.ResponseWriter, r *http.Request, i *model.Infrastructure) bool {
+	arm, outputs, err := bicep.Resolve(r.Context(), i.BicepModule, i.BicepParams)
 	if err != nil {
 		if errors.Is(err, bicep.ErrNoCompiler) {
-			app.ArmTemplate, app.BicepOutputs = "", nil
+			i.ArmTemplate, i.BicepOutputs = "", nil
 			return true
 		}
 		writeErr(w, http.StatusBadRequest, "bicep module: "+err.Error())
 		return false
 	}
-	app.ArmTemplate, app.BicepOutputs = arm, outputs
+	i.ArmTemplate, i.BicepOutputs = arm, outputs
+	return true
+}
+
+// validateDeps runs author-time dependency validation (allowed edge, existing +
+// accessible target, no cycle) and maps a bad graph to a 400. Returns true when
+// the dependencies are valid (or absent).
+func (s *Server) validateDeps(w http.ResponseWriter, r *http.Request, kind model.DepKind, id, owner string, deps []model.Dependency) bool {
+	if err := s.store.ValidateDependencies(r.Context(), kind, id, owner, deps); err != nil {
+		if errors.Is(err, store.ErrBadDependency) || errors.Is(err, store.ErrDependencyCycle) {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return false
+		}
+		s.fail(w, r, err)
+		return false
+	}
 	return true
 }
 
@@ -90,6 +105,7 @@ func (s *Server) Router() http.Handler {
 			r.Patch("/tenants/{slug}/entitlements", s.handleSetEntitlements)
 			r.Patch("/tenants/{slug}/store-entitlements", s.handleSetStoreEntitlements)
 			r.Patch("/tenants/{slug}/deployment-entitlements", s.handleSetDeploymentEntitlements)
+			r.Patch("/tenants/{slug}/infrastructure-entitlements", s.handleSetInfrastructureEntitlements)
 			r.Patch("/tenants/{slug}/enabled", s.handleSetTenantEnabled)
 
 			// Memory stores (platform-authored + tenant-created)
@@ -98,7 +114,14 @@ func (s *Server) Router() http.Handler {
 			r.Patch("/memory-stores/{id}", s.handleUpdateMemoryStore)
 			r.Delete("/memory-stores/{id}", s.handleDeleteMemoryStore)
 
-			// Deployments — catalog entities (platform-authored + tenant-created)
+			// Infrastructure — Bicep/Azure catalog entities (control-plane provisioned)
+			r.Get("/infrastructure", s.handleInfrastructure)
+			r.Post("/infrastructure", s.handleCreateInfrastructure)
+			r.Post("/infrastructure/inspect", s.handleInspectModule)
+			r.Patch("/infrastructure/{id}", s.handleUpdateInfrastructure)
+			r.Delete("/infrastructure/{id}", s.handleDeleteInfrastructure)
+
+			// Applications — Helm catalog entities (platform-authored + tenant-created)
 			r.Get("/applications", s.handleApplications)
 			r.Post("/applications", s.handleCreateApplication)
 			r.Post("/applications/inspect", s.handleInspectModule)
@@ -112,6 +135,8 @@ func (s *Server) Router() http.Handler {
 			r.Post("/tenant/agents/{agentId}/store", s.handleConnectAgentStore)
 			r.Post("/tenant/stores/{storeId}", s.handleEnableStore)
 			r.Delete("/tenant/stores/{storeId}", s.handleDisableStore)
+			r.Post("/tenant/infrastructure/{id}", s.handleEnableInfrastructure)
+			r.Delete("/tenant/infrastructure/{id}", s.handleDisableInfrastructure)
 			r.Post("/tenant/deployments/{id}", s.handleEnableDeployment)
 			r.Delete("/tenant/deployments/{id}", s.handleDisableDeployment)
 		})
@@ -471,6 +496,10 @@ func (s *Server) handleSetEntitlements(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusNotFound, "tenant not found")
 			return
 		}
+		if errors.Is(err, store.ErrEntitlementInUse) {
+			writeErr(w, http.StatusConflict, err.Error())
+			return
+		}
 		s.fail(w, r, err)
 		return
 	}
@@ -640,6 +669,10 @@ func (s *Server) handleSetStoreEntitlements(w http.ResponseWriter, r *http.Reque
 			writeErr(w, http.StatusNotFound, "tenant not found")
 			return
 		}
+		if errors.Is(err, store.ErrEntitlementInUse) {
+			writeErr(w, http.StatusConflict, err.Error())
+			return
+		}
 		s.fail(w, r, err)
 		return
 	}
@@ -681,11 +714,14 @@ func (s *Server) handleDisableAgent(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := s.store.DisableAgent(r.Context(), t.ID, chi.URLParam(r, "agentId")); err != nil {
+	switch err := s.store.DisableAgent(r.Context(), t.ID, chi.URLParam(r, "agentId")); {
+	case errors.Is(err, store.ErrInUse):
+		writeErr(w, http.StatusConflict, "an enabled application depends on this agent — disable it first")
+	case err != nil:
 		s.fail(w, r, err)
-		return
+	default:
+		writeJSON(w, http.StatusOK, map[string]string{"status": "disabled"})
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "disabled"})
 }
 
 // handleConnectAgentStore connects (or, with an empty storeId, disconnects) a
@@ -859,17 +895,15 @@ func (s *Server) handleInspectChart(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleCreateApplication(w http.ResponseWriter, r *http.Request) {
 	id, _ := auth.IdentityFrom(r.Context())
 	var body struct {
-		Name           string            `json:"name"`
-		Description    string            `json:"description"`
-		Namespace      string            `json:"namespace"`
-		RepoURL        string            `json:"repoURL"`
-		Chart          string            `json:"chart"`
-		TargetRevision string            `json:"targetRevision"`
-		Values         string            `json:"values"`
-		BicepModule    string            `json:"bicepModule"`
-		BicepParams    map[string]any    `json:"bicepParams"`
-		Wiring         []shared.WireLink `json:"wiring"`
-		DependsOn      []string          `json:"dependsOn"`
+		Name           string             `json:"name"`
+		Description    string             `json:"description"`
+		Namespace      string             `json:"namespace"`
+		RepoURL        string             `json:"repoURL"`
+		Chart          string             `json:"chart"`
+		TargetRevision string             `json:"targetRevision"`
+		Values         string             `json:"values"`
+		Wiring         []shared.WireLink  `json:"wiring"`
+		Dependencies   []model.Dependency `json:"dependencies"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
@@ -907,12 +941,10 @@ func (s *Server) handleCreateApplication(w http.ResponseWriter, r *http.Request)
 		Chart:          strings.TrimSpace(body.Chart),
 		TargetRevision: strings.TrimSpace(body.TargetRevision),
 		Values:         body.Values,
-		BicepModule:    strings.TrimSpace(body.BicepModule),
-		BicepParams:    body.BicepParams,
 		Wiring:         body.Wiring,
-		DependsOn:      body.DependsOn,
+		Dependencies:   body.Dependencies,
 	}
-	if !s.resolveAppInfra(w, r, &app) {
+	if !s.validateDeps(w, r, model.DepApplication, app.ID, owner, app.Dependencies) {
 		return
 	}
 	if err := s.store.CreateApplication(r.Context(), app, id.OID); err != nil {
@@ -932,18 +964,21 @@ func (s *Server) handleUpdateApplication(w http.ResponseWriter, r *http.Request)
 	if !s.appWriteAllowed(w, r, id, appID) {
 		return
 	}
+	existing, err := s.store.ApplicationByID(r.Context(), appID)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
 	var body struct {
-		Name           string            `json:"name"`
-		Description    string            `json:"description"`
-		Namespace      string            `json:"namespace"`
-		RepoURL        string            `json:"repoURL"`
-		Chart          string            `json:"chart"`
-		TargetRevision string            `json:"targetRevision"`
-		Values         string            `json:"values"`
-		BicepModule    string            `json:"bicepModule"`
-		BicepParams    map[string]any    `json:"bicepParams"`
-		Wiring         []shared.WireLink `json:"wiring"`
-		DependsOn      []string          `json:"dependsOn"`
+		Name           string             `json:"name"`
+		Description    string             `json:"description"`
+		Namespace      string             `json:"namespace"`
+		RepoURL        string             `json:"repoURL"`
+		Chart          string             `json:"chart"`
+		TargetRevision string             `json:"targetRevision"`
+		Values         string             `json:"values"`
+		Wiring         []shared.WireLink  `json:"wiring"`
+		Dependencies   []model.Dependency `json:"dependencies"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
@@ -969,12 +1004,10 @@ func (s *Server) handleUpdateApplication(w http.ResponseWriter, r *http.Request)
 		Chart:          strings.TrimSpace(body.Chart),
 		TargetRevision: strings.TrimSpace(body.TargetRevision),
 		Values:         body.Values,
-		BicepModule:    strings.TrimSpace(body.BicepModule),
-		BicepParams:    body.BicepParams,
 		Wiring:         body.Wiring,
-		DependsOn:      body.DependsOn,
+		Dependencies:   body.Dependencies,
 	}
-	if !s.resolveAppInfra(w, r, &upd) {
+	if !s.validateDeps(w, r, model.DepApplication, appID, existing.Owner, upd.Dependencies) {
 		return
 	}
 	if err := s.store.UpdateApplication(r.Context(), upd); err != nil {
@@ -1024,6 +1057,10 @@ func (s *Server) handleSetDeploymentEntitlements(w http.ResponseWriter, r *http.
 			writeErr(w, http.StatusNotFound, "tenant not found")
 			return
 		}
+		if errors.Is(err, store.ErrEntitlementInUse) {
+			writeErr(w, http.StatusConflict, err.Error())
+			return
+		}
 		s.fail(w, r, err)
 		return
 	}
@@ -1053,6 +1090,246 @@ func (s *Server) handleDisableDeployment(w http.ResponseWriter, r *http.Request)
 	switch err := s.store.DisableDeployment(r.Context(), t.ID, chi.URLParam(r, "id")); {
 	case errors.Is(err, store.ErrNotFound):
 		writeErr(w, http.StatusNotFound, "deployment not enabled")
+	case errors.Is(err, store.ErrInUse):
+		writeErr(w, http.StatusConflict, "another enabled application depends on this deployment — disable it first")
+	case err != nil:
+		s.fail(w, r, err)
+	default:
+		writeJSON(w, http.StatusOK, map[string]string{"status": "disabled"})
+	}
+}
+
+/* ── Infrastructure (Bicep/Azure catalog entities) ────────────────────────── */
+
+func (s *Server) handleInfrastructure(w http.ResponseWriter, r *http.Request) {
+	id, _ := auth.IdentityFrom(r.Context())
+	if id.Role == model.RolePlatform {
+		list, err := s.store.InfrastructureList(r.Context())
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"infrastructure": list})
+		return
+	}
+	t, ok := s.callerTenant(w, r)
+	if !ok {
+		return
+	}
+	list, err := s.store.InfrastructureForTenant(r.Context(), t.ID)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"infrastructure": list})
+}
+
+// infraWriteAllowed loads an infrastructure entity and checks the caller may
+// modify it: platform admins any, a tenant only its own. Returns the owner.
+func (s *Server) infraWriteAllowed(w http.ResponseWriter, r *http.Request, id model.Identity, infraID string) (string, bool) {
+	owner, err := s.store.InfrastructureOwner(r.Context(), infraID)
+	if errors.Is(err, store.ErrNotFound) {
+		writeErr(w, http.StatusNotFound, "infrastructure not found")
+		return "", false
+	}
+	if err != nil {
+		s.fail(w, r, err)
+		return "", false
+	}
+	if id.Role == model.RolePlatform {
+		return owner, true
+	}
+	t, err := s.store.EnsureTenantForTID(r.Context(), id.TID, orgNameFromEmail(id.Email))
+	if err != nil {
+		s.fail(w, r, err)
+		return "", false
+	}
+	if owner != t.ID {
+		writeErr(w, http.StatusForbidden, "not your infrastructure")
+		return "", false
+	}
+	return owner, true
+}
+
+func (s *Server) handleCreateInfrastructure(w http.ResponseWriter, r *http.Request) {
+	id, _ := auth.IdentityFrom(r.Context())
+	var body struct {
+		Name         string             `json:"name"`
+		Description  string             `json:"description"`
+		BicepModule  string             `json:"bicepModule"`
+		BicepParams  map[string]any     `json:"bicepParams"`
+		Dependencies []model.Dependency `json:"dependencies"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	name := strings.TrimSpace(body.Name)
+	slug := slugify(name)
+	if slug == "" {
+		writeErr(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	if strings.TrimSpace(body.BicepModule) == "" {
+		writeErr(w, http.StatusBadRequest, "a Bicep module reference is required")
+		return
+	}
+	owner := ""
+	if id.Role == model.RoleTenant {
+		t, ok := s.callerTenant(w, r)
+		if !ok {
+			return
+		}
+		owner = t.ID
+		slug = t.ID + "-" + slug
+	}
+	infra := model.Infrastructure{
+		ID:           slug,
+		Name:         name,
+		Description:  strings.TrimSpace(body.Description),
+		Owner:        owner,
+		BicepModule:  strings.TrimSpace(body.BicepModule),
+		BicepParams:  body.BicepParams,
+		Dependencies: body.Dependencies,
+	}
+	if !s.validateDeps(w, r, model.DepInfrastructure, infra.ID, owner, infra.Dependencies) {
+		return
+	}
+	if !s.resolveInfra(w, r, &infra) {
+		return
+	}
+	if err := s.store.CreateInfrastructure(r.Context(), infra, id.OID); err != nil {
+		if isDup(err) {
+			writeErr(w, http.StatusConflict, "infrastructure with that name already exists")
+			return
+		}
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]string{"id": infra.ID})
+}
+
+func (s *Server) handleUpdateInfrastructure(w http.ResponseWriter, r *http.Request) {
+	id, _ := auth.IdentityFrom(r.Context())
+	infraID := chi.URLParam(r, "id")
+	owner, ok := s.infraWriteAllowed(w, r, id, infraID)
+	if !ok {
+		return
+	}
+	var body struct {
+		Name         string             `json:"name"`
+		Description  string             `json:"description"`
+		BicepModule  string             `json:"bicepModule"`
+		BicepParams  map[string]any     `json:"bicepParams"`
+		Dependencies []model.Dependency `json:"dependencies"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if strings.TrimSpace(body.Name) == "" {
+		writeErr(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	if strings.TrimSpace(body.BicepModule) == "" {
+		writeErr(w, http.StatusBadRequest, "a Bicep module reference is required")
+		return
+	}
+	upd := model.Infrastructure{
+		ID:           infraID,
+		Name:         strings.TrimSpace(body.Name),
+		Description:  strings.TrimSpace(body.Description),
+		Owner:        owner,
+		BicepModule:  strings.TrimSpace(body.BicepModule),
+		BicepParams:  body.BicepParams,
+		Dependencies: body.Dependencies,
+	}
+	if !s.validateDeps(w, r, model.DepInfrastructure, infraID, owner, upd.Dependencies) {
+		return
+	}
+	if !s.resolveInfra(w, r, &upd) {
+		return
+	}
+	if err := s.store.UpdateInfrastructure(r.Context(), upd); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "infrastructure not found")
+			return
+		}
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
+func (s *Server) handleDeleteInfrastructure(w http.ResponseWriter, r *http.Request) {
+	id, _ := auth.IdentityFrom(r.Context())
+	infraID := chi.URLParam(r, "id")
+	if _, ok := s.infraWriteAllowed(w, r, id, infraID); !ok {
+		return
+	}
+	if err := s.store.DeleteInfrastructure(r.Context(), infraID); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "infrastructure not found")
+			return
+		}
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+func (s *Server) handleSetInfrastructureEntitlements(w http.ResponseWriter, r *http.Request) {
+	id, _ := auth.IdentityFrom(r.Context())
+	if !s.requirePlatform(w, id) {
+		return
+	}
+	var body struct {
+		EntitledInfrastructure []string `json:"entitledInfrastructure"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if body.EntitledInfrastructure == nil {
+		body.EntitledInfrastructure = []string{}
+	}
+	if err := s.store.SetInfrastructureEntitlements(r.Context(), chi.URLParam(r, "slug"), body.EntitledInfrastructure); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "tenant not found")
+			return
+		}
+		if errors.Is(err, store.ErrEntitlementInUse) {
+			writeErr(w, http.StatusConflict, err.Error())
+			return
+		}
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
+func (s *Server) handleEnableInfrastructure(w http.ResponseWriter, r *http.Request) {
+	t, ok := s.callerTenant(w, r)
+	if !ok {
+		return
+	}
+	switch err := s.store.EnableInfrastructure(r.Context(), t.ID, chi.URLParam(r, "id")); {
+	case errors.Is(err, store.ErrInfrastructureNotAccessible):
+		writeErr(w, http.StatusForbidden, "that infrastructure isn't available to your tenant")
+	case err != nil:
+		s.fail(w, r, err)
+	default:
+		writeJSON(w, http.StatusOK, map[string]string{"status": "enabled"})
+	}
+}
+
+func (s *Server) handleDisableInfrastructure(w http.ResponseWriter, r *http.Request) {
+	t, ok := s.callerTenant(w, r)
+	if !ok {
+		return
+	}
+	switch err := s.store.DisableInfrastructure(r.Context(), t.ID, chi.URLParam(r, "id")); {
+	case errors.Is(err, store.ErrNotFound):
+		writeErr(w, http.StatusNotFound, "infrastructure not enabled")
+	case errors.Is(err, store.ErrInUse):
+		writeErr(w, http.StatusConflict, "an enabled application or infrastructure depends on this — disable it first")
 	case err != nil:
 		s.fail(w, r, err)
 	default:

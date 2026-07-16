@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
 
@@ -488,10 +489,9 @@ func TestAssignWaves(t *testing.T) {
 	assignWaves(cyc)
 }
 
-// A deployment is HELD out of desired state until its dependencies are satisfied
-// (an app-dep must be an enabled app), and flagged waiting; once satisfied both
-// deploy, ordered by wave.
-func TestDeploymentDependencyHold(t *testing.T) {
+// Entitling/enabling an application cascades to its dependencies, and the in-use
+// guard + auto-prune keep the graph consistent.
+func TestDeploymentDependencyCascade(t *testing.T) {
 	st, ctx := testStore(t)
 	defer st.Close()
 
@@ -509,46 +509,42 @@ func TestDeploymentDependencyHold(t *testing.T) {
 	cleanup()
 	defer cleanup()
 
-	mk := func(id, name string, deps []string) {
+	mk := func(id, name string, deps []model.Dependency) {
 		if err := st.CreateApplication(ctx, model.Application{
-			ID: id, Name: name, Owner: "", Namespace: "web", RepoURL: "https://r", Chart: "c", DependsOn: deps,
+			ID: id, Name: name, Owner: "", Namespace: "web", RepoURL: "https://r", Chart: "c", Dependencies: deps,
 		}, "oid"); err != nil {
 			t.Fatalf("create %s: %v", id, err)
 		}
 	}
 	mk(appA, "A", nil)
-	mk(appB, "B", []string{appA})
+	mk(appB, "B", []model.Dependency{{Kind: model.DepApplication, ID: appA}})
 	if _, err := st.pool.Exec(ctx,
-		`INSERT INTO tenants (id, name, tenant_id, enrollment, entitled_deployments) VALUES ($1,'DH',$2,'bound',ARRAY[$3,$4])`,
-		slug, tid, appA, appB); err != nil {
+		`INSERT INTO tenants (id, name, tenant_id, enrollment) VALUES ($1,'DH',$2,'bound')`, slug, tid); err != nil {
 		t.Fatalf("tenant: %v", err)
 	}
 
-	// Enable only B; its dep A isn't enabled → B is held + flagged waiting.
+	// Entitle only B; the cascade must also entitle its dependency A.
+	if err := st.SetDeploymentEntitlements(ctx, slug, []string{appB}); err != nil {
+		t.Fatalf("entitle: %v", err)
+	}
+	apps, _ := st.ApplicationsForTenant(ctx, slug)
+	entitled := map[string]bool{}
+	for _, a := range apps {
+		if a.Entitled {
+			entitled[a.ID] = true
+		}
+	}
+	if !entitled[appA] || !entitled[appB] {
+		t.Fatalf("entitlement did not cascade to A: %+v", entitled)
+	}
+
+	// Enable B; the cascade must auto-enable A → both deployable, A wave 0, B wave 1.
 	if err := st.EnableDeployment(ctx, slug, appB); err != nil {
 		t.Fatalf("enable B: %v", err)
 	}
-	if ds, _ := st.SyncDesired(ctx, tid); len(ds.Applications) != 0 {
-		t.Fatalf("B should be held while A is disabled: %+v", ds.Applications)
-	}
-	apps, _ := st.ApplicationsForTenant(ctx, slug)
-	waiting := false
-	for _, a := range apps {
-		if a.ID == appB {
-			waiting = a.Waiting
-		}
-	}
-	if !waiting {
-		t.Fatalf("B should be flagged waiting")
-	}
-
-	// Enable A → both deploy; A at wave 0, B at wave 1.
-	if err := st.EnableDeployment(ctx, slug, appA); err != nil {
-		t.Fatalf("enable A: %v", err)
-	}
 	ds, _ := st.SyncDesired(ctx, tid)
 	if len(ds.Applications) != 2 {
-		t.Fatalf("both should be deployable once A is enabled: %+v", ds.Applications)
+		t.Fatalf("both should deploy after cascade: %+v", ds.Applications)
 	}
 	wave := map[string]int{}
 	for _, a := range ds.Applications {
@@ -556,5 +552,162 @@ func TestDeploymentDependencyHold(t *testing.T) {
 	}
 	if wave[appA] != 0 || wave[appB] != 1 {
 		t.Fatalf("waves wrong: A=%d B=%d", wave[appA], wave[appB])
+	}
+
+	// In-use guard: A can't be disabled while B depends on it.
+	if err := st.DisableDeployment(ctx, slug, appA); !errors.Is(err, ErrInUse) {
+		t.Fatalf("expected ErrInUse disabling A, got %v", err)
+	}
+	// Disabling B prunes the auto-enabled A too.
+	if err := st.DisableDeployment(ctx, slug, appB); err != nil {
+		t.Fatalf("disable B: %v", err)
+	}
+	if ds, _ := st.SyncDesired(ctx, tid); len(ds.Applications) != 0 {
+		t.Fatalf("both should be gone after disabling B: %+v", ds.Applications)
+	}
+}
+
+// The typed dependency graph is enforced end-to-end: author-time validation
+// (allowed edges, existence, cycles), entitlement cascade, enable cascade, and
+// the in-use disable guard + auto-prune — across infrastructure, applications,
+// agents, and memory stores.
+func TestDependencyGraphEnforcement(t *testing.T) {
+	st, ctx := testStore(t)
+	defer st.Close()
+
+	const (
+		infra1 = "zz-e-infra1"
+		infra2 = "zz-e-infra2"
+		store1 = "zz-e-store"
+		agent1 = "zz-e-agent"
+		app1   = "zz-e-app"
+		slug   = "zz-e-tenant"
+		tid    = "zz-e-tid-0005"
+	)
+	cleanup := func() {
+		st.pool.Exec(ctx, `DELETE FROM tenant_infrastructure WHERE tenant_slug=$1`, slug)
+		st.pool.Exec(ctx, `DELETE FROM tenant_deployments WHERE tenant_slug=$1`, slug)
+		st.pool.Exec(ctx, `DELETE FROM tenant_stores WHERE tenant_slug=$1`, slug)
+		st.pool.Exec(ctx, `DELETE FROM agents WHERE tenant_slug=$1`, slug)
+		st.pool.Exec(ctx, `DELETE FROM applications WHERE id=$1`, app1)
+		st.pool.Exec(ctx, `DELETE FROM infrastructure WHERE id IN ($1,$2)`, infra1, infra2)
+		st.pool.Exec(ctx, `DELETE FROM catalog_agents WHERE id=$1`, agent1)
+		st.pool.Exec(ctx, `DELETE FROM memory_stores WHERE id=$1`, store1)
+		st.pool.Exec(ctx, `DELETE FROM tenants WHERE id=$1`, slug)
+	}
+	cleanup()
+	defer cleanup()
+
+	// Platform entities: a store, an agent that uses it, two infra (infra1→infra2).
+	if err := st.CreateMemoryStore(ctx, store1, "Store", "", "", shared.MemoryStoreDefinition{ChatModel: "gpt-4o", EmbeddingModel: "e"}, "oid"); err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	if err := st.CreateCatalogAgent(ctx, agent1, "Agent", "", "prompt", "gpt-4o", "", "oid", shared.AgentDefinition{Instructions: "x", MemoryStore: store1}); err != nil {
+		t.Fatalf("agent: %v", err)
+	}
+	if err := st.CreateInfrastructure(ctx, model.Infrastructure{ID: infra2, Name: "Infra2"}, "oid"); err != nil {
+		t.Fatalf("infra2: %v", err)
+	}
+	if err := st.ValidateDependencies(ctx, model.DepInfrastructure, infra1, "", []model.Dependency{{Kind: model.DepInfrastructure, ID: infra2}}); err != nil {
+		t.Fatalf("valid infra→infra rejected: %v", err)
+	}
+	if err := st.CreateInfrastructure(ctx, model.Infrastructure{ID: infra1, Name: "Infra1", Dependencies: []model.Dependency{{Kind: model.DepInfrastructure, ID: infra2}}}, "oid"); err != nil {
+		t.Fatalf("infra1: %v", err)
+	}
+
+	// Author-time validation.
+	if err := st.ValidateDependencies(ctx, model.DepInfrastructure, infra1, "", []model.Dependency{{Kind: model.DepApplication, ID: app1}}); !errors.Is(err, ErrBadDependency) {
+		t.Fatalf("expected ErrBadDependency for infra→app, got %v", err)
+	}
+	if err := st.ValidateDependencies(ctx, model.DepApplication, app1, "", []model.Dependency{{Kind: model.DepInfrastructure, ID: "nope"}}); !errors.Is(err, ErrBadDependency) {
+		t.Fatalf("expected ErrBadDependency for missing target, got %v", err)
+	}
+	if err := st.ValidateDependencies(ctx, model.DepInfrastructure, infra2, "", []model.Dependency{{Kind: model.DepInfrastructure, ID: infra2}}); !errors.Is(err, ErrDependencyCycle) {
+		t.Fatalf("expected ErrDependencyCycle for self-dep, got %v", err)
+	}
+	if err := st.ValidateDependencies(ctx, model.DepInfrastructure, infra2, "", []model.Dependency{{Kind: model.DepInfrastructure, ID: infra1}}); !errors.Is(err, ErrDependencyCycle) {
+		t.Fatalf("expected ErrDependencyCycle for infra2→infra1, got %v", err)
+	}
+
+	// App depends on infra1 + agent1 (both allowed).
+	appDeps := []model.Dependency{{Kind: model.DepInfrastructure, ID: infra1}, {Kind: model.DepAgent, ID: agent1}}
+	if err := st.ValidateDependencies(ctx, model.DepApplication, app1, "", appDeps); err != nil {
+		t.Fatalf("valid app deps rejected: %v", err)
+	}
+	if err := st.CreateApplication(ctx, model.Application{ID: app1, Name: "App", Namespace: "web", RepoURL: "https://r", Chart: "c", Dependencies: appDeps}, "oid"); err != nil {
+		t.Fatalf("app: %v", err)
+	}
+
+	if _, err := st.pool.Exec(ctx, `INSERT INTO tenants (id,name,tenant_id,enrollment) VALUES ($1,'E',$2,'bound')`, slug, tid); err != nil {
+		t.Fatalf("tenant: %v", err)
+	}
+
+	// Entitle only the app; the cascade must entitle infra1, infra2 (transitive),
+	// agent1, and the agent's store1.
+	if err := st.SetDeploymentEntitlements(ctx, slug, []string{app1}); err != nil {
+		t.Fatalf("entitle: %v", err)
+	}
+	assertEntitled := func(col, id string) {
+		var ok bool
+		st.pool.QueryRow(ctx, `SELECT $2 = ANY(`+col+`) FROM tenants WHERE id=$1`, slug, id).Scan(&ok)
+		if !ok {
+			t.Fatalf("expected %s in %s", id, col)
+		}
+	}
+	assertEntitled("entitled_infrastructure", infra1)
+	assertEntitled("entitled_infrastructure", infra2)
+	assertEntitled("entitled_agents", agent1)
+	assertEntitled("entitled_stores", store1)
+
+	// Enable the app → cascade enables infra1, infra2, agent1, store1.
+	if err := st.EnableDeployment(ctx, slug, app1); err != nil {
+		t.Fatalf("enable app: %v", err)
+	}
+	count := func(q, id string) int {
+		var n int
+		st.pool.QueryRow(ctx, q, slug, id).Scan(&n)
+		return n
+	}
+	if count(`SELECT count(*) FROM tenant_infrastructure WHERE tenant_slug=$1 AND infra_id=$2`, infra1) == 0 ||
+		count(`SELECT count(*) FROM tenant_infrastructure WHERE tenant_slug=$1 AND infra_id=$2`, infra2) == 0 ||
+		count(`SELECT count(*) FROM agents WHERE tenant_slug=$1 AND agent_id=$2`, agent1) == 0 ||
+		count(`SELECT count(*) FROM tenant_stores WHERE tenant_slug=$1 AND store_id=$2`, store1) == 0 {
+		t.Fatalf("enable did not cascade to all dependencies")
+	}
+
+	// In-use guard: infra1 can't be disabled while the app depends on it.
+	if err := st.DisableInfrastructure(ctx, slug, infra1); !errors.Is(err, ErrInUse) {
+		t.Fatalf("expected ErrInUse disabling infra1, got %v", err)
+	}
+
+	// Un-entitle guard: can't remove an infra entitlement while it's enabled.
+	if err := st.SetInfrastructureEntitlements(ctx, slug, []string{}); !errors.Is(err, ErrEntitlementInUse) {
+		t.Fatalf("expected ErrEntitlementInUse un-entitling enabled infra, got %v", err)
+	}
+
+	// Disable the app → every auto-enabled dependency is pruned.
+	if err := st.DisableDeployment(ctx, slug, app1); err != nil {
+		t.Fatalf("disable app: %v", err)
+	}
+	var remaining int
+	st.pool.QueryRow(ctx,
+		`SELECT (SELECT count(*) FROM tenant_infrastructure WHERE tenant_slug=$1)
+		      + (SELECT count(*) FROM tenant_stores WHERE tenant_slug=$1)
+		      + (SELECT count(*) FROM agents WHERE tenant_slug=$1)
+		      + (SELECT count(*) FROM tenant_deployments WHERE tenant_slug=$1)`, slug).Scan(&remaining)
+	if remaining != 0 {
+		t.Fatalf("auto deps not pruned after disabling app: %d remain", remaining)
+	}
+
+	// Un-entitle guard (dependent): the app is still entitled and depends on infra1.
+	if err := st.SetInfrastructureEntitlements(ctx, slug, []string{infra2}); !errors.Is(err, ErrEntitlementInUse) {
+		t.Fatalf("expected ErrEntitlementInUse un-entitling a depended-on infra, got %v", err)
+	}
+	// Removing the app entitlement first, then both infra together, is allowed.
+	if err := st.SetDeploymentEntitlements(ctx, slug, []string{}); err != nil {
+		t.Fatalf("un-entitle app: %v", err)
+	}
+	if err := st.SetInfrastructureEntitlements(ctx, slug, []string{}); err != nil {
+		t.Fatalf("un-entitle infra after app removed: %v", err)
 	}
 }

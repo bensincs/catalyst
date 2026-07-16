@@ -84,18 +84,21 @@ type DesiredAgent struct {
 }
 
 // WireLink maps one Bicep deployment output to a Helm values path, so the chart
-// is configured with the address/secret of the Azure infra that backs it.
+// is configured with the address/secret of the Azure infra that backs it. The
+// output comes from the application's infrastructure DEPENDENCY (Infrastructure
+// is that infrastructure entity's id).
 type WireLink struct {
-	BicepOutput string `json:"bicepOutput"` // name of a Bicep `output`
-	HelmPath    string `json:"helmPath"`    // dotted Helm values path, e.g. database.host
+	Infrastructure string `json:"infrastructure"` // id of the depended-on infrastructure entity
+	BicepOutput    string `json:"bicepOutput"`    // name of a Bicep `output` on that infrastructure
+	HelmPath       string `json:"helmPath"`       // dotted Helm values path, e.g. database.host
 }
 
-// DesiredApplication is a deployment a tenant wants running in its cluster
-// (control plane → reconciler). It is realized in two steps: the reconciler
-// provisions the app's Bicep infra (Azure) if any, wires those outputs into the
-// Helm values (already merged with any resolved Azure-infra outputs by the
-// control plane), then stamps an Argo CD Application (Helm source) — ordered by
-// Wave so dependencies converge first.
+// DesiredApplication is a Helm deployment a tenant wants running in its cluster
+// (control plane → reconciler). The reconciler just stamps an Argo CD Application
+// (Helm source) — ordered by Wave so dependencies converge first. Any Azure
+// infrastructure the app depends on is provisioned by the control plane (via
+// Lighthouse) and its outputs are already merged into Values before the app is
+// served here.
 type DesiredApplication struct {
 	ID             string `json:"id"`
 	Name           string `json:"name"`           // Argo Application name (also the release)
@@ -104,10 +107,10 @@ type DesiredApplication struct {
 	Chart          string `json:"chart"`          // chart name
 	TargetRevision string `json:"targetRevision"` // chart version
 	Values         string `json:"values,omitempty"`
-	// DependsOn are ids of other entities (apps/agents) that must converge first;
-	// Wave is the derived Argo sync-wave (0 = no deps) that enforces the order.
-	// Azure infra is provisioned by the control plane via Lighthouse before the app
-	// is included here, and its outputs are already merged into Values.
+	// DependsOn are ids of other applications that must converge first; Wave is
+	// the derived Argo sync-wave (0 = no deps) that enforces the order. (Only
+	// app→app edges gate cluster ordering; infra/agent deps are gated earlier,
+	// control-plane-side, by holding the app until they're ready/live.)
 	DependsOn []string `json:"dependsOn,omitempty"`
 	Wave      int      `json:"wave,omitempty"`
 }

@@ -125,29 +125,29 @@ func (p *Provisioner) reconcile(ctx context.Context) {
 // records outputs (ready); if it's absent it submits it (provisioning); a failed
 // deployment is recorded failed. A submit error is left to retry next sweep.
 func (p *Provisioner) ensure(ctx context.Context, tgt store.InfraTarget) {
-	name := deploymentName(tgt.AppID)
+	name := deploymentName(tgt.InfraID)
 	if outs, pstate, found := p.deploymentState(ctx, p.deploymentURL(tgt.SubscriptionID, name)); found {
 		switch {
 		case strings.EqualFold(pstate, "Succeeded"):
-			_ = p.store.SetInfraState(ctx, tgt.TenantSlug, tgt.AppID, stateReady, outs)
+			_ = p.store.SetInfraState(ctx, tgt.TenantSlug, tgt.InfraID, stateReady, outs)
 		case strings.EqualFold(pstate, "Failed") || strings.EqualFold(pstate, "Canceled"):
-			_ = p.store.SetInfraState(ctx, tgt.TenantSlug, tgt.AppID, stateFailed, nil)
+			_ = p.store.SetInfraState(ctx, tgt.TenantSlug, tgt.InfraID, stateFailed, nil)
 		default:
-			_ = p.store.SetInfraState(ctx, tgt.TenantSlug, tgt.AppID, stateProvisioning, nil)
+			_ = p.store.SetInfraState(ctx, tgt.TenantSlug, tgt.InfraID, stateProvisioning, nil)
 		}
 		return
 	}
 	var template map[string]any
 	if err := json.Unmarshal([]byte(tgt.ArmTemplate), &template); err != nil {
-		slog.Warn("infra: template is not valid ARM JSON; skipping", "app", tgt.AppID)
-		_ = p.store.SetInfraState(ctx, tgt.TenantSlug, tgt.AppID, stateFailed, nil)
+		slog.Warn("infra: template is not valid ARM JSON; skipping", "infra", tgt.InfraID)
+		_ = p.store.SetInfraState(ctx, tgt.TenantSlug, tgt.InfraID, stateFailed, nil)
 		return
 	}
 	if err := p.submit(ctx, tgt.SubscriptionID, name, template); err != nil {
-		slog.Warn("infra: submit deployment failed", "app", tgt.AppID, "tenant", tgt.TenantSlug, "err", trunc(err.Error()))
+		slog.Warn("infra: submit deployment failed", "infra", tgt.InfraID, "tenant", tgt.TenantSlug, "err", trunc(err.Error()))
 		return
 	}
-	_ = p.store.SetInfraState(ctx, tgt.TenantSlug, tgt.AppID, stateProvisioning, nil)
+	_ = p.store.SetInfraState(ctx, tgt.TenantSlug, tgt.InfraID, stateProvisioning, nil)
 }
 
 func (p *Provisioner) deploymentURL(sub, name string) string {

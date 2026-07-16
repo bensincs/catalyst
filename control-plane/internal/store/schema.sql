@@ -268,4 +268,116 @@ END $$;
 
 CREATE INDEX IF NOT EXISTS applications_owner_idx ON applications(owner_tenant);
 
+-- ── Split: Infrastructure (Bicep/Azure) vs Applications (Helm) ──────────────
+-- A "deployment" used to be one row that bundled a Helm chart AND its Azure
+-- infra (Bicep). They are now two first-class catalog entities with a typed
+-- dependency graph:
+--     infrastructure → infrastructure
+--     application    → infrastructure | application | agent
+--     agent          → memory store
+-- Each is authored (platform owner_tenant='' or a tenant), entitled, and enabled
+-- per tenant. Infrastructure is provisioned cross-tenant by the control plane
+-- (ARM via Lighthouse); applications are stamped as Argo CD Applications by the
+-- reconciler, with a dependency infrastructure's outputs wired into their values.
+
+CREATE TABLE IF NOT EXISTS infrastructure (
+  id            text PRIMARY KEY,                 -- slug
+  name          text NOT NULL,
+  description   text NOT NULL DEFAULT '',
+  owner_tenant  text NOT NULL DEFAULT '',          -- '' = platform-authored; else tenant slug
+  bicep         text NOT NULL DEFAULT '',          -- OCI Bicep-module ref (br:acr.../bicep/db:1.0.0)
+  arm_template  text NOT NULL DEFAULT '',          -- resolved ARM template (baked at save)
+  bicep_params  jsonb  NOT NULL DEFAULT '{}',       -- author-supplied module params
+  bicep_outputs text[] NOT NULL DEFAULT '{}',       -- resolved module output names (for wiring)
+  dependencies  jsonb  NOT NULL DEFAULT '[]',        -- [{kind,id}] — infrastructure deps only
+  created_by    text NOT NULL DEFAULT '',
+  created_at    timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS infrastructure_owner_idx ON infrastructure(owner_tenant);
+
+-- Per-tenant infrastructure enablement/instance (mirrors tenant_deployments).
+-- The control-plane infra worker provisions it and reports state + resolved
+-- outputs back here; applications that depend on it wire those outputs in.
+CREATE TABLE IF NOT EXISTS tenant_infrastructure (
+  tenant_slug   text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  infra_id      text NOT NULL,
+  infra_state   text NOT NULL DEFAULT '',          -- '' | provisioning | ready | failed
+  infra_outputs jsonb NOT NULL DEFAULT '{}',         -- resolved ARM outputs
+  health        text NOT NULL DEFAULT 'reconciling', -- reconciling | live | blocked (derived)
+  auto          boolean NOT NULL DEFAULT false,       -- true = auto-enabled via an application dependency
+  sort_order    int  NOT NULL DEFAULT 0,
+  PRIMARY KEY (tenant_slug, infra_id)
+);
+CREATE INDEX IF NOT EXISTS tenant_infrastructure_tenant_idx ON tenant_infrastructure(tenant_slug);
+
+-- Which platform infrastructure entities a tenant is entitled to enable.
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS entitled_infrastructure text[] NOT NULL DEFAULT '{}';
+
+-- Auto-enable flag on deployments (mirrors tenant_stores/tenant_infrastructure):
+-- true = enabled as a dependency of another enabled entity, pruned when no longer needed.
+ALTER TABLE tenant_deployments ADD COLUMN IF NOT EXISTS auto boolean NOT NULL DEFAULT false;
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS auto boolean NOT NULL DEFAULT false;
+
+-- Typed dependency edges on an application: [{kind,id}] where kind ∈
+-- {infrastructure, application, agent}. Replaces the untyped depends_on text[].
+ALTER TABLE applications ADD COLUMN IF NOT EXISTS dependencies jsonb NOT NULL DEFAULT '[]';
+
+-- One-time migration: split each application's Bicep half into a first-class
+-- `infrastructure` row, make the application depend on it, and re-point its
+-- wiring at that infrastructure id; carry any per-tenant infra state onto
+-- tenant_infrastructure; convert the untyped depends_on into typed dependencies.
+DO $$
+DECLARE r RECORD; new_infra text; wl jsonb; dep jsonb; deps jsonb; d text;
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns
+             WHERE table_name='applications' AND column_name='bicep') THEN
+    FOR r IN SELECT * FROM applications LOOP
+      deps := '[]'::jsonb;
+      -- Bicep half → infrastructure entity + an application→infrastructure edge.
+      IF coalesce(r.bicep,'') <> '' OR coalesce(r.arm_template,'') <> '' THEN
+        new_infra := r.id || '-infra';
+        INSERT INTO infrastructure (id, name, description, owner_tenant, bicep, arm_template, bicep_params, bicep_outputs, created_by, created_at)
+          VALUES (new_infra, r.name || ' infrastructure', r.description, r.owner_tenant,
+                  coalesce(r.bicep,''), coalesce(r.arm_template,''), coalesce(r.bicep_params,'{}'::jsonb),
+                  coalesce(r.bicep_outputs,'{}'), r.created_by, r.created_at)
+          ON CONFLICT (id) DO NOTHING;
+        deps := deps || jsonb_build_object('kind','infrastructure','id',new_infra);
+        -- Re-point wiring entries at the new infrastructure id.
+        IF coalesce(r.wiring,'[]'::jsonb) <> '[]'::jsonb THEN
+          UPDATE applications SET wiring = (
+            SELECT coalesce(jsonb_agg(w || jsonb_build_object('infrastructure', new_infra)), '[]'::jsonb)
+            FROM jsonb_array_elements(r.wiring) w
+          ) WHERE id = r.id;
+        END IF;
+        -- Carry any per-tenant infra state onto tenant_infrastructure + enable it.
+        INSERT INTO tenant_infrastructure (tenant_slug, infra_id, infra_state, infra_outputs, sort_order)
+          SELECT td.tenant_slug, new_infra, coalesce(td.infra_state,''), coalesce(td.infra_outputs,'{}'), td.sort_order
+          FROM tenant_deployments td WHERE td.app_id = r.id
+          ON CONFLICT (tenant_slug, infra_id) DO NOTHING;
+        -- Entitle tenants entitled to the app to the split-out infrastructure too.
+        UPDATE tenants SET entitled_infrastructure =
+          (SELECT coalesce(array_agg(DISTINCT e),'{}') FROM unnest(entitled_infrastructure || ARRAY[new_infra]) e)
+          WHERE r.id = ANY(entitled_deployments);
+      END IF;
+      -- Untyped depends_on → typed dependencies (kind inferred from where the id lives).
+      IF r.depends_on IS NOT NULL THEN
+        FOREACH d IN ARRAY r.depends_on LOOP
+          IF EXISTS (SELECT 1 FROM applications WHERE id = d) THEN
+            deps := deps || jsonb_build_object('kind','application','id',d);
+          ELSIF EXISTS (SELECT 1 FROM catalog_agents WHERE id = d) THEN
+            deps := deps || jsonb_build_object('kind','agent','id',d);
+          END IF;
+        END LOOP;
+      END IF;
+      UPDATE applications SET dependencies = deps WHERE id = r.id;
+    END LOOP;
+    -- Retire the bundled Bicep columns + untyped depends_on from applications.
+    ALTER TABLE applications DROP COLUMN IF EXISTS bicep;
+    ALTER TABLE applications DROP COLUMN IF EXISTS arm_template;
+    ALTER TABLE applications DROP COLUMN IF EXISTS bicep_params;
+    ALTER TABLE applications DROP COLUMN IF EXISTS bicep_outputs;
+    ALTER TABLE applications DROP COLUMN IF EXISTS depends_on;
+  END IF;
+END $$;
+
 

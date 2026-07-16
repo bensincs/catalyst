@@ -130,10 +130,11 @@ type CatalogAgent struct {
 // TenantRegistryRow is a fleet tenant plus its entitlements (platform view).
 type TenantRegistryRow struct {
 	Tenant
-	EntitledAgents      []string `json:"entitledAgents"`
-	EntitledCount       int      `json:"entitledCount"`
-	EntitledStores      []string `json:"entitledStores"`
-	EntitledDeployments []string `json:"entitledDeployments"`
+	EntitledAgents         []string `json:"entitledAgents"`
+	EntitledCount          int      `json:"entitledCount"`
+	EntitledStores         []string `json:"entitledStores"`
+	EntitledDeployments    []string `json:"entitledDeployments"`
+	EntitledInfrastructure []string `json:"entitledInfrastructure"`
 }
 
 // MemoryStore is a reusable Foundry memory configuration that agents connect to.
@@ -177,12 +178,58 @@ type ClusterInfo struct {
 	Detail           string `json:"detail,omitempty"`
 }
 
-// Application is a Helm deployment a tenant runs in its cluster, realized as an
-// Argo CD Application. sync/health are reported back by the reconciler.
+// DepKind is the kind of catalog entity a dependency edge points at.
+type DepKind string
+
+const (
+	DepInfrastructure DepKind = "infrastructure"
+	DepApplication    DepKind = "application"
+	DepAgent          DepKind = "agent"
+	DepMemoryStore    DepKind = "memory_store"
+)
+
+// Dependency is one typed edge: the owning entity depends on (Kind, ID). Allowed
+// edges (enforced): infrastructure→infrastructure, application→{infrastructure,
+// application, agent}, agent→memory_store.
+type Dependency struct {
+	Kind DepKind `json:"kind"`
+	ID   string  `json:"id"`
+}
+
+// Infrastructure is an Azure/Bicep module authored as a catalog entity (platform
+// Owner "" or a tenant), entitled to tenants, and enabled per tenant — then
+// provisioned cross-tenant by the control plane (ARM via Lighthouse).
+// Applications depend on infrastructure and wire its outputs into their values.
+type Infrastructure struct {
+	ID           string         `json:"id"`
+	Name         string         `json:"name"`
+	Description  string         `json:"description"`
+	Owner        string         `json:"owner"` // "" = platform-authored; else tenant slug
+	BicepModule  string         `json:"bicepModule,omitempty"`
+	BicepParams  map[string]any `json:"bicepParams,omitempty"`
+	ArmTemplate  string         `json:"-"` // resolved ARM template; worker-only
+	BicepOutputs []string       `json:"bicepOutputs"`
+	Dependencies []Dependency   `json:"dependencies"` // infrastructure → infrastructure only
+	CreatedBy    string         `json:"createdBy,omitempty"`
+	CreatedAt    time.Time      `json:"createdAt"`
+
+	// Populated in the tenant view (per-tenant enablement + runtime status):
+	Platform   bool   `json:"platform"`
+	Owned      bool   `json:"owned"`
+	Entitled   bool   `json:"entitled"`
+	Enabled    bool   `json:"enabled"`
+	InfraState string `json:"infraState,omitempty"` // "" | provisioning | ready | failed
+	Health     string `json:"health,omitempty"`     // reconciling | live | blocked
+	Waiting    bool   `json:"waiting,omitempty"`     // enabled but held for unmet infra deps
+	// Populated in the platform view:
+	OwnerName string `json:"ownerName,omitempty"`
+}
+
 // Application is a Helm deployment defined as a catalog entity (like an agent or
 // memory store): authored by the platform (Owner "") or a tenant (Owner = slug),
 // entitled to tenants, and explicitly enabled per tenant — then realized as an
-// Argo CD Application in that tenant's cluster.
+// Argo CD Application in that tenant's cluster. Its Azure infrastructure is a
+// separate entity it DEPENDS on (see Dependencies + Wiring), not embedded.
 type Application struct {
 	ID             string            `json:"id"`
 	Name           string            `json:"name"`
@@ -193,12 +240,8 @@ type Application struct {
 	Chart          string            `json:"chart"`
 	TargetRevision string            `json:"targetRevision"`
 	Values         string            `json:"values,omitempty"`
-	BicepModule    string            `json:"bicepModule,omitempty"` // OCI ref to a published Bicep module
-	BicepParams    map[string]any    `json:"bicepParams,omitempty"` // author-supplied module params (baked into the ARM)
-	ArmTemplate    string            `json:"-"`                     // resolved ARM template; reconciler-only
-	BicepOutputs   []string          `json:"bicepOutputs"`          // resolved module output names (for wiring)
-	Wiring         []shared.WireLink `json:"wiring"`                // Bicep output → Helm values path
-	DependsOn      []string          `json:"dependsOn"`             // ids of apps/agents that must converge first
+	Wiring         []shared.WireLink `json:"wiring"`       // infra dependency output → Helm values path
+	Dependencies   []Dependency      `json:"dependencies"` // infrastructure | application | agent
 	CreatedBy      string            `json:"createdBy,omitempty"`
 	CreatedAt      time.Time         `json:"createdAt"`
 
@@ -210,7 +253,6 @@ type Application struct {
 	Health       string `json:"health,omitempty"`       // per-tenant lifecycle: reconciling | live | blocked
 	SyncStatus   string `json:"syncStatus,omitempty"`   // Argo sync when enabled
 	HealthStatus string `json:"healthStatus,omitempty"` // Argo health when enabled
-	InfraState   string `json:"infraState,omitempty"`   // Bicep infra: "" | provisioning | ready | failed
 	Waiting      bool   `json:"waiting,omitempty"`      // enabled but held for unmet dependencies
 	// Populated in the platform view:
 	OwnerName string `json:"ownerName,omitempty"` // owning tenant's display name
