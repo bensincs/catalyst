@@ -126,9 +126,13 @@ async function getAccessToken(): Promise<string> {
       secret: process.env.AUTH_SECRET!,
       salt: base,
     });
-    if (decoded?.error) throw new ApiError(401, `token ${decoded.error}`);
-    const accessToken = decoded?.accessToken as string | undefined;
-    if (accessToken) return accessToken;
+    if (!decoded) continue;
+    // Forward the ACTIVE tenant's access token (the user may hold several).
+    const tenants = decoded.tenants as Record<string, { accessToken?: string; error?: string }> | undefined;
+    const activeTid = decoded.activeTid as string | undefined;
+    const active = tenants && activeTid ? tenants[activeTid] : undefined;
+    if (active?.error) throw new ApiError(401, `token ${active.error}`);
+    if (active?.accessToken) return active.accessToken;
   }
   throw new ApiError(401, "no access token in session");
 }

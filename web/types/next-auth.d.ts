@@ -1,4 +1,9 @@
 import type { Role } from "@/lib/types";
+import type { TenantToken } from "@/auth";
+
+/** A directory the signed-in human can operate, surfaced to the switcher (no
+ *  tokens — those stay in the encrypted JWT). */
+export type SessionTenant = { tid: string; name: string; needsReauth: boolean };
 
 declare module "next-auth" {
   interface Session {
@@ -6,25 +11,25 @@ declare module "next-auth" {
       name?: string | null;
       email?: string | null;
       image?: string | null;
-      tid: string;
-      oid: string;
+      tid: string; // the ACTIVE tenant's Entra directory id
+      oid: string; // the caller's object id in the active tenant
       role: Role;
     };
+    /** Every directory this human has connected — the tenant switcher's list. */
+    tenants: SessionTenant[];
+    activeTid: string;
     error?: string;
   }
 }
 
 declare module "next-auth/jwt" {
   interface JWT {
-    tid?: string;
-    oid?: string;
     name?: string | null;
     email?: string | null;
-    /** Access token minted for the control-plane API — server-side only. */
-    accessToken?: string;
-    refreshToken?: string;
-    /** Access-token expiry, epoch seconds. */
-    expiresAt?: number;
+    /** Per-directory token bundles (server-side only, in the encrypted JWT). */
+    tenants?: Record<string, TenantToken>;
+    /** Which directory's token is currently forwarded to the API. */
+    activeTid?: string;
     error?: string;
   }
 }

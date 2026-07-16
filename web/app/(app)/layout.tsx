@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { redirect } from "next/navigation";
 import { CloudOff } from "lucide-react";
+import { auth } from "@/auth";
 import { ApiError, getFleet, getMe, getMyContext, type Me } from "@/lib/api";
 import { ConsoleProvider, type ConsoleData } from "@/components/providers/console-provider";
 import { ToastProvider } from "@/components/providers/toast-provider";
@@ -9,6 +10,7 @@ import { PendingApproval } from "@/components/views/pending-approval";
 import { ErrorState } from "@/components/ui/error-state";
 import { RetryButton } from "@/components/ui/retry-button";
 import type { Environment, TenantContextInfo, TenantSummary } from "@/lib/types";
+import type { SessionTenant } from "@/types/next-auth";
 
 // Every authed page reads the signed-in session and the control-plane API per
 // request — there is nothing to prerender. Force dynamic so `next build` never
@@ -26,9 +28,14 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   let me: Me;
   let tenants: TenantSummary[] = [];
   let activeTenant: TenantContextInfo | null = null;
+  let myTenants: SessionTenant[] = [];
+  let activeTid = "";
 
   try {
     me = await getMe();
+    const session = await auth();
+    myTenants = session?.tenants ?? [];
+    activeTid = session?.activeTid ?? me.tid;
     if (me.role === "tenant" && me.tenant && !me.tenant.enabled) {
       // Signed in, but the organization isn't enabled yet — show a pending
       // screen instead of the app (all other API routes are gated anyway).
@@ -66,6 +73,8 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
     env: (process.env.NEXT_PUBLIC_CORTEX_ENV as Environment) ?? "dev",
     tenants,
     activeTenant,
+    myTenants,
+    activeTid,
   };
 
   return (
