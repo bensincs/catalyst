@@ -1,0 +1,57 @@
+/* Typed dependency picker — toggleable pills grouped by dependency kind. Reuses
+   the deploy-after chip visual language shared across the deployment forms. */
+.groups {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-base);
+}
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.groupLabel {
+  font-size: var(--text-overline);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 13px;
+  font-size: var(--text-body-sm);
+  font-weight: 550;
+  color: var(--text-secondary);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-full);
+  transition:
+    color var(--dur-fast) var(--ease-out-quart),
+    border-color var(--dur-fast) var(--ease-out-quart),
+    background-color var(--dur-fast) var(--ease-out-quart);
+}
+.chip svg {
+  color: var(--text-muted);
+  flex: none;
+  transition: color var(--dur-fast) var(--ease-out-quart);
+}
+.chip:hover {
+  border-color: var(--text-disabled);
+  color: var(--text);
+}
+.chip[data-on] {
+  color: var(--accent-ink);
+  background: var(--accent-bg);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.chip[data-on] svg {
+  color: var(--accent-ink);
+}

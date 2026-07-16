@@ -100,8 +100,22 @@ export interface ClusterInfo {
   detail?: string;
 }
 
-/** Maps a Bicep deployment output to a Helm values path (the wiring). */
+/** The kinds of catalog entity a dependency edge can point at. */
+export type DepKind = "infrastructure" | "application" | "agent" | "memory_store";
+
+/** A typed dependency edge in the catalog graph. Allowed edges (enforced in the
+ *  UI pickers): infrastructure → infrastructure; application → infrastructure |
+ *  application | agent; agent → memory_store (handled in the agent editor). */
+export interface Dependency {
+  kind: DepKind;
+  id: string;
+}
+
+/** Maps an output of one of an application's infrastructure dependencies into a
+ *  Helm values path (the wiring). `infrastructure` is the id of the infrastructure
+ *  dependency the output comes from. */
 export interface WireLink {
+  infrastructure: string; // id of the infrastructure dependency the output belongs to
   bicepOutput: string;
   helmPath: string;
 }
@@ -137,18 +151,46 @@ export interface ChartInterface {
   schema?: Record<string, unknown>; // values.schema.json (JSON Schema), when present
 }
 
-/** A dependency candidate (another deployment or agent) a deployment can wait on. */
+/** A typed dependency candidate ({kind,id,name}) offered in a form's dependency
+ *  picker. Pre-filtered by the page to entitled/owned entities + allowed edges. */
 export interface DepOption {
   id: string;
   name: string;
-  kind: "app" | "agent";
+  kind: DepKind;
+}
+
+/** Infrastructure defined as a catalog entity (the Azure/Bicep half, split out
+ *  from deployments): a published Bicep module authored by the platform or a
+ *  tenant, entitled to tenants, and enabled per tenant — then provisioned by the
+ *  control plane into the tenant's resource group. Its outputs are wired into an
+ *  application's Helm values. It may depend on other infrastructure. */
+export interface Infrastructure {
+  id: string;
+  name: string;
+  description: string;
+  owner: string; // "" = platform-authored; else tenant slug
+  bicepModule?: string; // OCI ref to a published Bicep module (Azure infra)
+  bicepParams?: Record<string, unknown>; // author-supplied module params
+  bicepOutputs: string[]; // resolved module output names (for wiring)
+  dependencies: Dependency[]; // other infrastructure that must provision first
+  createdAt: string;
+  // platform view
+  ownerName?: string;
+  // tenant view flags
+  platform: boolean;
+  owned: boolean;
+  entitled: boolean;
+  enabled?: boolean; // explicitly enabled (provisioned) in the viewing tenant
+  infraState?: string; // Bicep infra: "" | provisioning | ready | failed
+  health?: Health; // per-tenant lifecycle when enabled: reconciling | live | blocked
+  waiting?: boolean; // enabled but held until dependencies converge
 }
 
 /** A deployment defined as a catalog entity (like an agent or memory store):
  *  authored by the platform or a tenant, entitled to tenants, and enabled per
  *  tenant — then realized as an Argo CD Application in that tenant's cluster.
- *  It may carry an Azure infra module (Bicep) whose outputs are wired into the
- *  Helm values, and dependencies that must deploy first. */
+ *  It wires the outputs of its infrastructure dependencies into the Helm values,
+ *  and may depend on other infrastructure, applications, or agents. */
 export interface Application {
   id: string;
   name: string;
@@ -159,11 +201,8 @@ export interface Application {
   chart: string;
   targetRevision: string;
   values?: string;
-  bicepModule?: string; // OCI ref to a published Bicep module (Azure infra)
-  bicepParams?: Record<string, unknown>; // author-supplied module params
-  bicepOutputs: string[]; // resolved module output names (for wiring)
-  wiring: WireLink[]; // Bicep output → Helm values path
-  dependsOn: string[]; // ids of apps/agents that must converge first
+  wiring: WireLink[]; // infrastructure output → Helm values path
+  dependencies: Dependency[]; // typed dependencies that must converge first
   createdAt: string;
   // platform view
   ownerName?: string;
@@ -175,7 +214,6 @@ export interface Application {
   health?: Health; // per-tenant lifecycle when enabled: reconciling | live | blocked
   syncStatus?: string; // Argo sync when enabled
   healthStatus?: string; // Argo health when enabled
-  infraState?: string; // Bicep infra: "" | provisioning | ready | failed
   waiting?: boolean; // enabled but held until dependencies converge
 }
 
@@ -249,6 +287,7 @@ export interface TenantRegistryRow {
   entitledCount: number;
   entitledStores: string[];
   entitledDeployments: string[];
+  entitledInfrastructure: string[];
   lifecycle: Lifecycle;
   enabled: boolean;
 }

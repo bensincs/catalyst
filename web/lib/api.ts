@@ -6,6 +6,8 @@ import type {
   AgentDefinition,
   AgentType,
   Application,
+  Dependency,
+  Infrastructure,
   WireLink,
   CatalogAgent,
   ClusterInfo,
@@ -354,6 +356,7 @@ interface ApiRegistryRow extends ApiTenant {
   entitledCount: number;
   entitledStores: string[];
   entitledDeployments: string[];
+  entitledInfrastructure: string[];
 }
 
 export const getTenantsRegistry = cache(async (): Promise<TenantRegistryRow[]> => {
@@ -373,6 +376,7 @@ export const getTenantsRegistry = cache(async (): Promise<TenantRegistryRow[]> =
     entitledCount: t.entitledCount,
     entitledStores: t.entitledStores ?? [],
     entitledDeployments: t.entitledDeployments ?? [],
+    entitledInfrastructure: t.entitledInfrastructure ?? [],
     lifecycle: (t.lifecycle ?? "enrolling") as Lifecycle,
     enabled: t.enabled ?? true,
   }));
@@ -390,11 +394,8 @@ interface ApiApplication {
   chart: string;
   targetRevision: string;
   values?: string;
-  bicepModule?: string;
-  bicepParams?: Record<string, unknown> | null;
-  bicepOutputs?: string[] | null;
   wiring?: WireLink[] | null;
-  dependsOn?: string[] | null;
+  dependencies?: Dependency[] | null;
   createdAt: string;
   ownerName?: string;
   platform?: boolean;
@@ -404,7 +405,6 @@ interface ApiApplication {
   health?: string;
   syncStatus?: string;
   healthStatus?: string;
-  infraState?: string;
   waiting?: boolean;
 }
 
@@ -420,11 +420,8 @@ export const getApplications = cache(async (): Promise<Application[]> => {
     chart: a.chart,
     targetRevision: a.targetRevision,
     values: a.values,
-    bicepModule: a.bicepModule ?? "",
-    bicepParams: a.bicepParams ?? {},
-    bicepOutputs: a.bicepOutputs ?? [],
     wiring: a.wiring ?? [],
-    dependsOn: a.dependsOn ?? [],
+    dependencies: a.dependencies ?? [],
     createdAt: a.createdAt,
     ownerName: a.ownerName,
     platform: a.platform ?? a.owner === "",
@@ -434,8 +431,52 @@ export const getApplications = cache(async (): Promise<Application[]> => {
     health: (a.health as Application["health"]) || undefined,
     syncStatus: a.syncStatus || undefined,
     healthStatus: a.healthStatus || undefined,
-    infraState: a.infraState || undefined,
     waiting: Boolean(a.waiting),
+  }));
+});
+
+/* ── Infrastructure (Azure/Bicep → control plane) ─────────────────────────── */
+
+interface ApiInfrastructure {
+  id: string;
+  name: string;
+  description?: string;
+  owner?: string;
+  bicepModule?: string;
+  bicepParams?: Record<string, unknown> | null;
+  bicepOutputs?: string[] | null;
+  dependencies?: Dependency[] | null;
+  createdAt: string;
+  ownerName?: string;
+  platform?: boolean;
+  owned?: boolean;
+  entitled?: boolean;
+  enabled?: boolean;
+  infraState?: string;
+  health?: string;
+  waiting?: boolean;
+}
+
+export const getInfrastructure = cache(async (): Promise<Infrastructure[]> => {
+  const c = await apiGet<{ infrastructure: ApiInfrastructure[] }>("/api/infrastructure");
+  return (c.infrastructure ?? []).map((i) => ({
+    id: i.id,
+    name: i.name,
+    description: i.description ?? "",
+    owner: i.owner ?? "",
+    bicepModule: i.bicepModule ?? "",
+    bicepParams: i.bicepParams ?? {},
+    bicepOutputs: i.bicepOutputs ?? [],
+    dependencies: i.dependencies ?? [],
+    createdAt: i.createdAt,
+    ownerName: i.ownerName,
+    platform: i.platform ?? i.owner === "",
+    owned: Boolean(i.owned),
+    entitled: Boolean(i.entitled),
+    enabled: Boolean(i.enabled),
+    infraState: i.infraState || undefined,
+    health: (i.health as Infrastructure["health"]) || undefined,
+    waiting: Boolean(i.waiting),
   }));
 });
 

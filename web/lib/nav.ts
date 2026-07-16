@@ -1,6 +1,7 @@
 import {
   Activity,
   Bot,
+  Boxes,
   Database,
   Gauge,
   LayoutDashboard,
@@ -53,7 +54,13 @@ const PLATFORM_NAV: NavGroup[] = [
         label: "Deployments",
         href: "/deployments",
         icon: Rocket,
-        hint: "Author Helm + Bicep deployments and entitle tenants",
+        hint: "Author Helm deployments and entitle tenants",
+      },
+      {
+        label: "Infrastructure",
+        href: "/infrastructure",
+        icon: Boxes,
+        hint: "Author Azure (Bicep) infrastructure and entitle tenants",
       },
       {
         label: "Metering",
@@ -104,6 +111,12 @@ const TENANT_NAV: NavGroup[] = [
         href: "/deployments",
         icon: Rocket,
         hint: "Enable or author deployments in your cluster",
+      },
+      {
+        label: "Infrastructure",
+        href: "/infrastructure",
+        icon: Boxes,
+        hint: "Enable or author Azure infrastructure for your tenant",
       },
       {
         label: "Install",

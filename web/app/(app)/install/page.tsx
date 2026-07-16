@@ -1,5 +1,5 @@
 import { ServerCog } from "lucide-react";
-import { getApplications, getMe, getMyContext } from "@/lib/api";
+import { getApplications, getInfrastructure, getMe, getMemoryStores, getMyContext } from "@/lib/api";
 import { InstallView, type InfraSummary } from "@/components/views/install-view";
 import { PlaceholderPage } from "@/components/views/placeholder-page";
 
@@ -18,13 +18,18 @@ export default async function InstallPage() {
       />
     );
   }
-  const [ctx, apps] = await Promise.all([getMyContext(), getApplications()]);
+  const [ctx, infrastructure, applications, stores] = await Promise.all([
+    getMyContext(),
+    getInfrastructure(),
+    getApplications(),
+    getMemoryStores(),
+  ]);
 
-  // Aggregate the provisioning state of the tenant's enabled deployments that
-  // carry Azure infra (deployed by the control plane via Lighthouse).
-  const withInfra = apps.filter((a) => a.enabled && (a.bicepModule ?? "").trim() !== "");
-  const ready = withInfra.filter((a) => a.infraState === "ready").length;
-  const failed = withInfra.filter((a) => a.infraState === "failed").length;
+  // Aggregate the provisioning state of the tenant's enabled infrastructure
+  // (deployed by the control plane via Lighthouse).
+  const withInfra = infrastructure.filter((i) => i.enabled);
+  const ready = withInfra.filter((i) => i.infraState === "ready").length;
+  const failed = withInfra.filter((i) => i.infraState === "failed").length;
   const infra: InfraSummary = {
     total: withInfra.length,
     ready,
@@ -40,6 +45,10 @@ export default async function InstallPage() {
       cortexTenantId={process.env.PLATFORM_TENANT_ID ?? "<your Cortex tenant id>"}
       cortexPrincipalId={process.env.CORTEX_SP_OBJECT_ID ?? "<Cortex control-plane service principal object id>"}
       now={Date.now()}
+      infrastructure={withInfra}
+      applications={applications.filter((a) => a.enabled)}
+      agents={ctx.agents}
+      stores={stores.filter((s) => s.enabled)}
     />
   );
 }

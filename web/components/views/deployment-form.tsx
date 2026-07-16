@@ -1,34 +1,29 @@
 "use client";
 
-import { useEffect, useState, useTransition, type ReactNode } from "react";
+import { useEffect, useMemo, useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, Bot, Boxes, Cable, Cloud, GitBranch, Package, Rocket, SlidersHorizontal } from "lucide-react";
+import { ArrowLeft, Boxes, Cable, GitBranch, Package, Rocket } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Field, TextInput, Textarea } from "@/components/ui/form";
 import { StatusBadge } from "@/components/ui/status";
 import { useToast } from "@/components/providers/toast-provider";
 import { WiringCanvas } from "./wiring-canvas";
-import {
-  createApplication,
-  updateApplication,
-  inspectModule,
-  inspectChart,
-  type ActionResult,
-} from "@/lib/actions";
-import { coerce, mapToYaml, toText, yamlToMap } from "@/lib/values";
-import type {
-  Application,
-  BicepOutputSpec,
-  BicepParamSpec,
-  ClusterInfo,
-  DepOption,
-  Role,
-  WireLink,
-} from "@/lib/types";
+import { DependencyPicker } from "./dependency-picker";
+import { createApplication, updateApplication, inspectChart, type ActionResult } from "@/lib/actions";
+import { mapToYaml, yamlToMap } from "@/lib/values";
+import type { Application, ClusterInfo, Dependency, DepOption, Role, WireLink } from "@/lib/types";
 import styles from "./deployment-form.module.css";
 
 type Obj = Record<string, unknown>;
+
+/** One infrastructure candidate's wireable Bicep outputs, keyed by its id — the
+ *  sources the author can wire into Helm values once it's a dependency. */
+export interface InfraOutputs {
+  id: string;
+  name: string;
+  outputs: string[];
+}
 
 // Dotted leaf paths of a chart's default values — the Helm value-path suggestions.
 function flattenPaths(obj: Obj, base = ""): string[] {
@@ -45,15 +40,28 @@ function flattenPaths(obj: Obj, base = ""): string[] {
   return out;
 }
 
+// A wiring source token encodes which infrastructure dependency an output came
+// from, so every emitted WireLink can carry its `infrastructure` id. Format:
+// `<infraId>:<bicepOutput>` (split on the first colon; infra ids are slugs).
+const wireToken = (infrastructure: string, bicepOutput: string) => `${infrastructure}:${bicepOutput}`;
+function parseWireToken(token: string): { infrastructure: string; bicepOutput: string } {
+  const i = token.indexOf(":");
+  return i < 0
+    ? { infrastructure: "", bicepOutput: token }
+    : { infrastructure: token.slice(0, i), bicepOutput: token.slice(i + 1) };
+}
+
 export function DeploymentForm({
   role,
   app,
   depOptions = [],
+  infraOutputs = [],
   cluster,
 }: {
   role: Role;
   app?: Application;
   depOptions?: DepOption[];
+  infraOutputs?: InfraOutputs[];
   cluster?: ClusterInfo;
 }) {
   const router = useRouter();
@@ -67,48 +75,13 @@ export function DeploymentForm({
   const [repoURL, setRepoURL] = useState(app?.repoURL ?? "");
   const [chart, setChart] = useState(app?.chart ?? "");
   const [targetRevision, setTargetRevision] = useState(app?.targetRevision ?? "");
-  const [bicepModule, setBicepModule] = useState(app?.bicepModule ?? "");
   const [values, setValues] = useState(app?.values ?? "");
-  const [paramValues, setParamValues] = useState<Obj>(app?.bicepParams ?? {});
   const [wiring, setWiring] = useState<WireLink[]>(app?.wiring ?? []);
-  const [dependsOn, setDependsOn] = useState<string[]>(app?.dependsOn ?? []);
-
-  // Module inspection → typed inputs + wireable outputs.
-  const [inspect, setInspect] = useState<{
-    loading: boolean;
-    resolved: boolean;
-    params: BicepParamSpec[];
-    outputs: BicepOutputSpec[];
-    error?: string;
-  }>({ loading: false, resolved: false, params: [], outputs: [] });
+  const [dependencies, setDependencies] = useState<Dependency[]>(app?.dependencies ?? []);
 
   // Chart inspection → Helm value-path suggestions for the wiring canvas.
   const [helmPaths, setHelmPaths] = useState<string[]>([]);
   const [chartLoading, setChartLoading] = useState(false);
-
-  useEffect(() => {
-    const ref = bicepModule.trim();
-    if (ref === "") {
-      setInspect({ loading: false, resolved: false, params: [], outputs: [] });
-      return;
-    }
-    let cancelled = false;
-    setInspect((s) => ({ ...s, loading: true, error: undefined }));
-    const t = setTimeout(async () => {
-      try {
-        const r = await inspectModule(ref);
-        if (cancelled) return;
-        if (r.ok) setInspect({ loading: false, resolved: r.resolved, params: r.params, outputs: r.outputs });
-        else setInspect({ loading: false, resolved: false, params: [], outputs: [], error: r.error });
-      } catch {
-        if (!cancelled) setInspect({ loading: false, resolved: false, params: [], outputs: [], error: "Couldn't inspect the module." });
-      }
-    }, 500);
-    return () => {
-      cancelled = true;
-      clearTimeout(t);
-    };
-  }, [bicepModule]);
 
   useEffect(() => {
     const repo = repoURL.trim();
@@ -138,27 +111,33 @@ export function DeploymentForm({
     };
   }, [repoURL, chart, targetRevision]);
 
-  const liveOutputs = inspect.outputs.length > 0 ? inspect.outputs.map((o) => o.name) : (app?.bicepOutputs ?? []);
-  const paramNames = inspect.params.map((p) => p.name);
+  // The wireable sources are the outputs of the app's chosen INFRASTRUCTURE
+  // dependencies — each namespaced by its infra id so the WireLink knows its origin.
+  const selectedInfra = useMemo(
+    () => new Set(dependencies.filter((d) => d.kind === "infrastructure").map((d) => d.id)),
+    [dependencies],
+  );
+  const liveOutputs = useMemo(
+    () =>
+      infraOutputs
+        .filter((i) => selectedInfra.has(i.id))
+        .flatMap((i) => i.outputs.map((o) => wireToken(i.id, o))),
+    [infraOutputs, selectedInfra],
+  );
 
-  // Seed the wiring boards from the app being edited (once; the boards own state
-  // after mount): Helm static values + wired outputs, and Bicep static inputs.
+  // Seed the wiring board from the app being edited (once; the board owns state
+  // after mount): Helm static values + wired outputs (as infra-namespaced tokens).
   const helmInitialStatic = yamlToMap(app?.values ?? "");
-  const helmInitialWired = Object.fromEntries((app?.wiring ?? []).map((w) => [w.helmPath, w.bicepOutput]));
-  const bicepInitialStatic = Object.fromEntries(Object.entries(app?.bicepParams ?? {}).map(([k, v]) => [k, toText(v)]));
+  const helmInitialWired = Object.fromEntries(
+    (app?.wiring ?? []).map((w) => [w.helmPath, wireToken(w.infrastructure, w.bicepOutput)]),
+  );
 
   const hasChart = repoURL.trim() !== "" && chart.trim() !== "";
-  const hasModule = bicepModule.trim() !== "";
-  // A resolved module's required inputs must be set, or the save-time `bicep build`
-  // fails (BCP035). paramValues only holds inputs that were given a value.
-  const requiredParams = inspect.params.filter((p) => p.required).map((p) => p.name);
-  const missingRequired = requiredParams.filter((n) => !(n in paramValues));
-  const valid = name.trim().length >= 2 && hasChart && missingRequired.length === 0;
-
-  const toggleDep = (id: string) =>
-    setDependsOn((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  const valid = name.trim().length >= 2 && hasChart;
 
   const submit = () => {
+    // Only keep wiring whose infrastructure is still a selected dependency.
+    const cleanWiring = wiring.filter((w) => selectedInfra.has(w.infrastructure));
     const input = {
       name: name.trim(),
       description: description.trim(),
@@ -167,10 +146,8 @@ export function DeploymentForm({
       chart: chart.trim(),
       targetRevision: targetRevision.trim(),
       values,
-      bicepModule: bicepModule.trim(),
-      bicepParams: paramValues,
-      wiring,
-      dependsOn,
+      wiring: cleanWiring,
+      dependencies,
     };
     start(async () => {
       const res: ActionResult = editing ? await updateApplication(app.id, input) : await createApplication(input);
@@ -184,7 +161,7 @@ export function DeploymentForm({
     });
   };
 
-  const wiredCount = wiring.length;
+  const wiredCount = wiring.filter((w) => selectedInfra.has(w.infrastructure)).length;
 
   return (
     <div className={styles.page}>
@@ -199,8 +176,8 @@ export function DeploymentForm({
           <div>
             <h1 className={styles.title}>{editing ? `Edit ${app.name}` : "New deployment"}</h1>
             <p className={styles.subtitle}>
-              A deployable Helm chart, optionally backed by Azure infra (Bicep). Set each side&apos;s inputs, then wire
-              the infra&apos;s outputs into the chart.
+              A deployable Helm chart, realized as an Argo CD Application. Add dependencies, then wire the outputs
+              of its infrastructure dependencies into the chart&apos;s Helm values.
             </p>
           </div>
         </div>
@@ -222,110 +199,52 @@ export function DeploymentForm({
           </Field>
         </Section>
 
-        <div className={styles.columns}>
-          <div className={styles.col}>
-            <Section
-              icon={Cloud}
-              title="Azure infrastructure"
-              desc="An optional Bicep module, provisioned in the tenant's resource group before the chart."
-              status={
-                !hasModule ? (
-                  <StatusBadge tone="neutral" label="optional" variant="soft" />
-                ) : inspect.loading ? (
-                  <StatusBadge tone="info" label="inspecting…" variant="soft" pulse />
-                ) : inspect.resolved ? (
-                  <StatusBadge tone="success" label={`${inspect.params.length} inputs · ${inspect.outputs.length} outputs`} variant="soft" />
-                ) : inspect.error ? (
-                  <StatusBadge tone="warning" label="couldn't inspect" variant="soft" />
-                ) : undefined
-              }
-            >
-              <Field
-                label="Bicep module reference"
-                htmlFor="dep-bicep"
-                hint="An OCI reference to a published Bicep module — its inputs + outputs resolve as you type."
-              >
-                <TextInput
-                  id="dep-bicep"
-                  value={bicepModule}
-                  onChange={(e) => setBicepModule(e.target.value)}
-                  spellCheck={false}
-                  placeholder="br:cortexcpacrzo7yflmq.azurecr.io/bicep/postgres:1.2.0"
-                />
-              </Field>
-            </Section>
-          </div>
-
-          <div className={styles.col}>
-            <Section
-              icon={Boxes}
-              title="Helm chart"
-              desc="The chart to install into the cluster as an Argo CD Application."
-              status={
-                chartLoading ? (
-                  <StatusBadge tone="info" label="inspecting…" variant="soft" pulse />
-                ) : helmPaths.length > 0 ? (
-                  <StatusBadge tone="success" label={`${helmPaths.length} value paths`} variant="soft" />
-                ) : hasChart ? (
-                  <StatusBadge tone="neutral" label="no schema" variant="soft" />
-                ) : undefined
-              }
-            >
-              <datalist id="dep-repos">
-                <option value="https://charts.bitnami.com/bitnami" />
-                <option value="https://kubernetes.github.io/ingress-nginx" />
-                <option value="https://prometheus-community.github.io/helm-charts" />
-              </datalist>
-              <Field label="Helm repo / OCI URL" htmlFor="dep-repo" hint="A Helm repository (https://…) or OCI registry (oci://…).">
-                <TextInput
-                  id="dep-repo"
-                  list="dep-repos"
-                  value={repoURL}
-                  onChange={(e) => setRepoURL(e.target.value)}
-                  placeholder="https://charts.bitnami.com/bitnami"
-                  spellCheck={false}
-                />
-              </Field>
-              <div className={styles.grid2}>
-                <Field label="Chart" htmlFor="dep-chart">
-                  <TextInput id="dep-chart" value={chart} onChange={(e) => setChart(e.target.value)} placeholder="nginx" spellCheck={false} />
-                </Field>
-                <Field label="Version" htmlFor="dep-ver" hint="Chart version (blank = latest).">
-                  <TextInput id="dep-ver" value={targetRevision} onChange={(e) => setTargetRevision(e.target.value)} placeholder="15.14.0" spellCheck={false} />
-                </Field>
-              </div>
-            </Section>
-          </div>
-        </div>
-
-        {hasModule && (
-          <Section
-            icon={SlidersHorizontal}
-            title="Bicep inputs"
-            desc="Wire a static value into each of the module's parameters — baked into the template on save."
-          >
-            <WiringCanvas
-              targets={paramNames}
-              requiredTargets={requiredParams}
-              allowAddTarget
-              sourceLabel="Static inputs"
-              targetLabel="Bicep inputs"
-              addPlaceholder="Add a parameter not listed…"
-              emptyHint={inspect.loading ? "Resolving the module's inputs…" : "No inputs resolved — add a parameter below."}
-              initialStatic={bicepInitialStatic}
-              initialWired={{}}
-              onChange={(sm) => {
-                const params: Record<string, unknown> = {};
-                for (const [k, v] of Object.entries(sm)) if (v.trim() !== "") params[k] = coerce(v);
-                setParamValues(params);
-              }}
+        <Section
+          icon={Boxes}
+          title="Helm chart"
+          desc="The chart to install into the cluster as an Argo CD Application."
+          status={
+            chartLoading ? (
+              <StatusBadge tone="info" label="inspecting…" variant="soft" pulse />
+            ) : helmPaths.length > 0 ? (
+              <StatusBadge tone="success" label={`${helmPaths.length} value paths`} variant="soft" />
+            ) : hasChart ? (
+              <StatusBadge tone="neutral" label="no schema" variant="soft" />
+            ) : undefined
+          }
+        >
+          <datalist id="dep-repos">
+            <option value="https://charts.bitnami.com/bitnami" />
+            <option value="https://kubernetes.github.io/ingress-nginx" />
+            <option value="https://prometheus-community.github.io/helm-charts" />
+          </datalist>
+          <Field label="Helm repo / OCI URL" htmlFor="dep-repo" hint="A Helm repository (https://…) or OCI registry (oci://…).">
+            <TextInput
+              id="dep-repo"
+              list="dep-repos"
+              value={repoURL}
+              onChange={(e) => setRepoURL(e.target.value)}
+              placeholder="https://charts.bitnami.com/bitnami"
+              spellCheck={false}
             />
-            {missingRequired.length > 0 && (
-              <p className={styles.reqWarn}>
-                {missingRequired.length} required input{missingRequired.length === 1 ? "" : "s"} still unset — wire a value into{" "}
-                <span className="mono">{missingRequired.join(", ")}</span> before saving.
-              </p>
-            )}
+          </Field>
+          <div className={styles.grid2}>
+            <Field label="Chart" htmlFor="dep-chart">
+              <TextInput id="dep-chart" value={chart} onChange={(e) => setChart(e.target.value)} placeholder="nginx" spellCheck={false} />
+            </Field>
+            <Field label="Version" htmlFor="dep-ver" hint="Chart version (blank = latest).">
+              <TextInput id="dep-ver" value={targetRevision} onChange={(e) => setTargetRevision(e.target.value)} placeholder="15.14.0" spellCheck={false} />
+            </Field>
+          </div>
+        </Section>
+
+        {depOptions.length > 0 && (
+          <Section
+            icon={GitBranch}
+            title="Dependencies"
+            desc="Infrastructure, applications, or agents this deployment waits on — dependencies converge first (Argo sync-waves order the deploy). An infrastructure dependency's outputs become wireable below."
+          >
+            <DependencyPicker options={depOptions} value={dependencies} onChange={setDependencies} />
           </Section>
         )}
 
@@ -333,7 +252,7 @@ export function DeploymentForm({
           <Section
             icon={Cable}
             title="Helm values"
-            desc="Wire a source — a static value you type, or a Bicep output — into each Helm value. The only place a chart's values are set."
+            desc="Wire a source — a static value you type, or an output of a chosen infrastructure dependency — into each Helm value. The only place a chart's values are set."
             accent
           >
             <WiringCanvas
@@ -349,25 +268,19 @@ export function DeploymentForm({
               initialWired={helmInitialWired}
               onChange={(sm, wm) => {
                 setValues(mapToYaml(sm));
-                setWiring(Object.entries(wm).map(([helmPath, bicepOutput]) => ({ bicepOutput, helmPath })));
+                setWiring(
+                  Object.entries(wm).map(([helmPath, token]) => {
+                    const { infrastructure, bicepOutput } = parseWireToken(token);
+                    return { infrastructure, bicepOutput, helmPath };
+                  }),
+                );
               }}
             />
-          </Section>
-        )}
-
-        {depOptions.length > 0 && (
-          <Section icon={GitBranch} title="Deploy after" desc="Dependencies converge first — Argo sync-waves order the deploy.">
-            <div className={styles.depGrid}>
-              {depOptions.map((o) => {
-                const on = dependsOn.includes(o.id);
-                return (
-                  <button type="button" key={o.id} className={styles.depChip} data-on={on || undefined} onClick={() => toggleDep(o.id)}>
-                    {o.kind === "agent" ? <Bot size={14} strokeWidth={2.2} /> : <Rocket size={14} strokeWidth={2.2} />}
-                    <span>{o.name}</span>
-                  </button>
-                );
-              })}
-            </div>
+            {liveOutputs.length === 0 && (
+              <p className={styles.note}>
+                Add an infrastructure dependency above to wire its outputs into these values.
+              </p>
+            )}
           </Section>
         )}
       </div>
@@ -379,19 +292,14 @@ export function DeploymentForm({
               <Boxes size={14} strokeWidth={2.2} /> <span className="mono">{chart.trim() || "chart"}</span>
             </span>
           )}
-          {hasModule && (
-            <span className={styles.sumItem}>
-              <Cloud size={14} strokeWidth={2.2} /> Azure infra
-            </span>
-          )}
           {wiredCount > 0 && (
             <span className={styles.sumItem}>
               <Cable size={14} strokeWidth={2.2} /> {wiredCount} wired
             </span>
           )}
-          {dependsOn.length > 0 && (
+          {dependencies.length > 0 && (
             <span className={styles.sumItem}>
-              <GitBranch size={14} strokeWidth={2.2} /> {dependsOn.length} dep{dependsOn.length === 1 ? "" : "s"}
+              <GitBranch size={14} strokeWidth={2.2} /> {dependencies.length} dep{dependencies.length === 1 ? "" : "s"}
             </span>
           )}
         </div>

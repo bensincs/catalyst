@@ -22,7 +22,17 @@ import { PageHeader } from "@/components/ui/page-header";
 import { Button } from "@/components/ui/button";
 import { StatusBadge, StatusDot } from "@/components/ui/status";
 import { formatRelative } from "@/lib/format";
-import { LIFECYCLE_META, type ClusterInfo, type Lifecycle, type TenantContextInfo } from "@/lib/types";
+import {
+  LIFECYCLE_META,
+  type Application,
+  type ClusterInfo,
+  type EnabledAgent,
+  type Infrastructure,
+  type Lifecycle,
+  type MemoryStore,
+  type TenantContextInfo,
+} from "@/lib/types";
+import { DependencyGraph } from "./dependency-graph";
 import styles from "./install-view.module.css";
 
 /** Aggregate provisioning state of a tenant's enabled deployments that carry
@@ -49,6 +59,10 @@ export function InstallView({
   cortexTenantId,
   cortexPrincipalId,
   now,
+  infrastructure,
+  applications,
+  agents,
+  stores,
 }: {
   tenant: TenantContextInfo;
   agentCount: number;
@@ -56,6 +70,10 @@ export function InstallView({
   cortexTenantId: string;
   cortexPrincipalId: string;
   now: number;
+  infrastructure: Infrastructure[];
+  applications: Application[];
+  agents: EnabledAgent[];
+  stores: MemoryStore[];
 }) {
   const lc = LIFECYCLE_META[tenant.lifecycle];
   const recon = reconStatus(tenant.lifecycle);
@@ -90,6 +108,17 @@ export function InstallView({
           )
         }
       />
+
+      {/* Live dependency topology — the enabled graph in the tenant's subscription */}
+      <section className={styles.topology} aria-label="Dependency topology">
+        <div className={styles.topologyHead}>
+          <h2 className={styles.topologyTitle}>Topology</h2>
+          <span className={styles.topologyDesc}>
+            What Cortex has provisioned in your subscription, and how each piece depends on the others.
+          </span>
+        </div>
+        <DependencyGraph infrastructure={infrastructure} applications={applications} agents={agents} stores={stores} />
+      </section>
 
       {/* Staged system checks — reads top to bottom as the install comes online */}
       <section className={styles.checks} aria-label="Install status checks">
@@ -267,7 +296,7 @@ function reconStatus(lifecycle: Lifecycle): {
       return {
         tone: "info",
         label: "Awaiting first heartbeat",
-        sub: "Deploy the Cortex app into your subscription; its reconciler enrolls over its own managed identity and this turns live.",
+        sub: "Once you delegate your subscription, Cortex provisions the reconciler and it enrolls over its own managed identity — this turns live on its first heartbeat.",
       };
   }
 }

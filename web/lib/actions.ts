@@ -8,6 +8,7 @@ import type {
   BicepOutputSpec,
   BicepParamSpec,
   ChartInterface,
+  Dependency,
   MemoryStoreDefinition,
   WireLink,
 } from "@/lib/types";
@@ -34,18 +35,18 @@ async function run(fn: () => Promise<unknown>, paths: string[]): Promise<ActionR
 }
 
 // Inspect a Bicep module's published interface (input params + outputs) so the
-// deployment modal can render a typed form and show wireable outputs before save.
+// infrastructure form can render a typed form and show wireable outputs before save.
 export type InspectResult =
   | { ok: true; params: BicepParamSpec[]; outputs: BicepOutputSpec[]; resolved: boolean }
   | { ok: false; error: string };
 
-export async function inspectModule(bicepModule: string): Promise<InspectResult> {
+export async function inspectInfraModule(bicepModule: string): Promise<InspectResult> {
   const ref = bicepModule.trim();
   if (ref === "") return { ok: true, params: [], outputs: [], resolved: false };
   try {
     const d = await apiSend<{ params: BicepParamSpec[]; outputs: BicepOutputSpec[]; resolved: boolean }>(
       "POST",
-      "/api/applications/inspect",
+      "/api/infrastructure/inspect",
       { bicepModule: ref },
     );
     return { ok: true, params: d.params ?? [], outputs: d.outputs ?? [], resolved: Boolean(d.resolved) };
@@ -220,10 +221,8 @@ export async function createApplication(input: {
   chart: string;
   targetRevision: string;
   values: string;
-  bicepModule: string;
-  bicepParams: Record<string, unknown>;
   wiring: WireLink[];
-  dependsOn: string[];
+  dependencies: Dependency[];
 }): Promise<ActionResult> {
   return run(() => apiSend("POST", "/api/applications", input), ["/deployments"]);
 }
@@ -238,10 +237,8 @@ export async function updateApplication(
     chart: string;
     targetRevision: string;
     values: string;
-    bicepModule: string;
-    bicepParams: Record<string, unknown>;
     wiring: WireLink[];
-    dependsOn: string[];
+    dependencies: Dependency[];
   },
 ): Promise<ActionResult> {
   return run(
@@ -281,5 +278,67 @@ export async function disableDeployment(id: string): Promise<ActionResult> {
   return run(
     () => apiSend("DELETE", `/api/tenant/deployments/${encodeURIComponent(id)}`),
     ["/deployments"],
+  );
+}
+
+/* ── Infrastructure — catalog entities (the Azure/Bicep half) ─────────────── */
+
+export async function createInfrastructure(input: {
+  name: string;
+  description: string;
+  bicepModule: string;
+  bicepParams: Record<string, unknown>;
+  dependencies: Dependency[];
+}): Promise<ActionResult> {
+  return run(() => apiSend("POST", "/api/infrastructure", input), ["/infrastructure"]);
+}
+
+export async function updateInfrastructure(
+  id: string,
+  input: {
+    name: string;
+    description: string;
+    bicepModule: string;
+    bicepParams: Record<string, unknown>;
+    dependencies: Dependency[];
+  },
+): Promise<ActionResult> {
+  return run(
+    () => apiSend("PATCH", `/api/infrastructure/${encodeURIComponent(id)}`, input),
+    ["/infrastructure"],
+  );
+}
+
+export async function deleteInfrastructure(id: string): Promise<ActionResult> {
+  return run(
+    () => apiSend("DELETE", `/api/infrastructure/${encodeURIComponent(id)}`),
+    ["/infrastructure"],
+  );
+}
+
+export async function setInfrastructureEntitlements(
+  slug: string,
+  entitledInfrastructure: string[],
+): Promise<ActionResult> {
+  return run(
+    () =>
+      apiSend("PATCH", `/api/tenants/${encodeURIComponent(slug)}/infrastructure-entitlements`, {
+        entitledInfrastructure,
+      }),
+    [`/tenants/${slug}`, "/infrastructure"],
+  );
+}
+
+export async function enableInfrastructure(id: string): Promise<ActionResult> {
+  return run(
+    () => apiSend("POST", `/api/tenant/infrastructure/${encodeURIComponent(id)}`),
+    ["/infrastructure"],
+  );
+}
+
+export async function disableInfrastructure(id: string): Promise<ActionResult> {
+  return run(
+    () => apiSend("DELETE", `/api/tenant/infrastructure/${encodeURIComponent(id)}`),
+    ["/infrastructure"],
   );
 }

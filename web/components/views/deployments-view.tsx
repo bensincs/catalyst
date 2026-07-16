@@ -2,7 +2,7 @@
 
 import { useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Rocket, Plus, Trash2, Pencil, Power, Cloud, GitBranch } from "lucide-react";
+import { Rocket, Plus, Trash2, Pencil, Power, GitBranch } from "lucide-react";
 import { PageHeader } from "@/components/ui/page-header";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -13,7 +13,6 @@ import {
   HEALTH_META,
   type Application,
   type ClusterInfo,
-  type DepOption,
   type HealthMeta,
   type Role,
 } from "@/lib/types";
@@ -42,7 +41,6 @@ export function DeploymentsView({
   role: Role;
   applications: Application[];
   cluster?: ClusterInfo;
-  depOptions?: DepOption[];
 }) {
   const router = useRouter();
   const { toast } = useToast();
@@ -128,14 +126,6 @@ export function DeploymentsView({
                     {!platform && a.enabled && a.waiting && (
                       <StatusBadge tone="warning" label="Waiting on deps" variant="soft" />
                     )}
-                    {!platform && a.enabled && a.infraState && (
-                      <StatusBadge
-                        tone={a.infraState === "ready" ? "success" : a.infraState === "failed" ? "danger" : "info"}
-                        label={`Infra ${a.infraState}`}
-                        variant="soft"
-                        pulse={a.infraState === "provisioning"}
-                      />
-                    )}
                     {platform && a.owner !== "" && a.ownerName && (
                       <span className={styles.count}>owned by {a.ownerName}</span>
                     )}
@@ -206,16 +196,15 @@ function DefinitionChips({ app, showRuntime }: { app: Application; showRuntime: 
       <span className={styles.chip}>
         ns <span className="mono">{app.namespace}</span>
       </span>
-      {app.bicepModule ? (
-        <span className={styles.chip} title={`Azure infra: ${app.bicepModule}`}>
-          <Cloud size={12} strokeWidth={2.2} /> Azure infra
-          {app.wiring.length > 0 ? ` · ${app.wiring.length} wired` : ""}
+      {app.dependencies.length > 0 && (
+        <span className={styles.chip} title="Typed dependencies that converge first">
+          <GitBranch size={12} strokeWidth={2.2} /> {app.dependencies.length} dep
+          {app.dependencies.length === 1 ? "" : "s"}
         </span>
-      ) : null}
-      {app.dependsOn.length > 0 && (
-        <span className={styles.chip} title="Deploys after its dependencies">
-          <GitBranch size={12} strokeWidth={2.2} /> {app.dependsOn.length} dep
-          {app.dependsOn.length === 1 ? "" : "s"}
+      )}
+      {app.wiring.length > 0 && (
+        <span className={styles.chip} title="Infrastructure outputs wired into Helm values">
+          {app.wiring.length} wired
         </span>
       )}
       {showRuntime && app.syncStatus && (
