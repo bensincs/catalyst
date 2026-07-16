@@ -91,8 +91,51 @@ export function WiringCanvas({
 
   const chartSet = useMemo(() => new Set(targets), [targets]);
   const allTargets = useMemo(() => Array.from(new Set([...targets, ...extraPaths])), [targets, extraPaths]);
+
+  // Auto-order the targets so each wired target sits at ~the same row as its
+  // source, keeping the connector lines short and un-crossed: walk the sources
+  // top-to-bottom, placing each source's wired target(s) at that row (and filling
+  // an unwired source's row with an unwired target), then the rest below.
+  const orderedTargets = useMemo(() => {
+    const sourceOrder = [...outputs.map((o) => `out:${o}`), ...statics.map((s) => `st:${s.id}`)];
+    const bySource = new Map<string, string[]>();
+    for (const l of links) {
+      const arr = bySource.get(l.source);
+      if (arr) arr.push(l.path);
+      else bySource.set(l.source, [l.path]);
+    }
+    const wired = new Set(links.map((l) => l.path));
+    const unwired = allTargets.filter((p) => !wired.has(p));
+    const placed = new Set<string>();
+    const ordered: string[] = [];
+    let u = 0;
+    for (const src of sourceOrder) {
+      const ts = bySource.get(src);
+      if (ts) {
+        for (const t of ts) {
+          if (!placed.has(t)) {
+            ordered.push(t);
+            placed.add(t);
+          }
+        }
+      } else if (u < unwired.length) {
+        ordered.push(unwired[u]);
+        placed.add(unwired[u]);
+        u++;
+      }
+    }
+    for (; u < unwired.length; u++) {
+      if (!placed.has(unwired[u])) {
+        ordered.push(unwired[u]);
+        placed.add(unwired[u]);
+      }
+    }
+    for (const p of allTargets) if (!placed.has(p)) ordered.push(p);
+    return ordered;
+  }, [outputs, statics, links, allTargets]);
+
   const q = query.trim().toLowerCase();
-  const shownTargets = q ? allTargets.filter((p) => p.toLowerCase().includes(q)) : allTargets;
+  const shownTargets = q ? orderedTargets.filter((p) => p.toLowerCase().includes(q)) : orderedTargets;
 
   const commit = (s: Static[], l: Link[]) => {
     setStatics(s);
