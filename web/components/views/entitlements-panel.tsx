@@ -158,9 +158,8 @@ export function EntitlementsPanel({
         <div className={styles.headText}>
           <h2 className={styles.title}>Entitlements</h2>
           <p className={styles.sub}>
-            What {name} may enable. Selecting something auto-entitles everything it depends on (
-            <Lock size={11} strokeWidth={2.4} aria-hidden /> locked). Removing an entitlement doesn&rsquo;t
-            disable what&rsquo;s already running.
+            What {name} may enable. Selecting one thing also entitles everything it depends on (shown
+            locked); removing an entitlement doesn&rsquo;t disable what&rsquo;s already running.
           </p>
         </div>
         <Button variant="primary" loading={pending} disabled={!dirty} onClick={save}>

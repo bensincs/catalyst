@@ -156,12 +156,12 @@ export function DeploymentsView({
                       ))}
                     {manageable(a) && (
                       <>
-                        <ButtonLink size="sm" icon={Pencil} href={`/deployments/${a.id}/edit`}>
+                        <ButtonLink size="sm" variant="ghost" icon={Pencil} href={`/deployments/${a.id}/edit`}>
                           Edit
                         </ButtonLink>
                         <Button
                           size="sm"
-                          variant="danger"
+                          variant="danger-ghost"
                           icon={Trash2}
                           loading={pending}
                           onClick={() => runAction(() => deleteApplication(a.id), `Deleted ${a.name}`)}

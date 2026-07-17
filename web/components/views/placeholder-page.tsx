@@ -1,12 +1,12 @@
-"use client";
-
 import type { LucideIcon } from "lucide-react";
 import { PageHeader } from "@/components/ui/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
-import { Button } from "@/components/ui/button";
-import { useToast } from "@/components/providers/toast-provider";
+import { PlaceholderAction } from "./placeholder-action";
 import styles from "./placeholder-page.module.css";
 
+// Server Component: renders a gated/coming-soon surface. Kept server-side so the
+// Lucide `icon` component is consumed here (never serialized across the boundary);
+// the optional action's interactivity lives in the PlaceholderAction client child.
 export function PlaceholderPage({
   title,
   description,
@@ -22,7 +22,6 @@ export function PlaceholderPage({
   emptyBody: string;
   actionLabel?: string;
 }) {
-  const { toast } = useToast();
   return (
     <div>
       <PageHeader title={title} description={description} />
@@ -31,22 +30,7 @@ export function PlaceholderPage({
           icon={icon}
           title={emptyTitle}
           description={emptyBody}
-          action={
-            actionLabel ? (
-              <Button
-                variant="primary"
-                onClick={() =>
-                  toast({
-                    title: `${actionLabel}`,
-                    description: "This surface is part of the shell milestone; wiring lands next.",
-                    tone: "info",
-                  })
-                }
-              >
-                {actionLabel}
-              </Button>
-            ) : undefined
-          }
+          action={actionLabel ? <PlaceholderAction label={actionLabel} /> : undefined}
         />
       </div>
     </div>

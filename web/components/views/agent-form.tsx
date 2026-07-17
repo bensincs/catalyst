@@ -49,7 +49,7 @@ export function AgentForm({ stores }: { stores: MemoryStore[] }) {
       backLabel="Agents"
       icon={Bot}
       title="New agent"
-      subtitle="Pick a type and author its definition. It starts at v1.0.0; publish more versions any time."
+      subtitle="Pick a type and author its definition — instructions, tools, and model. Edits apply in place."
       footer={
         <>
           <div className={styles.summary}>
@@ -96,7 +96,7 @@ export function AgentForm({ stores }: { stores: MemoryStore[] }) {
         </div>
 
         <div className={styles.col}>
-          <FormSection icon={SlidersHorizontal} title="Definition" desc="The substance that travels with each published version.">
+          <FormSection icon={SlidersHorizontal} title="Definition" desc="The substance the reconciler brings live — instructions, tools, and generation settings.">
             <DefinitionFields type={type} value={def} onChange={setDef} stores={stores} />
           </FormSection>
         </div>

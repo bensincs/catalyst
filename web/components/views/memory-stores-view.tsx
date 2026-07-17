@@ -126,12 +126,12 @@ export function MemoryStoresView({ role, stores }: { role: Role; stores: MemoryS
                       ))}
                     {manageable(s) && (
                       <>
-                        <ButtonLink size="sm" icon={Pencil} href={`/memory-stores/${s.id}/edit`}>
+                        <ButtonLink size="sm" variant="ghost" icon={Pencil} href={`/memory-stores/${s.id}/edit`}>
                           Edit
                         </ButtonLink>
                         <Button
                           size="sm"
-                          variant="danger"
+                          variant="danger-ghost"
                           icon={Trash2}
                           loading={pending}
                           onClick={() => runAction(() => deleteMemoryStore(s.id), `Deleted ${s.name}`)}

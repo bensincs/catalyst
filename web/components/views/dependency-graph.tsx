@@ -218,7 +218,7 @@ export function DependencyGraph({
                 <span className={styles.colCount}>{col.nodes.length}</span>
               </div>
               <div className={styles.colNodes}>
-                {col.nodes.length === 0 && <div className={styles.colEmpty} aria-hidden>—</div>}
+                {col.nodes.length === 0 && <div className={styles.colEmpty}>None</div>}
                 {col.nodes.map((n) => {
                   const Icon = ICON[n.kind];
                   const dim = connected ? !connected.nodeSet.has(n.key) : false;

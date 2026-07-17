@@ -48,7 +48,7 @@ export function TenantAccessPanel({
           </p>
         </div>
         <Button
-          variant={enabled ? "danger" : "primary"}
+          variant={enabled ? "danger-ghost" : "primary"}
           icon={enabled ? ShieldOff : ShieldCheck}
           loading={pending}
           onClick={toggle}

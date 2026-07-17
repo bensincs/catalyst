@@ -120,6 +120,19 @@
   opacity: 1;
 }
 
+/* ── Danger ghost — quiet at rest, destructive on intent (row / inline actions).
+   Full-saturation danger is reserved for the confirmed action, never the list. ── */
+.button[data-variant="danger-ghost"] {
+  background: transparent;
+  color: var(--danger-ink);
+}
+.button[data-variant="danger-ghost"]:hover:not(:disabled) {
+  background: var(--danger-bg);
+}
+.button[data-variant="danger-ghost"]:disabled {
+  color: var(--text-disabled);
+}
+
 .button[data-loading] .label {
   opacity: 0.85;
 }

@@ -98,13 +98,17 @@
   display: flex;
   flex: 1;
   flex-direction: column;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 10px;
 }
 .colEmpty {
-  color: var(--border-strong);
+  display: flex;
+  align-items: center;
+  color: var(--text-disabled);
   font-size: var(--text-body-sm);
-  padding: 6px 2px;
+  padding: 11px 12px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
 }
 
 /* ── Node ── */
@@ -152,18 +156,15 @@ a.node:hover {
   flex: none;
   border-radius: var(--radius-full);
   background: var(--text-muted);
+  --dot: var(--text-muted);
 }
-.nodeDot[data-tone="success"] { background: var(--success-ink); }
-.nodeDot[data-tone="info"] { background: var(--info-ink); }
-.nodeDot[data-tone="warning"] { background: var(--warning-ink); }
-.nodeDot[data-tone="danger"] { background: var(--danger-ink); }
+.nodeDot[data-tone="success"] { background: var(--success-ink); --dot: var(--success-ink); }
+.nodeDot[data-tone="info"] { background: var(--info-ink); --dot: var(--info-ink); }
+.nodeDot[data-tone="warning"] { background: var(--warning-ink); --dot: var(--warning-ink); }
+.nodeDot[data-tone="danger"] { background: var(--danger-ink); --dot: var(--danger-ink); }
 .nodeDot[data-pulse] {
-  box-shadow: 0 0 0 0 currentColor;
   animation: pulse 2s var(--ease-out-quart) infinite;
-  color: inherit;
 }
-.nodeDot[data-tone="success"][data-pulse] { animation-name: pulseSuccess; }
-.nodeDot[data-tone="info"][data-pulse] { animation-name: pulseInfo; }
 
 .nodeIcon {
   display: grid;
@@ -194,15 +195,10 @@ a.node:hover {
   color: var(--text-muted);
 }
 
-@keyframes pulseSuccess {
-  0% { box-shadow: 0 0 0 0 rgb(22 163 74 / 0.4); }
-  70% { box-shadow: 0 0 0 6px rgb(22 163 74 / 0); }
-  100% { box-shadow: 0 0 0 0 rgb(22 163 74 / 0); }
-}
-@keyframes pulseInfo {
-  0% { box-shadow: 0 0 0 0 rgb(37 99 235 / 0.4); }
-  70% { box-shadow: 0 0 0 6px rgb(37 99 235 / 0); }
-  100% { box-shadow: 0 0 0 0 rgb(37 99 235 / 0); }
+@keyframes pulse {
+  0% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--dot, var(--text-muted)) 42%, transparent); }
+  70% { box-shadow: 0 0 0 6px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
 }
 
 /* ── Legend ── */

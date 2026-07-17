@@ -137,12 +137,12 @@ export function InfrastructureView({
                       ))}
                     {manageable(i) && (
                       <>
-                        <ButtonLink size="sm" icon={Pencil} href={`/infrastructure/${i.id}/edit`}>
+                        <ButtonLink size="sm" variant="ghost" icon={Pencil} href={`/infrastructure/${i.id}/edit`}>
                           Edit
                         </ButtonLink>
                         <Button
                           size="sm"
-                          variant="danger"
+                          variant="danger-ghost"
                           icon={Trash2}
                           loading={pending}
                           onClick={() => runAction(() => deleteInfrastructure(i.id), `Deleted ${i.name}`)}
