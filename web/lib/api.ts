@@ -98,6 +98,9 @@ interface ApiFleet {
 interface ApiTenantContext {
   tenant: ApiTenant;
   agents: ApiAgent[];
+  infrastructure?: ApiInfrastructure[] | null;
+  applications?: ApiApplication[] | null;
+  stores?: ApiMemoryStore[] | null;
 }
 
 /* ── Auth: forward the API access token (server-side only) ────────────────── */
@@ -265,6 +268,71 @@ function toAgent(a: ApiAgent): EnabledAgent {
   };
 }
 
+function toApplication(a: ApiApplication): Application {
+  return {
+    id: a.id,
+    name: a.name,
+    description: a.description ?? "",
+    owner: a.owner ?? "",
+    namespace: a.namespace,
+    repoURL: a.repoURL,
+    chart: a.chart,
+    targetRevision: a.targetRevision,
+    values: a.values,
+    wiring: a.wiring ?? [],
+    dependencies: a.dependencies ?? [],
+    createdAt: a.createdAt,
+    ownerName: a.ownerName,
+    platform: a.platform ?? a.owner === "",
+    owned: Boolean(a.owned),
+    entitled: Boolean(a.entitled),
+    enabled: Boolean(a.enabled),
+    health: (a.health as Application["health"]) || undefined,
+    syncStatus: a.syncStatus || undefined,
+    healthStatus: a.healthStatus || undefined,
+    waiting: Boolean(a.waiting),
+  };
+}
+
+function toInfrastructure(i: ApiInfrastructure): Infrastructure {
+  return {
+    id: i.id,
+    name: i.name,
+    description: i.description ?? "",
+    owner: i.owner ?? "",
+    bicepModule: i.bicepModule ?? "",
+    bicepParams: i.bicepParams ?? {},
+    bicepOutputs: i.bicepOutputs ?? [],
+    dependencies: i.dependencies ?? [],
+    createdAt: i.createdAt,
+    ownerName: i.ownerName,
+    platform: i.platform ?? i.owner === "",
+    owned: Boolean(i.owned),
+    entitled: Boolean(i.entitled),
+    enabled: Boolean(i.enabled),
+    infraState: i.infraState || undefined,
+    health: (i.health as Infrastructure["health"]) || undefined,
+    waiting: Boolean(i.waiting),
+  };
+}
+
+function toStore(s: ApiMemoryStore): MemoryStore {
+  return {
+    id: s.id,
+    name: s.name,
+    description: s.description,
+    owner: s.owner ?? "",
+    definition: normalizeStoreDefinition(s.definition),
+    createdAt: s.createdAt,
+    ownerName: s.ownerName,
+    platform: s.platform ?? s.owner === "",
+    owned: Boolean(s.owned),
+    entitled: Boolean(s.entitled),
+    enabled: Boolean(s.enabled),
+    health: (s.health as MemoryStore["health"]) || undefined,
+  };
+}
+
 /* ── Public fetchers ──────────────────────────────────────────────────────── */
 
 export interface Me {
@@ -299,6 +367,9 @@ export interface TenantContext {
   tenant: TenantContextInfo;
   summary: TenantSummary;
   agents: EnabledAgent[];
+  infrastructure: Infrastructure[];
+  applications: Application[];
+  stores: MemoryStore[];
 }
 
 const context = cache(async (path: string): Promise<TenantContext> => {
@@ -307,6 +378,9 @@ const context = cache(async (path: string): Promise<TenantContext> => {
     tenant: toContext(c.tenant),
     summary: toSummary(c.tenant),
     agents: (c.agents ?? []).map(toAgent),
+    infrastructure: (c.infrastructure ?? []).map(toInfrastructure),
+    applications: (c.applications ?? []).map(toApplication),
+    stores: (c.stores ?? []).map(toStore),
   };
 });
 
@@ -410,29 +484,7 @@ interface ApiApplication {
 
 export const getApplications = cache(async (): Promise<Application[]> => {
   const c = await apiGet<{ applications: ApiApplication[] }>("/api/applications");
-  return (c.applications ?? []).map((a) => ({
-    id: a.id,
-    name: a.name,
-    description: a.description ?? "",
-    owner: a.owner ?? "",
-    namespace: a.namespace,
-    repoURL: a.repoURL,
-    chart: a.chart,
-    targetRevision: a.targetRevision,
-    values: a.values,
-    wiring: a.wiring ?? [],
-    dependencies: a.dependencies ?? [],
-    createdAt: a.createdAt,
-    ownerName: a.ownerName,
-    platform: a.platform ?? a.owner === "",
-    owned: Boolean(a.owned),
-    entitled: Boolean(a.entitled),
-    enabled: Boolean(a.enabled),
-    health: (a.health as Application["health"]) || undefined,
-    syncStatus: a.syncStatus || undefined,
-    healthStatus: a.healthStatus || undefined,
-    waiting: Boolean(a.waiting),
-  }));
+  return (c.applications ?? []).map(toApplication);
 });
 
 /* ── Infrastructure (Azure/Bicep → control plane) ─────────────────────────── */
@@ -459,25 +511,7 @@ interface ApiInfrastructure {
 
 export const getInfrastructure = cache(async (): Promise<Infrastructure[]> => {
   const c = await apiGet<{ infrastructure: ApiInfrastructure[] }>("/api/infrastructure");
-  return (c.infrastructure ?? []).map((i) => ({
-    id: i.id,
-    name: i.name,
-    description: i.description ?? "",
-    owner: i.owner ?? "",
-    bicepModule: i.bicepModule ?? "",
-    bicepParams: i.bicepParams ?? {},
-    bicepOutputs: i.bicepOutputs ?? [],
-    dependencies: i.dependencies ?? [],
-    createdAt: i.createdAt,
-    ownerName: i.ownerName,
-    platform: i.platform ?? i.owner === "",
-    owned: Boolean(i.owned),
-    entitled: Boolean(i.entitled),
-    enabled: Boolean(i.enabled),
-    infraState: i.infraState || undefined,
-    health: (i.health as Infrastructure["health"]) || undefined,
-    waiting: Boolean(i.waiting),
-  }));
+  return (c.infrastructure ?? []).map(toInfrastructure);
 });
 
 /* ── Memory stores ────────────────────────────────────────────────────────── */
@@ -513,18 +547,5 @@ function normalizeStoreDefinition(d?: Partial<MemoryStoreDefinition> | null): Me
 
 export const getMemoryStores = cache(async (): Promise<MemoryStore[]> => {
   const c = await apiGet<{ stores: ApiMemoryStore[] }>("/api/memory-stores");
-  return (c.stores ?? []).map((s) => ({
-    id: s.id,
-    name: s.name,
-    description: s.description,
-    owner: s.owner ?? "",
-    definition: normalizeStoreDefinition(s.definition),
-    createdAt: s.createdAt,
-    ownerName: s.ownerName,
-    platform: s.platform ?? s.owner === "",
-    owned: Boolean(s.owned),
-    entitled: Boolean(s.entitled),
-    enabled: Boolean(s.enabled),
-    health: (s.health as MemoryStore["health"]) || undefined,
-  }));
+  return (c.stores ?? []).map(toStore);
 });

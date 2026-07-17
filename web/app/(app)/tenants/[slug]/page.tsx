@@ -61,7 +61,15 @@ export default async function TenantDrillInPage({
 
     return (
       <>
-        <TenantOverview tenant={ctx.tenant} agents={ctx.agents} now={Date.now()} platformView={platform} />
+        <TenantOverview
+          tenant={ctx.tenant}
+          agents={ctx.agents}
+          now={Date.now()}
+          platformView={platform}
+          infrastructure={ctx.infrastructure}
+          applications={ctx.applications}
+          stores={ctx.stores}
+        />
         {entitlements}
       </>
     );
