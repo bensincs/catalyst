@@ -369,36 +369,10 @@ func gateAgentHealth(t model.Tenant, agents []model.Agent) []model.Agent {
 func (s *Server) handleApply(w http.ResponseWriter, r *http.Request) {
 	id, _ := auth.IdentityFrom(r.Context())
 	var body struct {
-		Infrastructure []struct {
-			Name         string             `json:"name"`
-			Description  string             `json:"description"`
-			BicepModule  string             `json:"bicepModule"`
-			BicepParams  map[string]any     `json:"bicepParams"`
-			Dependencies []model.Dependency `json:"dependencies"`
-		} `json:"infrastructure"`
-		MemoryStores []struct {
-			Name        string                       `json:"name"`
-			Description string                       `json:"description"`
-			Definition  shared.MemoryStoreDefinition `json:"definition"`
-		} `json:"memoryStores"`
-		Agents []struct {
-			Name        string                 `json:"name"`
-			Description string                 `json:"description"`
-			Type        string                 `json:"type"`
-			Model       string                 `json:"model"`
-			Definition  shared.AgentDefinition `json:"definition"`
-		} `json:"agents"`
-		Applications []struct {
-			Name           string             `json:"name"`
-			Description    string             `json:"description"`
-			Namespace      string             `json:"namespace"`
-			RepoURL        string             `json:"repoURL"`
-			Chart          string             `json:"chart"`
-			TargetRevision string             `json:"targetRevision"`
-			Values         string             `json:"values"`
-			Wiring         []shared.WireLink  `json:"wiring"`
-			Dependencies   []model.Dependency `json:"dependencies"`
-		} `json:"applications"`
+		Infrastructure []infraInput `json:"infrastructure"`
+		MemoryStores   []storeInput `json:"memoryStores"`
+		Agents         []agentInput `json:"agents"`
+		Applications   []appInput   `json:"applications"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
@@ -415,69 +389,40 @@ func (s *Server) handleApply(w http.ResponseWriter, r *http.Request) {
 		owner, prefix = t.ID, t.ID+"-"
 	}
 
+	// Same validate()/build() the update path uses, so create and edit can never
+	// drift. Any bad item aborts the whole batch before it touches the store.
 	var batch store.ApplyBatch
 	for _, in := range body.Infrastructure {
-		name := strings.TrimSpace(in.Name)
-		if slugify(name) == "" {
-			writeErr(w, http.StatusBadRequest, "infrastructure name is required")
+		if msg := in.validate(); msg != "" {
+			writeErr(w, http.StatusBadRequest, msg)
 			return
 		}
-		if strings.TrimSpace(in.BicepModule) == "" {
-			writeErr(w, http.StatusBadRequest, "a Bicep module reference is required")
-			return
-		}
-		infra := model.Infrastructure{
-			ID: prefix + slugify(name), Name: name, Description: strings.TrimSpace(in.Description),
-			Owner: owner, BicepModule: strings.TrimSpace(in.BicepModule),
-			BicepParams: in.BicepParams, Dependencies: in.Dependencies,
-		}
+		infra := in.build(prefix+slugify(in.Name), owner)
 		if !s.resolveInfra(w, r, &infra) {
 			return
 		}
 		batch.Infrastructure = append(batch.Infrastructure, infra)
 	}
-	for _, ms := range body.MemoryStores {
-		name := strings.TrimSpace(ms.Name)
-		if slugify(name) == "" {
-			writeErr(w, http.StatusBadRequest, "memory store name is required")
+	for _, in := range body.MemoryStores {
+		if msg := in.validate(); msg != "" {
+			writeErr(w, http.StatusBadRequest, msg)
 			return
 		}
-		batch.MemoryStores = append(batch.MemoryStores, model.MemoryStore{
-			ID: prefix + slugify(name), Name: name, Description: strings.TrimSpace(ms.Description),
-			Owner: owner, Definition: ms.Definition,
-		})
+		batch.MemoryStores = append(batch.MemoryStores, in.build(prefix+slugify(in.Name), owner))
 	}
-	for _, ag := range body.Agents {
-		name := strings.TrimSpace(ag.Name)
-		if slugify(name) == "" {
-			writeErr(w, http.StatusBadRequest, "agent name is required")
+	for _, in := range body.Agents {
+		if msg := in.validate(); msg != "" {
+			writeErr(w, http.StatusBadRequest, msg)
 			return
 		}
-		agentType := "prompt"
-		if ag.Type == "hosted" {
-			agentType = "hosted"
-		}
-		agentModel := strings.TrimSpace(ag.Model)
-		if agentModel == "" {
-			agentModel = "gpt-4o"
-		}
-		batch.Agents = append(batch.Agents, store.ApplyAgent{
-			ID: prefix + slugify(name), Name: name, Description: strings.TrimSpace(ag.Description),
-			Type: agentType, Model: agentModel, Owner: owner, Definition: ag.Definition,
-		})
+		batch.Agents = append(batch.Agents, in.applyAgent(prefix+slugify(in.Name), owner))
 	}
-	for _, ap := range body.Applications {
-		name := strings.TrimSpace(ap.Name)
-		if slugify(name) == "" {
-			writeErr(w, http.StatusBadRequest, "application name is required")
+	for _, in := range body.Applications {
+		if msg := in.validate(); msg != "" {
+			writeErr(w, http.StatusBadRequest, msg)
 			return
 		}
-		batch.Applications = append(batch.Applications, model.Application{
-			ID: prefix + slugify(name), Name: name, Description: strings.TrimSpace(ap.Description),
-			Owner: owner, Namespace: strings.TrimSpace(ap.Namespace), RepoURL: strings.TrimSpace(ap.RepoURL),
-			Chart: strings.TrimSpace(ap.Chart), TargetRevision: strings.TrimSpace(ap.TargetRevision),
-			Values: ap.Values, Wiring: ap.Wiring, Dependencies: ap.Dependencies,
-		})
+		batch.Applications = append(batch.Applications, in.build(prefix+slugify(in.Name), owner))
 	}
 
 	res, err := s.store.Apply(r.Context(), id.OID, batch)
@@ -496,31 +441,38 @@ func (s *Server) handleApply(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, res)
 }
 
-// catalogWriteAllowed loads an agent and checks the caller may modify it: platform
-// admins may version any agent; a tenant only its own.
-func (s *Server) catalogWriteAllowed(w http.ResponseWriter, r *http.Request, id model.Identity, agentID string) bool {
-	owner, err := s.store.CatalogAgentOwner(r.Context(), agentID)
-	if errors.Is(err, store.ErrNotFound) {
-		writeErr(w, http.StatusNotFound, "agent not found")
-		return false
-	}
-	if err != nil {
-		s.fail(w, r, err)
-		return false
-	}
+// ownerWrite is the platform-or-owner half of every write-permission check:
+// platform admins may modify anything; a tenant only what it owns. The caller
+// loads the owner (per kind) and passes the noun for the 403 message.
+func (s *Server) ownerWrite(w http.ResponseWriter, r *http.Request, id model.Identity, owner, noun string) (string, bool) {
 	if id.Role == model.RolePlatform {
-		return true
+		return owner, true
 	}
 	t, err := s.store.EnsureTenantForTID(r.Context(), id.TID, orgNameFromEmail(id.Email))
 	if err != nil {
 		s.fail(w, r, err)
-		return false
+		return "", false
 	}
 	if owner != t.ID {
-		writeErr(w, http.StatusForbidden, "not your agent")
-		return false
+		writeErr(w, http.StatusForbidden, "not your "+noun)
+		return "", false
 	}
-	return true
+	return owner, true
+}
+
+// catalogWriteAllowed loads an agent and checks the caller may modify it: platform
+// admins may edit any agent; a tenant only its own. Returns the owner.
+func (s *Server) catalogWriteAllowed(w http.ResponseWriter, r *http.Request, id model.Identity, agentID string) (string, bool) {
+	owner, err := s.store.CatalogAgentOwner(r.Context(), agentID)
+	if errors.Is(err, store.ErrNotFound) {
+		writeErr(w, http.StatusNotFound, "agent not found")
+		return "", false
+	}
+	if err != nil {
+		s.fail(w, r, err)
+		return "", false
+	}
+	return s.ownerWrite(w, r, id, owner, "agent")
 }
 
 /* ── Tenants registry + entitlements (platform) ──────────────────────────── */
@@ -541,30 +493,18 @@ func (s *Server) handleTenantsRegistry(w http.ResponseWriter, r *http.Request) {
 /* ── Memory stores (platform-authored + tenant-created) ──────────────────── */
 
 // storeWriteAllowed loads a store and checks the caller may modify it: platform
-// admins may modify any store; a tenant only its own.
-func (s *Server) storeWriteAllowed(w http.ResponseWriter, r *http.Request, id model.Identity, storeID string) bool {
+// admins may modify any store; a tenant only its own. Returns the owner.
+func (s *Server) storeWriteAllowed(w http.ResponseWriter, r *http.Request, id model.Identity, storeID string) (string, bool) {
 	ms, err := s.store.MemoryStoreByID(r.Context(), storeID)
 	if errors.Is(err, store.ErrNotFound) {
 		writeErr(w, http.StatusNotFound, "memory store not found")
-		return false
+		return "", false
 	}
 	if err != nil {
 		s.fail(w, r, err)
-		return false
+		return "", false
 	}
-	if id.Role == model.RolePlatform {
-		return true
-	}
-	t, err := s.store.EnsureTenantForTID(r.Context(), id.TID, orgNameFromEmail(id.Email))
-	if err != nil {
-		s.fail(w, r, err)
-		return false
-	}
-	if ms.Owner != t.ID {
-		writeErr(w, http.StatusForbidden, "not your memory store")
-		return false
-	}
-	return true
+	return s.ownerWrite(w, r, id, ms.Owner, "memory store")
 }
 
 /* ── Tenant desired state ────────────────────────────────────────────────── */
@@ -597,30 +537,18 @@ func (s *Server) handleConnectAgentStore(w http.ResponseWriter, r *http.Request)
 /* ── Deployments — catalog entities (like memory stores) ─────────────────── */
 
 // appWriteAllowed loads a deployment and checks the caller may modify it:
-// platform admins any, a tenant only its own.
-func (s *Server) appWriteAllowed(w http.ResponseWriter, r *http.Request, id model.Identity, appID string) bool {
+// platform admins any, a tenant only its own. Returns the owner.
+func (s *Server) appWriteAllowed(w http.ResponseWriter, r *http.Request, id model.Identity, appID string) (string, bool) {
 	a, err := s.store.ApplicationByID(r.Context(), appID)
 	if errors.Is(err, store.ErrNotFound) {
 		writeErr(w, http.StatusNotFound, "deployment not found")
-		return false
+		return "", false
 	}
 	if err != nil {
 		s.fail(w, r, err)
-		return false
+		return "", false
 	}
-	if id.Role == model.RolePlatform {
-		return true
-	}
-	t, err := s.store.EnsureTenantForTID(r.Context(), id.TID, orgNameFromEmail(id.Email))
-	if err != nil {
-		s.fail(w, r, err)
-		return false
-	}
-	if a.Owner != t.ID {
-		writeErr(w, http.StatusForbidden, "not your deployment")
-		return false
-	}
-	return true
+	return s.ownerWrite(w, r, id, a.Owner, "deployment")
 }
 
 func (s *Server) handleInspectModule(w http.ResponseWriter, r *http.Request) {
@@ -694,19 +622,7 @@ func (s *Server) infraWriteAllowed(w http.ResponseWriter, r *http.Request, id mo
 		s.fail(w, r, err)
 		return "", false
 	}
-	if id.Role == model.RolePlatform {
-		return owner, true
-	}
-	t, err := s.store.EnsureTenantForTID(r.Context(), id.TID, orgNameFromEmail(id.Email))
-	if err != nil {
-		s.fail(w, r, err)
-		return "", false
-	}
-	if owner != t.ID {
-		writeErr(w, http.StatusForbidden, "not your infrastructure")
-		return "", false
-	}
-	return owner, true
+	return s.ownerWrite(w, r, id, owner, "infrastructure")
 }
 
 /* ── Reconciler (in-tenant, Entra-token auth; tenant = token tid) ─────────── */

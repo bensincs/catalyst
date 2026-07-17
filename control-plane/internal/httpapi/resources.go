@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -28,19 +29,269 @@ addressed through one uniform set of endpoints instead of four bespoke ones:
 	DELETE /api/resources/{kind}/{id}/enable    turn off in the caller's tenant
 	PATCH  /api/tenants/{slug}/all-entitlements grant/revoke every kind at once
 
-Create still flows through POST /api/resources (handleApply), which already
-accepts a mixed batch. {kind} uses the same vocabulary as dependency kinds:
-infrastructure | application | agent | memory_store.
+Create flows through POST /api/resources (handleApply), a mixed batch. The
+per-kind differences live in exactly two places: the input types below (decode +
+validate + build, shared by create and update) and the resourceOps registry
+(the store calls each verb dispatches to). Everything else — auth, error
+mapping, JSON envelopes — is written once in the generic handlers.
 */
 
-// validKind reports whether k is an addressable resource kind.
-func validKind(k string) bool {
-	switch model.DepKind(k) {
-	case model.DepInfrastructure, model.DepApplication, model.DepAgent, model.DepMemoryStore:
-		return true
-	default:
-		return false
+/* ── Per-kind inputs: decode + validate + build, shared by create & update ── */
+
+type infraInput struct {
+	Name         string             `json:"name"`
+	Description  string             `json:"description"`
+	BicepModule  string             `json:"bicepModule"`
+	BicepParams  map[string]any     `json:"bicepParams"`
+	Dependencies []model.Dependency `json:"dependencies"`
+}
+
+// validate returns a human error message, or "" when the input is well-formed.
+func (in infraInput) validate() string {
+	if slugify(in.Name) == "" {
+		return "name is required"
 	}
+	if strings.TrimSpace(in.BicepModule) == "" {
+		return "a Bicep module reference is required"
+	}
+	return ""
+}
+
+func (in infraInput) build(id, owner string) model.Infrastructure {
+	return model.Infrastructure{
+		ID:           id,
+		Name:         strings.TrimSpace(in.Name),
+		Description:  strings.TrimSpace(in.Description),
+		Owner:        owner,
+		BicepModule:  strings.TrimSpace(in.BicepModule),
+		BicepParams:  in.BicepParams,
+		Dependencies: in.Dependencies,
+	}
+}
+
+type appInput struct {
+	Name           string             `json:"name"`
+	Description    string             `json:"description"`
+	Namespace      string             `json:"namespace"`
+	RepoURL        string             `json:"repoURL"`
+	Chart          string             `json:"chart"`
+	TargetRevision string             `json:"targetRevision"`
+	Values         string             `json:"values"`
+	Wiring         []shared.WireLink  `json:"wiring"`
+	Dependencies   []model.Dependency `json:"dependencies"`
+}
+
+func (in appInput) validate() string {
+	if slugify(in.Name) == "" {
+		return "name is required"
+	}
+	if strings.TrimSpace(in.RepoURL) == "" || strings.TrimSpace(in.Chart) == "" {
+		return "repoURL and chart are required"
+	}
+	return ""
+}
+
+func (in appInput) build(id, owner string) model.Application {
+	ns := strings.TrimSpace(in.Namespace)
+	if ns == "" {
+		ns = "default"
+	}
+	return model.Application{
+		ID:             id,
+		Name:           strings.TrimSpace(in.Name),
+		Description:    strings.TrimSpace(in.Description),
+		Owner:          owner,
+		Namespace:      ns,
+		RepoURL:        strings.TrimSpace(in.RepoURL),
+		Chart:          strings.TrimSpace(in.Chart),
+		TargetRevision: strings.TrimSpace(in.TargetRevision),
+		Values:         in.Values,
+		Wiring:         in.Wiring,
+		Dependencies:   in.Dependencies,
+	}
+}
+
+type agentInput struct {
+	Name        string                 `json:"name"`
+	Description string                 `json:"description"`
+	Type        string                 `json:"type"`
+	Model       string                 `json:"model"`
+	Definition  shared.AgentDefinition `json:"definition"`
+}
+
+func (in agentInput) validate() string {
+	if slugify(in.Name) == "" {
+		return "name is required"
+	}
+	return ""
+}
+
+func (in agentInput) name() string { return strings.TrimSpace(in.Name) }
+func (in agentInput) desc() string { return strings.TrimSpace(in.Description) }
+
+// normModel defaults to Foundry's standard chat model so an agent is always
+// provisionable.
+func (in agentInput) normModel() string {
+	if m := strings.TrimSpace(in.Model); m != "" {
+		return m
+	}
+	return "gpt-4o"
+}
+
+func (in agentInput) normType() string {
+	if in.Type == "hosted" {
+		return "hosted"
+	}
+	return "prompt"
+}
+
+func (in agentInput) applyAgent(id, owner string) store.ApplyAgent {
+	return store.ApplyAgent{
+		ID: id, Name: in.name(), Description: in.desc(),
+		Type: in.normType(), Model: in.normModel(), Owner: owner, Definition: in.Definition,
+	}
+}
+
+type storeInput struct {
+	Name        string                       `json:"name"`
+	Description string                       `json:"description"`
+	Definition  shared.MemoryStoreDefinition `json:"definition"`
+}
+
+func (in storeInput) validate() string {
+	if slugify(in.Name) == "" {
+		return "name is required"
+	}
+	return ""
+}
+
+func (in storeInput) build(id, owner string) model.MemoryStore {
+	return model.MemoryStore{
+		ID: id, Name: strings.TrimSpace(in.Name), Description: strings.TrimSpace(in.Description),
+		Owner: owner, Definition: in.Definition,
+	}
+}
+
+/* ── Per-kind registry: the store calls each generic verb dispatches to ────── */
+
+// resourceOps captures everything that genuinely differs per kind. The generic
+// handlers own auth, error mapping, and JSON; these closures own only the decode
+// (for update) and the store calls. Package-level, so each takes *Server.
+type resourceOps struct {
+	// writeAllowed authorises editing/removing definition rid, returning its
+	// owner tenant ("" = platform). It writes the response on denial.
+	writeAllowed func(s *Server, w http.ResponseWriter, r *http.Request, id model.Identity, rid string) (owner string, ok bool)
+	// update decodes the request body and applies an in-place edit. proceed is
+	// false when it already wrote a 4xx (bad body); otherwise err is the store
+	// result for the generic handler to map.
+	update func(s *Server, w http.ResponseWriter, r *http.Request, rid, owner string) (proceed bool, err error)
+	// remove deletes the definition.
+	remove func(s *Server, ctx context.Context, rid string) error
+	// enable / disable toggle the definition in tenant slug (desired state).
+	enable  func(s *Server, w http.ResponseWriter, r *http.Request, slug, rid string) error
+	disable func(s *Server, ctx context.Context, slug, rid string) error
+}
+
+var resourceOpsByKind = map[model.DepKind]resourceOps{
+	model.DepInfrastructure: {
+		writeAllowed: (*Server).infraWriteAllowed,
+		update: func(s *Server, w http.ResponseWriter, r *http.Request, rid, owner string) (bool, error) {
+			in, ok := decodeValid[infraInput](w, r)
+			if !ok {
+				return false, nil
+			}
+			upd := in.build(rid, owner)
+			if !s.validateDeps(w, r, model.DepInfrastructure, rid, owner, upd.Dependencies) {
+				return false, nil
+			}
+			if !s.resolveInfra(w, r, &upd) {
+				return false, nil
+			}
+			return true, s.store.UpdateInfrastructure(r.Context(), upd)
+		},
+		remove: func(s *Server, ctx context.Context, rid string) error { return s.store.DeleteInfrastructure(ctx, rid) },
+		enable: func(s *Server, w http.ResponseWriter, r *http.Request, slug, rid string) error {
+			return s.store.EnableInfrastructure(r.Context(), slug, rid)
+		},
+		disable: func(s *Server, ctx context.Context, slug, rid string) error {
+			return s.store.DisableInfrastructure(ctx, slug, rid)
+		},
+	},
+
+	model.DepApplication: {
+		writeAllowed: (*Server).appWriteAllowed,
+		update: func(s *Server, w http.ResponseWriter, r *http.Request, rid, owner string) (bool, error) {
+			in, ok := decodeValid[appInput](w, r)
+			if !ok {
+				return false, nil
+			}
+			upd := in.build(rid, owner)
+			if !s.validateDeps(w, r, model.DepApplication, rid, owner, upd.Dependencies) {
+				return false, nil
+			}
+			return true, s.store.UpdateApplication(r.Context(), upd)
+		},
+		remove: func(s *Server, ctx context.Context, rid string) error { return s.store.DeleteApplication(ctx, rid) },
+		enable: func(s *Server, w http.ResponseWriter, r *http.Request, slug, rid string) error {
+			return s.store.EnableDeployment(r.Context(), slug, rid)
+		},
+		disable: func(s *Server, ctx context.Context, slug, rid string) error {
+			return s.store.DisableDeployment(ctx, slug, rid)
+		},
+	},
+
+	model.DepAgent: {
+		writeAllowed: (*Server).catalogWriteAllowed,
+		update: func(s *Server, w http.ResponseWriter, r *http.Request, rid, owner string) (bool, error) {
+			in, ok := decodeValid[agentInput](w, r)
+			if !ok {
+				return false, nil
+			}
+			return true, s.store.UpdateCatalogAgent(r.Context(), rid, in.name(), in.desc(), in.normModel(), in.Definition)
+		},
+		remove: func(s *Server, ctx context.Context, rid string) error { return s.store.DeleteCatalogAgent(ctx, rid) },
+		enable: func(s *Server, w http.ResponseWriter, r *http.Request, slug, rid string) error {
+			var body struct {
+				PublishTo []string `json:"publishTo"`
+			}
+			_ = decodeJSONOptional(r, &body) // body is optional for enable
+			return s.store.EnableAgent(r.Context(), slug, rid, body.PublishTo)
+		},
+		disable: func(s *Server, ctx context.Context, slug, rid string) error {
+			return s.store.DisableAgent(ctx, slug, rid)
+		},
+	},
+
+	model.DepMemoryStore: {
+		writeAllowed: (*Server).storeWriteAllowed,
+		update: func(s *Server, w http.ResponseWriter, r *http.Request, rid, owner string) (bool, error) {
+			in, ok := decodeValid[storeInput](w, r)
+			if !ok {
+				return false, nil
+			}
+			// A store's definition is immutable (Foundry has no update surface),
+			// so only name + description are editable.
+			return true, s.store.UpdateMemoryStore(r.Context(), rid, strings.TrimSpace(in.Name), strings.TrimSpace(in.Description))
+		},
+		remove: func(s *Server, ctx context.Context, rid string) error { return s.store.DeleteMemoryStore(ctx, rid) },
+		enable: func(s *Server, w http.ResponseWriter, r *http.Request, slug, rid string) error {
+			return s.store.EnableStore(r.Context(), slug, rid)
+		},
+		disable: func(s *Server, ctx context.Context, slug, rid string) error {
+			return s.store.DisableStore(ctx, slug, rid)
+		},
+	},
+}
+
+// opsFor looks up the registry entry for a URL {kind}, writing a 404 when the
+// kind is unknown.
+func opsFor(w http.ResponseWriter, r *http.Request) (resourceOps, string, bool) {
+	ops, ok := resourceOpsByKind[model.DepKind(chi.URLParam(r, "kind"))]
+	if !ok {
+		writeErr(w, http.StatusNotFound, "unknown resource kind")
+		return resourceOps{}, "", false
+	}
+	return ops, chi.URLParam(r, "id"), true
 }
 
 // mapStoreErr translates a store error into an HTTP response and reports whether
@@ -129,158 +380,26 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleUpdateResource edits a definition, dispatching to the kind's own decode
-// + validation. Ownership is enforced by the per-kind write-permission helpers.
+// handleUpdateResource edits a definition. The skeleton (auth → decode+apply →
+// error map → envelope) is shared; the kind's registry entry supplies the decode
+// and the store call.
 func (s *Server) handleUpdateResource(w http.ResponseWriter, r *http.Request) {
 	id, _ := auth.IdentityFrom(r.Context())
-	kind := chi.URLParam(r, "kind")
-	rid := chi.URLParam(r, "id")
-	if !validKind(kind) {
-		writeErr(w, http.StatusNotFound, "unknown resource kind")
+	ops, rid, ok := opsFor(w, r)
+	if !ok {
 		return
 	}
-
-	switch model.DepKind(kind) {
-	case model.DepInfrastructure:
-		owner, ok := s.infraWriteAllowed(w, r, id, rid)
-		if !ok {
-			return
-		}
-		var body struct {
-			Name         string             `json:"name"`
-			Description  string             `json:"description"`
-			BicepModule  string             `json:"bicepModule"`
-			BicepParams  map[string]any     `json:"bicepParams"`
-			Dependencies []model.Dependency `json:"dependencies"`
-		}
-		if !decodeJSON(w, r, &body) {
-			return
-		}
-		if strings.TrimSpace(body.Name) == "" {
-			writeErr(w, http.StatusBadRequest, "name is required")
-			return
-		}
-		if strings.TrimSpace(body.BicepModule) == "" {
-			writeErr(w, http.StatusBadRequest, "a Bicep module reference is required")
-			return
-		}
-		upd := model.Infrastructure{
-			ID:           rid,
-			Name:         strings.TrimSpace(body.Name),
-			Description:  strings.TrimSpace(body.Description),
-			Owner:        owner,
-			BicepModule:  strings.TrimSpace(body.BicepModule),
-			BicepParams:  body.BicepParams,
-			Dependencies: body.Dependencies,
-		}
-		if !s.validateDeps(w, r, model.DepInfrastructure, rid, owner, upd.Dependencies) {
-			return
-		}
-		if !s.resolveInfra(w, r, &upd) {
-			return
-		}
-		if s.mapStoreErr(w, r, s.store.UpdateInfrastructure(r.Context(), upd)) {
-			return
-		}
-
-	case model.DepApplication:
-		if !s.appWriteAllowed(w, r, id, rid) {
-			return
-		}
-		existing, err := s.store.ApplicationByID(r.Context(), rid)
-		if err != nil {
-			s.fail(w, r, err)
-			return
-		}
-		var body struct {
-			Name           string             `json:"name"`
-			Description    string             `json:"description"`
-			Namespace      string             `json:"namespace"`
-			RepoURL        string             `json:"repoURL"`
-			Chart          string             `json:"chart"`
-			TargetRevision string             `json:"targetRevision"`
-			Values         string             `json:"values"`
-			Wiring         []shared.WireLink  `json:"wiring"`
-			Dependencies   []model.Dependency `json:"dependencies"`
-		}
-		if !decodeJSON(w, r, &body) {
-			return
-		}
-		if strings.TrimSpace(body.Name) == "" {
-			writeErr(w, http.StatusBadRequest, "name is required")
-			return
-		}
-		if strings.TrimSpace(body.RepoURL) == "" || strings.TrimSpace(body.Chart) == "" {
-			writeErr(w, http.StatusBadRequest, "repoURL and chart are required")
-			return
-		}
-		ns := strings.TrimSpace(body.Namespace)
-		if ns == "" {
-			ns = "default"
-		}
-		upd := model.Application{
-			ID:             rid,
-			Name:           strings.TrimSpace(body.Name),
-			Description:    strings.TrimSpace(body.Description),
-			Namespace:      ns,
-			RepoURL:        strings.TrimSpace(body.RepoURL),
-			Chart:          strings.TrimSpace(body.Chart),
-			TargetRevision: strings.TrimSpace(body.TargetRevision),
-			Values:         body.Values,
-			Wiring:         body.Wiring,
-			Dependencies:   body.Dependencies,
-		}
-		if !s.validateDeps(w, r, model.DepApplication, rid, existing.Owner, upd.Dependencies) {
-			return
-		}
-		if s.mapStoreErr(w, r, s.store.UpdateApplication(r.Context(), upd)) {
-			return
-		}
-
-	case model.DepAgent:
-		if !s.catalogWriteAllowed(w, r, id, rid) {
-			return
-		}
-		var body struct {
-			Name        string                 `json:"name"`
-			Description string                 `json:"description"`
-			Model       string                 `json:"model"`
-			Definition  shared.AgentDefinition `json:"definition"`
-		}
-		if !decodeJSON(w, r, &body) {
-			return
-		}
-		if strings.TrimSpace(body.Name) == "" {
-			writeErr(w, http.StatusBadRequest, "name is required")
-			return
-		}
-		if s.mapStoreErr(w, r, s.store.UpdateCatalogAgent(r.Context(), rid,
-			strings.TrimSpace(body.Name), strings.TrimSpace(body.Description),
-			strings.TrimSpace(body.Model), body.Definition)) {
-			return
-		}
-
-	case model.DepMemoryStore:
-		if !s.storeWriteAllowed(w, r, id, rid) {
-			return
-		}
-		var body struct {
-			Name        string `json:"name"`
-			Description string `json:"description"`
-		}
-		if !decodeJSON(w, r, &body) {
-			return
-		}
-		if strings.TrimSpace(body.Name) == "" {
-			writeErr(w, http.StatusBadRequest, "name is required")
-			return
-		}
-		if s.mapStoreErr(w, r, s.store.UpdateMemoryStore(r.Context(), rid,
-			strings.TrimSpace(body.Name), strings.TrimSpace(body.Description))) {
-			return
-		}
+	owner, ok := ops.writeAllowed(s, w, r, id, rid)
+	if !ok {
+		return
 	}
-
+	proceed, err := ops.update(s, w, r, rid, owner)
+	if !proceed {
+		return
+	}
+	if s.mapStoreErr(w, r, err) {
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
@@ -289,37 +408,14 @@ func (s *Server) handleUpdateResource(w http.ResponseWriter, r *http.Request) {
 // them; the per-kind store methods clean up entitlements and enabled instances.
 func (s *Server) handleDeleteResource(w http.ResponseWriter, r *http.Request) {
 	id, _ := auth.IdentityFrom(r.Context())
-	kind := chi.URLParam(r, "kind")
-	rid := chi.URLParam(r, "id")
-	if !validKind(kind) {
-		writeErr(w, http.StatusNotFound, "unknown resource kind")
+	ops, rid, ok := opsFor(w, r)
+	if !ok {
 		return
 	}
-
-	var err error
-	switch model.DepKind(kind) {
-	case model.DepInfrastructure:
-		if _, ok := s.infraWriteAllowed(w, r, id, rid); !ok {
-			return
-		}
-		err = s.store.DeleteInfrastructure(r.Context(), rid)
-	case model.DepApplication:
-		if !s.appWriteAllowed(w, r, id, rid) {
-			return
-		}
-		err = s.store.DeleteApplication(r.Context(), rid)
-	case model.DepAgent:
-		if !s.catalogWriteAllowed(w, r, id, rid) {
-			return
-		}
-		err = s.store.DeleteCatalogAgent(r.Context(), rid)
-	case model.DepMemoryStore:
-		if !s.storeWriteAllowed(w, r, id, rid) {
-			return
-		}
-		err = s.store.DeleteMemoryStore(r.Context(), rid)
+	if _, ok := ops.writeAllowed(s, w, r, id, rid); !ok {
+		return
 	}
-	if s.mapStoreErr(w, r, err) {
+	if s.mapStoreErr(w, r, ops.remove(s, r.Context(), rid)) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
@@ -332,30 +428,11 @@ func (s *Server) handleEnableResource(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	kind := chi.URLParam(r, "kind")
-	rid := chi.URLParam(r, "id")
-	if !validKind(kind) {
-		writeErr(w, http.StatusNotFound, "unknown resource kind")
+	ops, rid, ok := opsFor(w, r)
+	if !ok {
 		return
 	}
-
-	var err error
-	switch model.DepKind(kind) {
-	case model.DepInfrastructure:
-		err = s.store.EnableInfrastructure(r.Context(), t.ID, rid)
-	case model.DepApplication:
-		err = s.store.EnableDeployment(r.Context(), t.ID, rid)
-	case model.DepAgent:
-		var body struct {
-			PublishTo []string `json:"publishTo"`
-		}
-		// Body is optional for enable; ignore decode failure on empty body.
-		_ = decodeJSONOptional(r, &body)
-		err = s.store.EnableAgent(r.Context(), t.ID, rid, body.PublishTo)
-	case model.DepMemoryStore:
-		err = s.store.EnableStore(r.Context(), t.ID, rid)
-	}
-	if s.mapStoreErr(w, r, err) {
+	if s.mapStoreErr(w, r, ops.enable(s, w, r, t.ID, rid)) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "enabled"})
@@ -368,25 +445,11 @@ func (s *Server) handleDisableResource(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	kind := chi.URLParam(r, "kind")
-	rid := chi.URLParam(r, "id")
-	if !validKind(kind) {
-		writeErr(w, http.StatusNotFound, "unknown resource kind")
+	ops, rid, ok := opsFor(w, r)
+	if !ok {
 		return
 	}
-
-	var err error
-	switch model.DepKind(kind) {
-	case model.DepInfrastructure:
-		err = s.store.DisableInfrastructure(r.Context(), t.ID, rid)
-	case model.DepApplication:
-		err = s.store.DisableDeployment(r.Context(), t.ID, rid)
-	case model.DepAgent:
-		err = s.store.DisableAgent(r.Context(), t.ID, rid)
-	case model.DepMemoryStore:
-		err = s.store.DisableStore(r.Context(), t.ID, rid)
-	}
-	if s.mapStoreErr(w, r, err) {
+	if s.mapStoreErr(w, r, ops.disable(s, r.Context(), t.ID, rid)) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "disabled"})
@@ -411,32 +474,46 @@ func (s *Server) handleSetAllEntitlements(w http.ResponseWriter, r *http.Request
 	if !decodeJSON(w, r, &body) {
 		return
 	}
-	if body.Infrastructure == nil {
-		body.Infrastructure = []string{}
-	}
-	if body.Applications == nil {
-		body.Applications = []string{}
-	}
-	if body.Agents == nil {
-		body.Agents = []string{}
-	}
-	if body.MemoryStores == nil {
-		body.MemoryStores = []string{}
-	}
 
-	if s.mapStoreErr(w, r, s.store.SetInfrastructureEntitlements(r.Context(), slug, body.Infrastructure)) {
-		return
-	}
-	if s.mapStoreErr(w, r, s.store.SetDeploymentEntitlements(r.Context(), slug, body.Applications)) {
-		return
-	}
-	if s.mapStoreErr(w, r, s.store.SetEntitlements(r.Context(), slug, body.Agents)) {
-		return
-	}
-	if s.mapStoreErr(w, r, s.store.SetStoreEntitlements(r.Context(), slug, body.MemoryStores)) {
-		return
+	// slug → each store setter, applied in order. nilToEmpty makes "omitted"
+	// mean "revoke all of that kind" rather than "leave unchanged".
+	for _, set := range []func() error{
+		func() error {
+			return s.store.SetInfrastructureEntitlements(r.Context(), slug, nilToEmpty(body.Infrastructure))
+		},
+		func() error {
+			return s.store.SetDeploymentEntitlements(r.Context(), slug, nilToEmpty(body.Applications))
+		},
+		func() error { return s.store.SetEntitlements(r.Context(), slug, nilToEmpty(body.Agents)) },
+		func() error { return s.store.SetStoreEntitlements(r.Context(), slug, nilToEmpty(body.MemoryStores)) },
+	} {
+		if s.mapStoreErr(w, r, set()) {
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
+func nilToEmpty(v []string) []string {
+	if v == nil {
+		return []string{}
+	}
+	return v
+}
+
+// decodeValid decodes a JSON body into a T and runs its validate(). It writes
+// the 4xx itself (malformed JSON, or a validation message) and returns ok=false,
+// so every update closure shares one decode+validate line.
+func decodeValid[T interface{ validate() string }](w http.ResponseWriter, r *http.Request) (T, bool) {
+	var in T
+	if !decodeJSON(w, r, &in) {
+		return in, false
+	}
+	if msg := in.validate(); msg != "" {
+		writeErr(w, http.StatusBadRequest, msg)
+		return in, false
+	}
+	return in, true
 }
 
 // decodeJSONOptional decodes a JSON body into v, tolerating an empty body so a
