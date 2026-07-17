@@ -175,7 +175,7 @@ export function InfrastructureForm({
         <FormSection
           icon={SlidersHorizontal}
           title="Bicep inputs"
-          desc="Wire a static value into each of the module's parameters — baked into the template on save."
+          desc="Set each of the module's parameters — baked into the template on save. Put {{tenantHash}} (or {{tenant}} / {{region}}) inside a value for a per-tenant-unique result — e.g. a globally-unique Key Vault name across tenants."
         >
           <WiringCanvas
             targets={paramNames}
