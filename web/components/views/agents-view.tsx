@@ -11,13 +11,14 @@ import {
   MessageSquare,
   Plus,
   Power,
+  Trash2,
 } from "lucide-react";
 import { PageHeader } from "@/components/ui/page-header";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { StatusBadge } from "@/components/ui/status";
 import { EmptyState } from "@/components/ui/empty-state";
 import { useToast } from "@/components/providers/toast-provider";
-import { disableAgent, enableAgent, type ActionResult } from "@/lib/actions";
+import { disableAgent, enableAgent, deleteCatalogAgent, type ActionResult } from "@/lib/actions";
 import { EnableModal, OwnershipTag, TypeTag } from "./catalog-view";
 import {
   type CatalogAgent,
@@ -182,6 +183,17 @@ export function AgentsView({
                     <Link href={detailHref} className={styles.manage} aria-label={`Open ${a.name}`}>
                       <ChevronRight size={16} strokeWidth={2} />
                     </Link>
+                  )}
+                  {(platform || a.owned) && (
+                    <Button
+                      size="sm"
+                      variant="danger-ghost"
+                      icon={Trash2}
+                      loading={pending}
+                      onClick={() => runAction(() => deleteCatalogAgent(a.id), `Deleted ${a.name}`)}
+                    >
+                      Delete
+                    </Button>
                   )}
                 </div>
               </li>
