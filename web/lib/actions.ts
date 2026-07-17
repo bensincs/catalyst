@@ -104,7 +104,7 @@ export async function createCatalogAgent(input: {
   model: string;
   definition: AgentDefinition;
 }): Promise<ActionResult> {
-  return run(() => apiSend("POST", "/api/catalog", input), ["/agents"]);
+  return run(() => apiSend("POST", "/api/resources", { agents: [input] }), ["/agents"]);
 }
 
 export async function setEntitlements(
@@ -146,7 +146,7 @@ export async function createMemoryStore(input: {
   description: string;
   definition: MemoryStoreDefinition;
 }): Promise<ActionResult> {
-  return run(() => apiSend("POST", "/api/memory-stores", input), ["/memory-stores"]);
+  return run(() => apiSend("POST", "/api/resources", { memoryStores: [input] }), ["/memory-stores"]);
 }
 
 // A store's definition is immutable (the Foundry resource has no update surface),
@@ -214,7 +214,7 @@ export async function createApplication(input: {
   wiring: WireLink[];
   dependencies: Dependency[];
 }): Promise<ActionResult> {
-  return run(() => apiSend("POST", "/api/applications", input), ["/deployments"]);
+  return run(() => apiSend("POST", "/api/resources", { applications: [input] }), ["/deployments"]);
 }
 
 export async function updateApplication(
@@ -280,7 +280,7 @@ export async function createInfrastructure(input: {
   bicepParams: Record<string, unknown>;
   dependencies: Dependency[];
 }): Promise<ActionResult> {
-  return run(() => apiSend("POST", "/api/infrastructure", input), ["/infrastructure"]);
+  return run(() => apiSend("POST", "/api/resources", { infrastructure: [input] }), ["/infrastructure"]);
 }
 
 export async function updateInfrastructure(
