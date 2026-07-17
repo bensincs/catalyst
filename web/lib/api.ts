@@ -202,10 +202,8 @@ function toSummary(t: ApiTenant): TenantSummary {
     enrollment: t.enrollment as EnrollmentStatus,
     agentCount: t.agentCount,
     reconcilingCount: t.reconcilingCount,
-    version: t.version,
     lastHeartbeatMs: ms(t.lastHeartbeat),
     monthlyCalls: t.monthlyCalls,
-    drift: t.drift,
     lifecycle: (t.lifecycle ?? "enrolling") as Lifecycle,
     enabled: t.enabled ?? true,
   };
@@ -254,10 +252,6 @@ function toAgent(a: ApiAgent): EnabledAgent {
     id: a.id,
     name: a.name,
     type: (a.type as AgentType) || "prompt",
-    version: a.version,
-    desiredVersion: a.desiredVersion || a.version,
-    drift: Boolean(a.drift),
-    channel: a.channel as EnabledAgent["channel"],
     model: a.model,
     definition: a.definition ?? {},
     health: a.health as Health,
@@ -397,8 +391,9 @@ interface ApiCatalogAgent {
   type: string;
   model: string;
   owner?: string;
-  latestVersion: string;
-  versions: { version: string; channel: string; notes?: string; rolloutPercent: number; definition: AgentDefinition; createdAt: string }[];
+  definition?: AgentDefinition;
+  latestVersion?: string;
+  versions?: { version: string; channel: string; notes?: string; rolloutPercent: number; definition: AgentDefinition; createdAt: string }[];
   createdAt: string;
   ownerName?: string;
   platform?: boolean;
@@ -409,20 +404,28 @@ interface ApiCatalogAgent {
 
 export const getCatalog = cache(async (): Promise<CatalogAgent[]> => {
   const c = await apiGet<{ agents: ApiCatalogAgent[] }>("/api/catalog");
-  return (c.agents ?? []).map((a) => ({
-    ...a,
-    type: (a.type as AgentType) || "prompt",
-    owner: a.owner ?? "",
-    platform: a.platform ?? (a.owner ?? "") === "",
-    owned: Boolean(a.owned),
-    entitled: Boolean(a.entitled),
-    enabled: Boolean(a.enabled),
-    versions: (a.versions ?? []).map((v) => ({
-      ...v,
-      channel: v.channel === "beta" ? "beta" : "stable",
-      definition: v.definition ?? {},
-    })),
-  }));
+  return (c.agents ?? []).map((a) => {
+    // The backend still returns a versions array until its own strip lands; take
+    // the single current definition from `definition` when present, else the
+    // latest version's definition.
+    const versions = a.versions ?? [];
+    const latest = versions.find((v) => v.version === a.latestVersion) ?? versions[versions.length - 1];
+    return {
+      id: a.id,
+      name: a.name,
+      description: a.description,
+      type: (a.type as AgentType) || "prompt",
+      model: a.model,
+      owner: a.owner ?? "",
+      definition: a.definition ?? latest?.definition ?? {},
+      createdAt: a.createdAt,
+      ownerName: a.ownerName,
+      platform: a.platform ?? (a.owner ?? "") === "",
+      owned: Boolean(a.owned),
+      entitled: Boolean(a.entitled),
+      enabled: Boolean(a.enabled),
+    };
+  });
 });
 
 interface ApiRegistryRow extends ApiTenant {
@@ -443,7 +446,6 @@ export const getTenantsRegistry = cache(async (): Promise<TenantRegistryRow[]> =
     plan: t.plan as Plan,
     enrollment: t.enrollment as EnrollmentStatus,
     agentCount: t.agentCount,
-    version: t.version,
     lastHeartbeatMs: ms(t.lastHeartbeat),
     monthlyCalls: t.monthlyCalls,
     entitledAgents: t.entitledAgents ?? [],

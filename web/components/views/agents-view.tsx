@@ -7,20 +7,18 @@ import {
   AppWindow,
   Bot,
   ChevronRight,
-  GitBranch,
   Globe,
   MessageSquare,
   Plus,
   Power,
-  RefreshCw,
 } from "lucide-react";
 import { PageHeader } from "@/components/ui/page-header";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { StatusBadge } from "@/components/ui/status";
 import { EmptyState } from "@/components/ui/empty-state";
 import { useToast } from "@/components/providers/toast-provider";
-import { disableAgent, enableAgent, publishVersion, type ActionResult } from "@/lib/actions";
-import { EnableModal, OwnershipTag, PublishModal, TypeTag } from "./catalog-view";
+import { disableAgent, enableAgent, type ActionResult } from "@/lib/actions";
+import { EnableModal, OwnershipTag, TypeTag } from "./catalog-view";
 import {
   type CatalogAgent,
   type EnabledAgent,
@@ -39,29 +37,26 @@ const PUBLISH: Record<PublishTarget, { label: string; icon: typeof Globe }> = {
 
 /** One page for everything about agents: the catalog you can author + enable
  *  (available) and the instances running in your tenant (installed) — a single
- *  list where enabled rows carry live health, drift, and a link to their
- *  detail. Mirrors the Memory stores and Deployments pages. */
+ *  list where enabled rows carry live health and a link to their detail.
+ *  Mirrors the Memory stores and Deployments pages. */
 export function AgentsView({
   role,
   agents,
   enabled,
-  memoryStores,
 }: {
   role: Role;
   agents: CatalogAgent[];
   enabled: EnabledAgent[];
-  memoryStores: MemoryStore[];
+  memoryStores?: MemoryStore[];
 }) {
   const router = useRouter();
   const { toast } = useToast();
   const [pending, start] = useTransition();
   const platform = role === "platform";
 
-  const [publishFor, setPublishFor] = useState<CatalogAgent | null>(null);
   const [enableFor, setEnableFor] = useState<CatalogAgent | null>(null);
 
   const enabledById = new Map(enabled.map((a) => [a.id, a]));
-  const converging = enabled.filter((a) => a.drift).length;
 
   const runAction = (fn: () => Promise<ActionResult>, success: string, onDone?: () => void) => {
     start(async () => {
@@ -82,16 +77,8 @@ export function AgentsView({
         title="Agents"
         description={
           platform
-            ? "Author agents, publish versions, and gate rollout. Entitle tenants from a tenant's page; each enables what it needs and its reconciler brings it live."
+            ? "Author agents and entitle tenants from a tenant's page; each enables what it needs and its reconciler brings it live."
             : "Agents you can enable — entitled by your platform team or authored yourself — and the ones running in your tenant. Enabling reconciles one into your Foundry project."
-        }
-        meta={
-          !platform && converging > 0 ? (
-            <span className={styles.driftMeta}>
-              <RefreshCw size={12} strokeWidth={2.4} aria-hidden />
-              {converging} converging
-            </span>
-          ) : undefined
         }
         actions={
           <ButtonLink href="/agents/new" variant="primary" icon={Plus}>
@@ -107,7 +94,7 @@ export function AgentsView({
             title={platform ? "Author your first agent" : "No agents yet"}
             description={
               platform
-                ? "Define an agent and its model, publish a version, then entitle tenants to enable it. The reconciler brings it live in each tenant's own Foundry project."
+                ? "Define an agent and its model, then entitle tenants to enable it. The reconciler brings it live in each tenant's own Foundry project."
                 : "Author your own agent, or ask your platform team to entitle your tenant to one. Enabled agents are provisioned into your own Foundry project."
             }
             action={
@@ -122,7 +109,6 @@ export function AgentsView({
           {agents.map((a) => {
             const ea = enabledById.get(a.id);
             const isEnabled = a.enabled || Boolean(ea);
-            const canPublish = platform || a.owned;
             const detailHref = `/agents/${encodeURIComponent(a.id)}`;
             return (
               <li key={a.id} className={styles.row}>
@@ -140,13 +126,6 @@ export function AgentsView({
                     )}
                     <TypeTag type={a.type} />
                     {!platform && <OwnershipTag agent={a} />}
-                    <span className={`${styles.versionTag} mono`}>v{ea ? ea.version : a.latestVersion}</span>
-                    {ea?.drift && (
-                      <span className={styles.drift} title={`Converging to v${ea.desiredVersion}`}>
-                        <RefreshCw size={11} strokeWidth={2.6} aria-hidden />
-                        <span className="mono">v{ea.desiredVersion}</span>
-                      </span>
-                    )}
                     {isEnabled &&
                       (ea ? (
                         <StatusBadge
@@ -158,11 +137,6 @@ export function AgentsView({
                       ) : (
                         <StatusBadge tone="success" label="Enabled" variant="soft" />
                       ))}
-                    {platform && (
-                      <span className={styles.count}>
-                        {a.versions.length} version{a.versions.length === 1 ? "" : "s"}
-                      </span>
-                    )}
                     {platform && a.owner !== "" && a.ownerName && (
                       <span className={styles.count}>owned by {a.ownerName}</span>
                     )}
@@ -183,11 +157,6 @@ export function AgentsView({
                   </div>
                 </div>
                 <div className={styles.rowActions}>
-                  {canPublish && (
-                    <Button size="sm" icon={GitBranch} onClick={() => setPublishFor(a)}>
-                      Publish version
-                    </Button>
-                  )}
                   {!platform &&
                     (isEnabled ? (
                       <Button
@@ -221,20 +190,6 @@ export function AgentsView({
         </ul>
       )}
 
-      <PublishModal
-        key={publishFor?.id ?? "none"}
-        agent={publishFor}
-        pending={pending}
-        onClose={() => setPublishFor(null)}
-        stores={memoryStores}
-        onSubmit={(agent, input) =>
-          runAction(
-            () => publishVersion(agent.id, input),
-            `Published ${agent.name} v${input.version}`,
-            () => setPublishFor(null),
-          )
-        }
-      />
       <EnableModal
         agent={enableFor}
         pending={pending}

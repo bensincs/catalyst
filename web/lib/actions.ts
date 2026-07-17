@@ -107,16 +107,6 @@ export async function createCatalogAgent(input: {
   return run(() => apiSend("POST", "/api/catalog", input), ["/agents"]);
 }
 
-export async function publishVersion(
-  agentId: string,
-  input: { version: string; channel: string; notes: string; rolloutPercent: number; definition: AgentDefinition },
-): Promise<ActionResult> {
-  return run(
-    () => apiSend("POST", `/api/catalog/${encodeURIComponent(agentId)}/versions`, input),
-    ["/agents"],
-  );
-}
-
 export async function setEntitlements(
   slug: string,
   entitledAgents: string[],

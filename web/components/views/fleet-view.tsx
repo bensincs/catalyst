@@ -5,8 +5,6 @@ import { useRouter } from "next/navigation";
 import {
   ArrowDownUp,
   ArrowUpRight,
-  GitBranch,
-  Plus,
   Radar,
   SearchX,
   SlidersHorizontal,
@@ -15,7 +13,6 @@ import { PageHeader } from "@/components/ui/page-header";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/ui/status";
 import { EmptyState } from "@/components/ui/empty-state";
-import { useToast } from "@/components/providers/toast-provider";
 import { formatCount, formatInt, formatRelative } from "@/lib/format";
 import {
   LIFECYCLE_META,
@@ -47,7 +44,6 @@ export function FleetView({
   tenants: TenantSummary[];
   now: number;
 }) {
-  const { toast } = useToast();
   const router = useRouter();
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<"all" | Lifecycle>("all");
@@ -98,27 +94,13 @@ export function FleetView({
       <div>
         <PageHeader
           title="Fleet"
-          description="Every enrolled tenant, the version it runs, and the gap between desired and actual state — live from reconciler heartbeats."
-          actions={
-            <Button
-              variant="primary"
-              icon={Plus}
-              onClick={() => toast({ title: "New agent version", description: "Opening the catalog authoring flow.", tone: "info" })}
-            >
-              Publish version
-            </Button>
-          }
+          description="Every enrolled tenant and its live state — health and usage from reconciler heartbeats."
         />
         <div className={styles.emptyFleet}>
           <EmptyState
             icon={Radar}
             title="No tenants enrolled yet"
-            description="As organizations install the Cortex app, their reconciler enrolls and they appear here — with live version, health, and drift. Publish a version and entitle a tenant to get them started."
-            action={
-              <Button variant="primary" icon={Plus} onClick={() => toast({ title: "Publish a version", tone: "info" })}>
-                Publish version
-              </Button>
-            }
+            description="As organizations install the Cortex app, their reconciler enrolls and they appear here — with live health and usage. Entitle a tenant to an agent to get them started."
           />
         </div>
       </div>
@@ -129,21 +111,7 @@ export function FleetView({
     <div>
       <PageHeader
         title="Fleet"
-        description="Every enrolled tenant, the version it runs, and the gap between desired and actual state — live from reconciler heartbeats."
-        actions={
-          <>
-            <Button icon={GitBranch} onClick={() => toast({ title: "Releases", description: "Version authoring lands in Catalog.", tone: "neutral" })}>
-              Releases
-            </Button>
-            <Button
-              variant="primary"
-              icon={Plus}
-              onClick={() => toast({ title: "New agent version", description: "Opening the catalog authoring flow.", tone: "info" })}
-            >
-              Publish version
-            </Button>
-          </>
-        }
+        description="Every enrolled tenant and its live state — health and usage from reconciler heartbeats."
       />
 
       <section className={styles.summary} aria-label="Fleet summary">
@@ -151,11 +119,6 @@ export function FleetView({
           <Stat label="Tenants" value={formatInt(stats.tenants)} sub={`${stats.bound} enrolled`} />
           <Stat label="Agents running" value={formatInt(stats.agents)} sub="across the fleet" />
           <Stat label="Calls · 30d" value={formatCount(stats.callsMonth)} sub="all tenants" />
-          <Stat
-            label="On latest"
-            value={`${stats.onLatest}/${stats.tenants}`}
-            sub={<span className="mono">v{stats.latestVersion}</span>}
-          />
         </div>
 
         <div className={styles.health}>
@@ -238,7 +201,6 @@ export function FleetView({
               <th scope="col" className={styles.num + " " + styles.colAgents}>
                 <SortButton label="Agents" active={sort.key === "agents"} dir={sort.dir} onClick={() => toggleSort("agents")} align="end" />
               </th>
-              <th scope="col" className={styles.colVersion}>Version</th>
               <th scope="col">Status</th>
               <th scope="col" className={styles.colCalls + " " + styles.num}>
                 <SortButton label="Calls · 30d" active={sort.key === "calls"} dir={sort.dir} onClick={() => toggleSort("calls")} align="end" />
@@ -251,7 +213,7 @@ export function FleetView({
           <tbody>
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={8}>
+                <td colSpan={7}>
                   <EmptyState
                     icon={SearchX}
                     title="No tenants match"
@@ -278,7 +240,6 @@ export function FleetView({
                   tenant={t}
                   now={now}
                   onOpen={() => router.push(`/tenants/${encodeURIComponent(t.id)}`)}
-                  latest={stats.latestVersion}
                 />
               ))
             )}
@@ -347,15 +308,12 @@ function FleetRow({
   tenant,
   now,
   onOpen,
-  latest,
 }: {
   tenant: TenantSummary;
   now: number;
   onOpen: () => void;
-  latest: string;
 }) {
   const lc = LIFECYCLE_META[tenant.lifecycle];
-  const behind = tenant.version !== "" && tenant.version !== latest && tenant.lifecycle !== "enrolling";
   const stale = tenant.lifecycle === "suspended";
   return (
     <tr
@@ -375,28 +333,13 @@ function FleetRow({
         <div className={styles.tenantCell}>
           <span className={styles.tenantName}>{tenant.name}</span>
           <span className={styles.tenantId + " mono"}>{tenant.tenantId}</span>
-          {/* Fleet's core signal (version + drift) is a column on desktop; surface
-              it in the cell once that column is dropped on narrow screens. */}
-          <span className={styles.tenantMeta}>
-            <span className={styles.version + " mono"} data-behind={behind || undefined}>
-              {tenant.version ? `v${tenant.version}` : "—"}
-            </span>
-            {!tenant.enabled && (
+          {!tenant.enabled && (
+            <span className={styles.tenantMeta}>
               <span className={styles.metaFlag} data-tone="warning">
                 pending
               </span>
-            )}
-            {behind && (
-              <span className={styles.metaFlag} data-tone="warning">
-                behind
-              </span>
-            )}
-            {tenant.drift ? (
-              <span className={styles.metaFlag} data-tone="info">
-                {tenant.drift} drift
-              </span>
-            ) : null}
-          </span>
+            </span>
+          )}
         </div>
       </td>
       <td className={styles.colPlan}>
@@ -412,11 +355,6 @@ function FleetRow({
             +{tenant.reconcilingCount}
           </span>
         )}
-      </td>
-      <td className={styles.colVersion}>
-        <span className={styles.version + " mono"} data-behind={behind || undefined}>
-          {tenant.version || "—"}
-        </span>
       </td>
       <td>
         <StatusBadge tone={lc.tone} label={lc.label} pulse={tenant.lifecycle === "live"} variant={tenant.lifecycle === "live" ? "plain" : "soft"} />

@@ -3,11 +3,11 @@
 import { useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { AppWindow, ArrowLeft, ArrowRight, Ban, Globe, MessageSquare, RefreshCw } from "lucide-react";
+import { AppWindow, ArrowLeft, Ban, Globe, MessageSquare } from "lucide-react";
 import { PageHeader } from "@/components/ui/page-header";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/form";
-import { StatusBadge, StatusDot } from "@/components/ui/status";
+import { StatusBadge } from "@/components/ui/status";
 import { useToast } from "@/components/providers/toast-provider";
 import { connectAgentStore, disableAgent } from "@/lib/actions";
 import { formatInt, formatRelative } from "@/lib/format";
@@ -80,50 +80,22 @@ export function AgentDetailView({
         }
       />
 
-      {/* Reconciliation — desired vs. actual, made legible */}
+      {/* Reconciliation — the reconciler converges this agent's definition into the
+          tenant's Foundry project and reports its health each heartbeat. */}
       <section className={styles.reconcile} aria-label="Reconciliation">
         <div className={styles.reconHead}>
           <span className={styles.reconTitle}>Reconciliation</span>
-          {agent.drift ? (
-            <span className={styles.driftTag} data-tone="info">
-              <RefreshCw size={12} strokeWidth={2.4} aria-hidden />
-              Converging
-            </span>
-          ) : (
-            <span className={styles.driftTag} data-tone="success">
-              <StatusDot tone="success" />
-              In sync
-            </span>
-          )}
-        </div>
-
-        {/* Version — the axis reconciliation actually moves along */}
-        <div className={styles.versionRow}>
-          <div className={styles.versionCol} data-role="actual">
-            <span className={styles.versionLabel}>Actual</span>
-            <span className={"mono " + styles.versionValue}>v{agent.version}</span>
-            <span className={styles.versionSub}>{live ? "reported by reconciler" : "last reported"}</span>
-          </div>
-          <span className={styles.versionArrow} data-drift={agent.drift || undefined} aria-hidden>
-            <ArrowRight size={18} strokeWidth={2.2} />
-          </span>
-          <div className={styles.versionCol} data-role="desired" data-drift={agent.drift || undefined}>
-            <span className={styles.versionLabel}>Desired</span>
-            <span className={"mono " + styles.versionValue}>v{agent.desiredVersion}</span>
-            <span className={styles.versionSub}>latest on {agent.channel}</span>
-          </div>
+          <StatusBadge tone={h.tone} label={h.label} pulse={agent.health === "reconciling"} variant="soft" />
         </div>
 
         <p className={styles.reconNote}>
-          {agent.drift
-            ? `A newer version is published. The reconciler is converging this agent to v${agent.desiredVersion} on its next poll.`
-            : live
-              ? `Desired and actual match. The reconciler confirmed v${agent.version} on its last heartbeat.`
-              : `Desired and actual match as last reported. The reconciler isn't live, so this state is unconfirmed.`}
+          {live
+            ? "The reconciler confirmed this agent is live in your Foundry project on its last heartbeat."
+            : "The reconciler isn't live, so this agent's state is unconfirmed — it converges on the reconciler's next poll."}
         </p>
 
         <dl className={styles.facts}>
-          <Fact label="Channel" value={agent.channel === "beta" ? "Beta" : "Stable"} />
+          <Fact label="Model" value={agent.model} mono />
           <Fact label="Model" value={agent.model} mono />
           <Fact
             label="Health"

@@ -7,8 +7,8 @@ import { Field, TextInput, Textarea, Select, Checkbox } from "@/components/ui/fo
 import type { AgentDefinition, AgentType, CatalogAgent, MemoryStore, PublishTarget } from "@/lib/types";
 import styles from "./catalog-view.module.css";
 
-// The agent authoring surface: type tags plus the New agent / Publish version /
-// Enable modals. Rendered inline on the unified Agents page (see agents-view).
+// The agent authoring surface: type tags plus the New agent / Enable modals.
+// Rendered inline on the unified Agents page (see agents-view).
 
 export const MODELS = ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "jais-30b", "o3-mini"];
 const PROMPT_TOOLS: { id: string; label: string; hint: string }[] = [
@@ -67,8 +67,8 @@ export function TypeToggle({ value, onChange }: { value: AgentType; onChange: (t
   );
 }
 
-// DefinitionFields renders the typed definition editor — the substance that
-// travels with each published version (see AGENT-MODEL.md).
+// DefinitionFields renders the typed definition editor — the agent's substance
+// (see AGENT-MODEL.md).
 export function DefinitionFields({
   type,
   value,
@@ -189,7 +189,7 @@ export function NewAgentModal({
       open={open}
       onClose={onClose}
       title="New agent"
-      description="Pick a type and author its definition. It starts at v1.0.0; publish more versions any time."
+      description="Pick a type and author its definition. The reconciler brings it live in each entitled tenant's Foundry project."
       footer={
         <>
           <Button onClick={onClose}>Cancel</Button>
@@ -229,84 +229,6 @@ export function NewAgentModal({
   );
 }
 
-export function PublishModal({
-  agent,
-  pending,
-  onClose,
-  onSubmit,
-  stores,
-}: {
-  agent: CatalogAgent | null;
-  pending: boolean;
-  onClose: () => void;
-  onSubmit: (
-    agent: CatalogAgent,
-    input: { version: string; channel: string; notes: string; rolloutPercent: number; definition: AgentDefinition },
-  ) => void;
-  stores: MemoryStore[];
-}) {
-  const latest = agent ? [...agent.versions].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))[0] : undefined;
-  const [version, setVersion] = useState("");
-  const [channel, setChannel] = useState<string>(latest?.channel ?? "stable");
-  const [notes, setNotes] = useState("");
-  const [rollout, setRollout] = useState(100);
-  const [def, setDef] = useState<AgentDefinition>(latest?.definition ?? {});
-  const valid = /^\d+\.\d+\.\d+$/.test(version.trim());
-
-  if (!agent) return null;
-  return (
-    <Modal
-      open={!!agent}
-      onClose={onClose}
-      title={`Publish version — ${agent.name}`}
-      description={`Current latest is v${agent.latestVersion}. Prefilled from it; edit the ${agent.type} definition. Rollout gates availability, not auto-apply.`}
-      footer={
-        <>
-          <Button onClick={onClose}>Cancel</Button>
-          <Button
-            variant="primary"
-            loading={pending}
-            disabled={!valid}
-            onClick={() =>
-              onSubmit(agent, { version: version.trim(), channel, notes: notes.trim(), rolloutPercent: rollout, definition: def })
-            }
-          >
-            Publish
-          </Button>
-        </>
-      }
-    >
-      <Field label="Version" htmlFor="ver" hint="Semantic version, e.g. 1.1.0.">
-        <TextInput id="ver" value={version} onChange={(e) => setVersion(e.target.value)} placeholder="1.1.0" autoFocus />
-      </Field>
-      <div className={styles.formRow}>
-        <Field label="Channel" htmlFor="chan">
-          <Select id="chan" value={channel} onChange={(e) => setChannel(e.target.value)}>
-            <option value="stable">Stable</option>
-            <option value="beta">Beta</option>
-          </Select>
-        </Field>
-        <Field label={`Rollout — ${rollout}%`} htmlFor="rollout">
-          <input
-            id="rollout"
-            type="range"
-            min={5}
-            max={100}
-            step={5}
-            value={rollout}
-            onChange={(e) => setRollout(Number(e.target.value))}
-            className={styles.range}
-          />
-        </Field>
-      </div>
-      <DefinitionFields type={agent.type} value={def} onChange={setDef} stores={stores} />
-      <Field label="Release notes" htmlFor="notes">
-        <Textarea id="notes" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="What changed." />
-      </Field>
-    </Modal>
-  );
-}
-
 export function EnableModal({
   agent,
   pending,
@@ -333,7 +255,7 @@ export function EnableModal({
       open={!!agent}
       onClose={onClose}
       title={`Enable ${agent.name}`}
-      description={`v${agent.latestVersion} · ${agent.model}. Choose where it publishes; the reconciler brings it live.`}
+      description={`${agent.model}. Choose where it publishes; the reconciler brings it live.`}
       footer={
         <>
           <Button onClick={onClose}>Cancel</Button>

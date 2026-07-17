@@ -73,7 +73,7 @@ export function EntitlementsPanel({
               checked={selected.has(a.id)}
               onChange={() => toggle(a.id)}
               label={a.name}
-              description={`${a.type === "hosted" ? "Hosted" : "Prompt"} · v${a.latestVersion} · ${a.model}`}
+              description={`${a.type === "hosted" ? "Hosted" : "Prompt"} · ${a.model}`}
             />
           ))}
         </div>

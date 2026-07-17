@@ -11,7 +11,7 @@ export type Environment = "dev" | "qa" | "uat" | "prod";
 export type Health =
   | "live" // provisioned & converged in the tenant's cluster — success (lime)
   | "reconciling" // being provisioned into the cluster — info (violet)
-  | "drift" // newer version desired than what's live — warning (amber)
+  | "drift" // live state differs from desired — warning (amber)
   | "blocked" // couldn't be realized; action required — danger (red)
   | "disabled" // inert / not enabled — neutral (gray)
   | "unknown"; // enabled but no live reconciler has confirmed — neutral (gray)
@@ -36,8 +36,8 @@ export type PublishTarget = "api" | "teams" | "m365";
 /** How an agent is realized in Foundry (see AGENT-MODEL.md). */
 export type AgentType = "prompt" | "hosted";
 
-/** The versioned substance of an agent, authored by the publisher. Which fields
- * apply is decided by the agent's type. */
+/** The substance of an agent, authored by the publisher. Which fields apply is
+ * decided by the agent's type. */
 export interface AgentDefinition {
   // prompt
   instructions?: string;
@@ -63,10 +63,8 @@ export interface TenantSummary {
   enrollment: EnrollmentStatus;
   agentCount: number;
   reconcilingCount: number;
-  version: string; // reconciler / spine version
   lastHeartbeatMs: number; // epoch ms
   monthlyCalls: number;
-  drift?: number; // pending desired-vs-actual changes
   lifecycle: Lifecycle;
   enabled: boolean; // access gate: may sign in / run a reconciler
 }
@@ -75,10 +73,6 @@ export interface EnabledAgent {
   id: string;
   name: string;
   type: AgentType;
-  version: string; // actual — converged by the reconciler
-  desiredVersion: string; // desired — latest catalog version for its channel
-  drift: boolean; // desired ≠ actual (reconcile pending/underway)
-  channel: "stable" | "beta";
   model: string;
   definition: AgentDefinition;
   health: Health;
@@ -246,17 +240,6 @@ export interface FleetStats {
   bound: number;
   agents: number;
   callsMonth: number;
-  latestVersion: string;
-  onLatest: number;
-}
-
-export interface CatalogVersion {
-  version: string;
-  channel: "stable" | "beta";
-  notes?: string;
-  rolloutPercent: number;
-  definition: AgentDefinition;
-  createdAt: string;
 }
 
 export interface CatalogAgent {
@@ -266,8 +249,7 @@ export interface CatalogAgent {
   type: AgentType;
   model: string;
   owner: string; // "" = platform-authored; else tenant slug
-  latestVersion: string;
-  versions: CatalogVersion[];
+  definition: AgentDefinition;
   createdAt: string;
   // platform view
   ownerName?: string;
@@ -286,7 +268,6 @@ export interface TenantRegistryRow {
   plan: Plan;
   enrollment: EnrollmentStatus;
   agentCount: number;
-  version: string;
   lastHeartbeatMs: number;
   monthlyCalls: number;
   entitledAgents: string[];
