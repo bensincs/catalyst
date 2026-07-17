@@ -12,18 +12,24 @@ import { WiringCanvas } from "./wiring-canvas";
 import { DependencyPicker } from "./dependency-picker";
 import { createApplication, updateApplication, inspectChart, type ActionResult } from "@/lib/actions";
 import { mapToYaml, yamlToMap } from "@/lib/values";
-import type { Application, ClusterInfo, Dependency, DepOption, Role, WireLink } from "@/lib/types";
+import type { Application, ClusterInfo, Dependency, DepKind, DepOption, Role, WireLink } from "@/lib/types";
 import styles from "./deployment-form.module.css";
 
 type Obj = Record<string, unknown>;
 
-/** One infrastructure candidate's wireable Bicep outputs, keyed by its id — the
- *  sources the author can wire into Helm values once it's a dependency. */
-export interface InfraOutputs {
+/** A dependency candidate's wireable outputs — the sources the author can wire
+ *  into Helm values once it's a dependency. Infrastructure exposes its resolved
+ *  Bicep outputs; applications/agents expose derived outputs (see below). */
+export interface DepOutputs {
+  kind: DepKind;
   id: string;
   name: string;
   outputs: string[];
 }
+
+// Derived outputs a dependency application / agent exposes for wiring.
+export const APP_OUTPUTS = ["name", "namespace", "serviceHost"];
+export const AGENT_OUTPUTS = ["agentId", "name"];
 
 // Dotted leaf paths of a chart's default values — the Helm value-path suggestions.
 function flattenPaths(obj: Obj, base = ""): string[] {
@@ -40,28 +46,32 @@ function flattenPaths(obj: Obj, base = ""): string[] {
   return out;
 }
 
-// A wiring source token encodes which infrastructure dependency an output came
-// from, so every emitted WireLink can carry its `infrastructure` id. Format:
-// `<infraId>:<bicepOutput>` (split on the first colon; infra ids are slugs).
-const wireToken = (infrastructure: string, bicepOutput: string) => `${infrastructure}:${bicepOutput}`;
-function parseWireToken(token: string): { infrastructure: string; bicepOutput: string } {
-  const i = token.indexOf(":");
-  return i < 0
-    ? { infrastructure: "", bicepOutput: token }
-    : { infrastructure: token.slice(0, i), bicepOutput: token.slice(i + 1) };
+// A wiring source token encodes which dependency an output came from, so every
+// emitted WireLink carries its source. Format: `<kind>:<id>:<output>` (kinds are
+// fixed words and ids are colon-free slugs; the output is the rest).
+const wireToken = (kind: string, id: string, output: string) => `${kind}:${id}:${output}`;
+function parseWireToken(token: string): { sourceKind: DepKind; sourceId: string; output: string } {
+  const a = token.indexOf(":");
+  const b = token.indexOf(":", a + 1);
+  if (a < 0 || b < 0) return { sourceKind: "infrastructure", sourceId: "", output: token };
+  return {
+    sourceKind: token.slice(0, a) as DepKind,
+    sourceId: token.slice(a + 1, b),
+    output: token.slice(b + 1),
+  };
 }
 
 export function DeploymentForm({
   role,
   app,
   depOptions = [],
-  infraOutputs = [],
+  depOutputs = [],
   cluster,
 }: {
   role: Role;
   app?: Application;
   depOptions?: DepOption[];
-  infraOutputs?: InfraOutputs[];
+  depOutputs?: DepOutputs[];
   cluster?: ClusterInfo;
 }) {
   const router = useRouter();
@@ -111,33 +121,43 @@ export function DeploymentForm({
     };
   }, [repoURL, chart, targetRevision]);
 
-  // The wireable sources are the outputs of the app's chosen INFRASTRUCTURE
-  // dependencies — each namespaced by its infra id so the WireLink knows its origin.
-  const selectedInfra = useMemo(
-    () => new Set(dependencies.filter((d) => d.kind === "infrastructure").map((d) => d.id)),
+  // The wireable sources are the outputs of the app's chosen dependencies — each
+  // namespaced by "<kind>:<id>" so the WireLink knows its origin.
+  const selectedDepKeys = useMemo(
+    () => new Set(dependencies.map((d) => `${d.kind}:${d.id}`)),
     [dependencies],
   );
   const liveOutputs = useMemo(
     () =>
-      infraOutputs
-        .filter((i) => selectedInfra.has(i.id))
-        .flatMap((i) => i.outputs.map((o) => wireToken(i.id, o))),
-    [infraOutputs, selectedInfra],
+      depOutputs
+        .filter((d) => selectedDepKeys.has(`${d.kind}:${d.id}`))
+        .flatMap((d) => d.outputs.map((o) => wireToken(d.kind, d.id, o))),
+    [depOutputs, selectedDepKeys],
   );
+  // Render a wiring source as "<dependency name> / <output>" — the name tags the
+  // node so identical output names (e.g. two deps' `name`) stay distinguishable.
+  const depNameByKey = useMemo(
+    () => new Map(depOutputs.map((d) => [`${d.kind}:${d.id}`, d.name])),
+    [depOutputs],
+  );
+  const outputLabel = (token: string) => {
+    const { sourceKind, sourceId, output } = parseWireToken(token);
+    return { tag: depNameByKey.get(`${sourceKind}:${sourceId}`) ?? sourceId, label: output };
+  };
 
   // Seed the wiring board from the app being edited (once; the board owns state
-  // after mount): Helm static values + wired outputs (as infra-namespaced tokens).
+  // after mount): Helm static values + wired outputs (as source-namespaced tokens).
   const helmInitialStatic = yamlToMap(app?.values ?? "");
   const helmInitialWired = Object.fromEntries(
-    (app?.wiring ?? []).map((w) => [w.helmPath, wireToken(w.infrastructure, w.bicepOutput)]),
+    (app?.wiring ?? []).map((w) => [w.helmPath, wireToken(w.sourceKind, w.sourceId, w.output)]),
   );
 
   const hasChart = repoURL.trim() !== "" && chart.trim() !== "";
   const valid = name.trim().length >= 2 && hasChart;
 
   const submit = () => {
-    // Only keep wiring whose infrastructure is still a selected dependency.
-    const cleanWiring = wiring.filter((w) => selectedInfra.has(w.infrastructure));
+    // Only keep wiring whose source is still a selected dependency.
+    const cleanWiring = wiring.filter((w) => selectedDepKeys.has(`${w.sourceKind}:${w.sourceId}`));
     const input = {
       name: name.trim(),
       description: description.trim(),
@@ -161,7 +181,7 @@ export function DeploymentForm({
     });
   };
 
-  const wiredCount = wiring.filter((w) => selectedInfra.has(w.infrastructure)).length;
+  const wiredCount = wiring.filter((w) => selectedDepKeys.has(`${w.sourceKind}:${w.sourceId}`)).length;
 
   return (
     <div className={styles.page}>
@@ -242,7 +262,7 @@ export function DeploymentForm({
           <Section
             icon={GitBranch}
             title="Dependencies"
-            desc="Infrastructure, applications, or agents this deployment waits on — dependencies converge first (Argo sync-waves order the deploy). An infrastructure dependency's outputs become wireable below."
+            desc="Infrastructure, applications, or agents this deployment waits on — dependencies converge first (Argo sync-waves order the deploy). Each dependency's outputs become wireable below."
           >
             <DependencyPicker options={depOptions} value={dependencies} onChange={setDependencies} />
           </Section>
@@ -252,11 +272,12 @@ export function DeploymentForm({
           <Section
             icon={Cable}
             title="Helm values"
-            desc="Wire a source — a static value you type, or an output of a chosen infrastructure dependency — into each Helm value. The only place a chart's values are set."
+            desc="Wire a source — a static value you type, or an output of a chosen dependency (infrastructure, application, or agent) — into each Helm value. The only place a chart's values are set."
             accent
           >
             <WiringCanvas
               outputs={liveOutputs}
+              outputLabel={outputLabel}
               targets={helmPaths}
               suggestions={helmPaths}
               allowAddTarget
@@ -270,15 +291,15 @@ export function DeploymentForm({
                 setValues(mapToYaml(sm));
                 setWiring(
                   Object.entries(wm).map(([helmPath, token]) => {
-                    const { infrastructure, bicepOutput } = parseWireToken(token);
-                    return { infrastructure, bicepOutput, helmPath };
+                    const { sourceKind, sourceId, output } = parseWireToken(token);
+                    return { sourceKind, sourceId, output, helmPath };
                   }),
                 );
               }}
             />
             {liveOutputs.length === 0 && (
               <p className={styles.note}>
-                Add an infrastructure dependency above to wire its outputs into these values.
+                Add a dependency above to wire its outputs into these values.
               </p>
             )}
           </Section>

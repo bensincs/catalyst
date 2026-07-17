@@ -23,7 +23,11 @@ export type EnrollmentStatus = "bound" | "pending" | "suspended" | "offboarding"
  * fresh the reconciler's last heartbeat is. This is the "is it actually working
  * right now" status, distinct from enrollment (the binding state).
  */
-export type Lifecycle = "enrolling" | "live" | "degraded" | "suspended";
+// Lifecycle follows the install flow: pending (awaiting the Lighthouse
+// delegation) → provisioning (Cortex building the environment) → enrolling
+// (environment ready, awaiting the reconciler's first heartbeat) → live; degraded
+// when a bound reconciler goes stale or provisioning failed; suspended when cut off.
+export type Lifecycle = "pending" | "provisioning" | "enrolling" | "live" | "degraded" | "suspended";
 
 export type Plan = "enterprise" | "sovereign" | "team";
 
@@ -111,12 +115,14 @@ export interface Dependency {
   id: string;
 }
 
-/** Maps an output of one of an application's infrastructure dependencies into a
- *  Helm values path (the wiring). `infrastructure` is the id of the infrastructure
- *  dependency the output comes from. */
+/** Maps an output of one of an application's dependencies into a Helm values path
+ *  (the wiring). The source is any dependency: an infrastructure entity (its Bicep
+ *  outputs), a dependency application (name / namespace / serviceHost), or a
+ *  dependency agent (agentId / name). */
 export interface WireLink {
-  infrastructure: string; // id of the infrastructure dependency the output belongs to
-  bicepOutput: string;
+  sourceKind: DepKind; // infrastructure | application | agent
+  sourceId: string; // id of the dependency the output comes from
+  output: string;
   helmPath: string;
 }
 
@@ -349,6 +355,8 @@ export const ENROLLMENT_META: Record<EnrollmentStatus, HealthMeta> = {
 export const LIFECYCLE_META: Record<Lifecycle, HealthMeta> = {
   live: { label: "Live", tone: "success" },
   enrolling: { label: "Enrolling", tone: "info" },
+  provisioning: { label: "Provisioning", tone: "info" },
+  pending: { label: "Pending", tone: "neutral" },
   degraded: { label: "Degraded", tone: "warning" },
   suspended: { label: "Suspended", tone: "neutral" },
 };

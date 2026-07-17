@@ -1,13 +1,13 @@
 import { getApplications, getCatalog, getInfrastructure, getMe, getMyContext } from "@/lib/api";
-import { DeploymentForm, type InfraOutputs } from "@/components/views/deployment-form";
+import { DeploymentForm, APP_OUTPUTS, AGENT_OUTPUTS, type DepOutputs } from "@/components/views/deployment-form";
 import type { ClusterInfo, DepOption } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
 // Dedicated create page (replaces the old modal). Loads typed dependency
-// candidates (infrastructure / applications / agents) filtered to what the
-// viewer manages or is entitled to, the wireable outputs of each infrastructure
-// candidate, and — for a tenant — its cluster status.
+// candidates (infrastructure / applications / agents) filtered to what the viewer
+// manages or is entitled to, the wireable outputs of each candidate, and — for a
+// tenant — its cluster status.
 export default async function NewDeploymentPage() {
   const me = await getMe();
   const [apps, catalog, infra] = await Promise.all([getApplications(), getCatalog(), getInfrastructure()]);
@@ -21,12 +21,16 @@ export default async function NewDeploymentPage() {
     ...apps.filter(usable).map((a) => ({ id: a.id, name: a.name, kind: "application" as const })),
     ...catalog.filter(usable).map((c) => ({ id: c.id, name: c.name, kind: "agent" as const })),
   ];
-  const infraOutputs: InfraOutputs[] = infra
-    .filter(usable)
-    .map((i) => ({ id: i.id, name: i.name, outputs: i.bicepOutputs }));
+  // The wireable outputs each candidate exposes (infrastructure → Bicep outputs;
+  // applications/agents → derived outputs).
+  const depOutputs: DepOutputs[] = [
+    ...infra.filter(usable).map((i) => ({ kind: "infrastructure" as const, id: i.id, name: i.name, outputs: i.bicepOutputs })),
+    ...apps.filter(usable).map((a) => ({ kind: "application" as const, id: a.id, name: a.name, outputs: APP_OUTPUTS })),
+    ...catalog.filter(usable).map((c) => ({ kind: "agent" as const, id: c.id, name: c.name, outputs: AGENT_OUTPUTS })),
+  ];
 
   let cluster: ClusterInfo | undefined;
   if (me.role === "tenant") cluster = (await getMyContext()).tenant.cluster;
 
-  return <DeploymentForm role={me.role} depOptions={depOptions} infraOutputs={infraOutputs} cluster={cluster} />;
+  return <DeploymentForm role={me.role} depOptions={depOptions} depOutputs={depOutputs} cluster={cluster} />;
 }

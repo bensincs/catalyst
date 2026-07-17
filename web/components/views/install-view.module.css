@@ -298,6 +298,37 @@
   color: var(--text-secondary);
 }
 
+/* ── Compact install status line (tenant overview summary) ── */
+.statusLine {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 13px 20px;
+  background: var(--surface);
+  border-radius: var(--radius-island);
+  box-shadow: var(--shadow-sm);
+  margin-bottom: var(--space-base);
+}
+.statusHeartbeat {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-body-sm);
+  font-weight: 550;
+  color: var(--text-secondary);
+}
+.statusTime {
+  font-size: var(--text-caption);
+  font-weight: 500;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.statusSpacer {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
 /* ── Install identity manifest ── */
 .manifestWrap {
   background: var(--surface);

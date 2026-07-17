@@ -21,12 +21,18 @@ import { formatCount, formatInt, formatRelative } from "@/lib/format";
 import {
   HEALTH_META,
   LIFECYCLE_META,
+  type Application,
   type EnabledAgent,
+  type Infrastructure,
   type Lifecycle,
+  type MemoryStore,
   type PublishTarget,
   type TenantContextInfo,
 } from "@/lib/types";
+import { DependencyGraph } from "./dependency-graph";
+import { InstallStatusChecks, ReconcilerStatus, type InfraSummary } from "./install-status";
 import styles from "./tenant-overview.module.css";
+import installStyles from "./install-view.module.css";
 
 const PUBLISH: Record<PublishTarget, { label: string; icon: typeof Globe }> = {
   api: { label: "API", icon: Globe },
@@ -39,20 +45,33 @@ export function TenantOverview({
   agents,
   now,
   platformView = false,
+  infrastructure,
+  applications,
+  stores,
+  infra,
 }: {
   tenant: TenantContextInfo;
   agents: EnabledAgent[];
   now: number;
   platformView?: boolean;
+  infrastructure?: Infrastructure[];
+  applications?: Application[];
+  stores?: MemoryStore[];
+  infra?: InfraSummary;
 }) {
   const { toast } = useToast();
   const router = useRouter();
   const lc = LIFECYCLE_META[tenant.lifecycle];
   const recon = reconStatus(tenant.lifecycle);
   const installed = tenant.enrollment === "bound";
-  const delegated = tenant.cluster.infraDelegated;
   const totalCalls = agents.reduce((n, a) => n + a.calls30d, 0);
   const models = new Set(agents.map((a) => a.model)).size;
+
+  // The tenant's own overview carries the live status surfaces (topology graph,
+  // staged install checks, reconciler heartbeat). The platform drill-in isn't
+  // handed that tenant-scoped data (infra is absent), so it degrades to just the
+  // compact status line below.
+  const showStatus = !platformView && infra !== undefined;
 
   return (
     <div>
@@ -95,70 +114,48 @@ export function TenantOverview({
         }
       />
 
-      {/* Sovereignty-legible install panel */}
-      <section className={styles.install} aria-label="Install and identity">
-        <div className={styles.installHead}>
-          <span className={styles.shield} aria-hidden>
-            <ShieldCheck size={19} strokeWidth={2.1} />
-          </span>
-          <div className={styles.installTitle}>
-            <div className={styles.installTitleRow}>
-              <h2 className={styles.installName}>{tenant.name}</h2>
-              <span className={styles.sovereign}>{tenant.plan}</span>
-              <StatusBadge tone={lc.tone} label={lc.label} pulse={tenant.lifecycle === "live"} />
-            </div>
-            <p className={styles.installSub}>
-              Delegate your subscription once; Cortex provisions the reconciler, Foundry,
-              and cluster inside it. Your models, agents, and data never leave your tenant.
-            </p>
-          </div>
-          <div className={styles.heartbeat} data-installed={installed || undefined}>
-            <StatusDot tone={recon.tone} pulse={recon.pulse} />
-            <span className={styles.heartbeatText}>
-              {recon.label}
-              {recon.showTime && (
-                <span className={styles.heartbeatTime}>
-                  {formatRelative(tenant.lastHeartbeatMs, now)}
-                </span>
-              )}
-            </span>
-          </div>
-        </div>
-
-        <dl className={styles.facts}>
-          <Fact label="Tenant ID" value={tenant.tenantId} mono />
-          <Fact label="Subscription" value={tenant.subscriptionId || "—"} mono />
-          <Fact label="Region" value={tenant.region} />
-          <Fact label="Delegation" value={delegated ? "Active · Lighthouse" : "Not delegated"} />
-          <Fact label="Environment" value={footprintLabel(tenant.cluster.footprintState)} />
-          <Fact label="Reconciler identity" value={tenant.reconcilerIdentity || "—"} mono />
-          <Fact label="Foundry project" value={tenant.foundryProject || "—"} mono />
-          <Fact label="Reconciler" value={tenant.reconcilerVersion ? `v${tenant.reconcilerVersion}` : "—"} mono />
-          <Fact
-            label="Cluster"
-            value={
-              tenant.cluster.phase
-                ? `${tenant.cluster.name || "cluster"} · ${tenant.cluster.phase}${tenant.cluster.argoInstalled ? " · Argo CD" : ""}${tenant.cluster.ingressInstalled ? " · Envoy ingress" : ""}${tenant.cluster.ingressIssuer ? " · Entra auth" : ""}`
-                : "—"
-            }
-          />
-          {tenant.cluster.gatewayIP ? <Fact label="Ingress gateway" value={tenant.cluster.gatewayIP} mono /> : null}
-        </dl>
-
-        <div className={styles.installFoot}>
-          <span className={styles.installFootText}>
-            {tenant.installedAt
-              ? `Installed ${tenant.installedAt} · self-updating`
-              : delegated
-                ? "Cortex is provisioning your environment"
-                : "Awaiting your Lighthouse delegation"}
-          </span>
+      {/* Compact install status — the full identity manifest lives on /install */}
+      <section className={installStyles.statusLine} aria-label="Install status">
+        <StatusBadge tone={lc.tone} label={lc.label} pulse={tenant.lifecycle === "live"} />
+        <span className={installStyles.statusHeartbeat}>
+          <StatusDot tone={recon.tone} pulse={recon.pulse} />
+          {recon.label}
+          {recon.showTime && (
+            <span className={installStyles.statusTime}>{formatRelative(tenant.lastHeartbeatMs, now)}</span>
+          )}
+        </span>
+        <span className={installStyles.statusSpacer} aria-hidden />
+        {!platformView && (
           <Link href="/install" className={styles.installLink}>
             View install
             <ArrowUpRight size={14} strokeWidth={2} aria-hidden />
           </Link>
-        </div>
+        )}
       </section>
+
+      {showStatus && infra && (
+        <>
+          {/* Dependency topology — the hero: the enabled graph in the tenant's subscription */}
+          <section className={installStyles.topology} aria-label="Dependency topology">
+            <div className={installStyles.topologyHead}>
+              <h2 className={installStyles.topologyTitle}>Topology</h2>
+              <span className={installStyles.topologyDesc}>
+                What Cortex has provisioned in your subscription, and how each piece depends on the others.
+              </span>
+            </div>
+            <DependencyGraph
+              infrastructure={infrastructure ?? []}
+              applications={applications ?? []}
+              agents={agents}
+              stores={stores ?? []}
+            />
+          </section>
+
+          {/* Staged install-status checks + reconciler heartbeat */}
+          <InstallStatusChecks tenant={tenant} agentCount={agents.length} infra={infra} />
+          <ReconcilerStatus tenant={tenant} now={now} />
+        </>
+      )}
 
       {/* Usage snapshot */}
       <section className={styles.snapshot} aria-label="Usage snapshot">
@@ -208,8 +205,8 @@ export function TenantOverview({
 }
 
 // reconStatus maps the tenant's derived lifecycle to how its reconciler reads in
-// the install panel — honest about staleness (a bound-but-silent reconciler is
-// "unreachable", not "healthy").
+// the compact status line — honest about staleness (a bound-but-silent
+// reconciler is "unreachable", not "healthy").
 function reconStatus(lifecycle: Lifecycle): {
   tone: "success" | "warning" | "neutral";
   label: string;
@@ -228,21 +225,6 @@ function reconStatus(lifecycle: Lifecycle): {
   }
 }
 
-// footprintLabel reads the control-plane-provisioned footprint (reconciler +
-// Foundry + AKS) state for the install panel.
-function footprintLabel(state?: string): string {
-  switch (state) {
-    case "ready":
-      return "Provisioned";
-    case "provisioning":
-      return "Provisioning…";
-    case "failed":
-      return "Failed";
-    default:
-      return "Not provisioned";
-  }
-}
-
 function publishSummary(agents: EnabledAgent[]): string {
   const set = new Set<PublishTarget>();
   agents.forEach((a) => a.publishTo.forEach((p) => set.add(p)));
@@ -250,15 +232,6 @@ function publishSummary(agents: EnabledAgent[]): string {
     .filter((p) => set.has(p))
     .map((p) => PUBLISH[p].label)
     .join(" · ");
-}
-
-function Fact({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
-  return (
-    <div className={styles.fact}>
-      <dt className={styles.factLabel}>{label}</dt>
-      <dd className={styles.factValue + (mono ? " mono" : "")}>{value}</dd>
-    </div>
-  );
 }
 
 function Snap({ label, value, wide = false }: { label: string; value: string; wide?: boolean }) {

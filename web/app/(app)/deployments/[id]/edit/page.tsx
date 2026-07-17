@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import { getApplications, getCatalog, getInfrastructure, getMe, getMyContext } from "@/lib/api";
-import { DeploymentForm, type InfraOutputs } from "@/components/views/deployment-form";
+import { DeploymentForm, APP_OUTPUTS, AGENT_OUTPUTS, type DepOutputs } from "@/components/views/deployment-form";
 import type { ClusterInfo, DepOption } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -26,12 +26,15 @@ export default async function EditDeploymentPage({ params }: { params: Promise<{
     ...apps.filter((a) => a.id !== id && usable(a)).map((a) => ({ id: a.id, name: a.name, kind: "application" as const })),
     ...catalog.filter(usable).map((c) => ({ id: c.id, name: c.name, kind: "agent" as const })),
   ];
-  const infraOutputs: InfraOutputs[] = infra
-    .filter(usable)
-    .map((i) => ({ id: i.id, name: i.name, outputs: i.bicepOutputs }));
+  // The wireable outputs each candidate exposes.
+  const depOutputs: DepOutputs[] = [
+    ...infra.filter(usable).map((i) => ({ kind: "infrastructure" as const, id: i.id, name: i.name, outputs: i.bicepOutputs })),
+    ...apps.filter((a) => a.id !== id && usable(a)).map((a) => ({ kind: "application" as const, id: a.id, name: a.name, outputs: APP_OUTPUTS })),
+    ...catalog.filter(usable).map((c) => ({ kind: "agent" as const, id: c.id, name: c.name, outputs: AGENT_OUTPUTS })),
+  ];
 
   let cluster: ClusterInfo | undefined;
   if (me.role === "tenant") cluster = (await getMyContext()).tenant.cluster;
 
-  return <DeploymentForm role={me.role} app={app} depOptions={depOptions} infraOutputs={infraOutputs} cluster={cluster} />;
+  return <DeploymentForm role={me.role} app={app} depOptions={depOptions} depOutputs={depOutputs} cluster={cluster} />;
 }

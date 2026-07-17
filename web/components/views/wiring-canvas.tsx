@@ -15,6 +15,10 @@ const uid = () => `st${seq++}`;
 // identity every time and drive the layout effect into an infinite update loop.
 const NONE: string[] = [];
 
+// A source node shows a small tag over its label. By default the token IS the
+// label (tag reads "output"); callers with structured tokens pass `outputLabel`.
+const defaultOutputLabel = (token: string) => ({ tag: "output", label: token });
+
 function seed(initialStatic: Record<string, string>, initialWired: Record<string, string>, targets: string[]) {
   const statics: Static[] = [];
   const links: Link[] = [];
@@ -53,6 +57,7 @@ function build(statics: Static[], links: Link[]) {
  *  the parent turns those into its own fields. */
 export function WiringCanvas({
   outputs = NONE,
+  outputLabel = defaultOutputLabel,
   targets,
   suggestions = NONE,
   requiredTargets = NONE,
@@ -66,6 +71,7 @@ export function WiringCanvas({
   onChange,
 }: {
   outputs?: string[];
+  outputLabel?: (token: string) => { tag: string; label: string };
   targets: string[];
   suggestions?: string[];
   requiredTargets?: string[];
@@ -272,6 +278,7 @@ export function WiringCanvas({
 
             {outputs.map((o) => {
               const id = `out:${o}`;
+              const { tag, label } = outputLabel(o);
               return (
                 <button
                   type="button"
@@ -283,8 +290,8 @@ export function WiringCanvas({
                   data-wired={srcWired(id) || undefined}
                   onClick={() => clickSource(id)}
                 >
-                  <span className={styles.nodeTag}>output</span>
-                  <span className={styles.nodeLabel}>{o}</span>
+                  <span className={styles.nodeTag}>{tag}</span>
+                  <span className={styles.nodeLabel}>{label}</span>
                   <span className={styles.port} aria-hidden />
                 </button>
               );
