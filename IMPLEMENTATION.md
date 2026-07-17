@@ -95,37 +95,61 @@ control-plane API (the API needs Foundry types for validation/preview; the recon
 
 ### Control plane API surface
 
-**Publisher** (Platform Admin; Entra token, home tenant = ours; `platform.admin` role):
+> Reflects the shipped implementation. Everything is served under `/api` (Entra-JWT
+> auth) except the reconciler's `/recon/*` (its own token). Rather than a bespoke
+> surface per resource, one **generic resource API** covers all four catalog kinds —
+> `{kind}` ∈ `infrastructure | application | agent | memory_store`.
+
+**Identity & fleet** (any authenticated caller; `/me` is deliberately *not* tenant-gated so a pending tenant can still learn its status):
 ```
-GET   /platform/agents                              list catalog
-POST  /platform/agents/{id}/versions                release a version {def, rolloutPercent, channel}
-POST  /platform/agents/{id}/versions/{v}/graduate   promote canary → stable
-PATCH /platform/tenants/{id}/entitlements           set plan / entitledAgents / maxAgents
-POST  /platform/tenants/{id}/suspend
-GET   /platform/fleet                               heartbeats: tenants × versions × health
+GET    /api/me                             identity (oid, tid, role) + tenant summary
+GET    /api/fleet                          platform fleet dashboard (stats + tenants)
+GET    /api/tenant/context                 caller's tenant: full state + enabled resources
+GET    /api/tenants/{slug}/context         same, for one tenant (platform)
+GET    /api/tenants                        tenant registry + per-kind entitlements (platform)
 ```
 
-**Tenant** (Tenant Admin; Entra token, home tenant = customer; `tenant.admin` role, scoped to their `tenantId`):
+**Resources** — create / list / edit / remove + per-tenant enablement, uniform across every kind:
 ```
-GET   /tenant/catalog                               entitled agents + versions (their slice)
-GET   /tenant/desired                               current enabled agents + config
-PUT   /tenant/desired                               enable/disable/configure agents, publishTo
-GET   /tenant/status                                actual state + enrollment + health
-POST  /tenant/install                               mint enrollment token → returns deploy URL + params
-```
-
-**Reconciler** (per-tenant client cert; mTLS ingress):
-```
-POST  /enroll                                        one-time token → issue client cert (once)
-POST  /enroll/renew                                  cert rotation (authenticated by current cert)
-GET   /sync/catalog        (ETag)                    entitled + enabled slice for this tenant
-POST  /sync/status                                   heartbeat: actual state + usage summary
+POST   /api/resources                      unified transactional create (mixed batch of any kinds)
+GET    /api/resources                      list every kind, role-aware: {infrastructure, applications, agents, memoryStores}
+PATCH  /api/resources/{kind}/{id}          edit a definition
+DELETE /api/resources/{kind}/{id}          remove a definition (cascades entitlements + enablements)
+POST   /api/resources/{kind}/{id}/enable   enable in the caller's tenant (desired state)
+DELETE /api/resources/{kind}/{id}/enable   disable in the caller's tenant
 ```
 
-**Auth middleware (I4):** three chains — (a) Entra JWT validation for `/platform/*` + `/tenant/*` (validate
-`iss/aud/exp`, map `tid`→tenant, enforce role + tenant scope); (b) mTLS client-cert validation for
-`/sync/*` + `/enroll/renew` (validate CA signature + CN=`tenantId` + not-revoked); (c) one-time bearer token
-for `/enroll`.
+**Entitlements & access** (platform):
+```
+PATCH  /api/tenants/{slug}/all-entitlements   grant/revoke every kind at once
+PATCH  /api/tenants/{slug}/enabled            enable/disable a tenant's console + reconciler access
+```
+
+**Relations & authoring helpers**:
+```
+POST   /api/tenant/agents/{agentId}/store  connect (empty body = disconnect) an agent ↔ memory store
+POST   /api/infrastructure/inspect         resolve a Bicep module's params + wireable outputs
+POST   /api/applications/inspect           resolve an application's Bicep (params + outputs)
+POST   /api/applications/inspect-chart     resolve a Helm chart's values + JSON schema
+```
+
+**Reconciler** (per-tenant; Entra token from the reconciler's managed identity — the tenant it acts on is the token's `tid`, never a client parameter):
+```
+GET    /recon/sync                         desired state for this tenant (entitled + enabled slice)
+POST   /recon/heartbeat                    actual state + usage summary
+```
+
+**Auth middleware:** two chains — (a) Entra-JWT validation for `/api/*` (validate `iss/aud/exp` against
+Entra's JWKS, map `tid`→tenant + `role`; **platform** = our home tenant, otherwise a **tenant** scoped to
+its own resources; a `tenantGate` then requires the tenant be enabled, which platform admins bypass);
+(b) a separate Entra-token chain for `/recon/*` keyed to the reconciler's managed identity. **Ownership**:
+platform admins author platform resources (`owner ""`); a tenant authors its own (`owner = slug`, ids
+namespaced) and may only edit/remove what it owns.
+
+> The endpoint sketch that previously lived here (`/platform/agents/*/versions`, `/tenant/desired`,
+> mTLS `/enroll` + `/sync/*`, Cosmos, per-version canary rollout) was an early design — superseded by the
+> generic API above, a single in-place agent definition (no versioning), and Entra-token reconciler auth.
+> §5 (Cosmos data model) and §6 (mTLS enrollment) likewise predate the Postgres + Entra build.
 
 ---
 
@@ -244,19 +268,25 @@ tenant. **Update path:** the control plane advertises the target reconciler imag
 
 ## 9. Control plane API & console
 
-**API**: Go/chi, layered handlers → `store` (Cosmos repo) → domain. Stateless; horizontally scalable on
-Container Apps. OpenAPI spec generated and used to type the console client.
+**API**: Go/chi, layered handlers → `store` (Postgres via pgx) → domain. Stateless; horizontally scalable on
+Container Apps. The console's typed client is hand-written (`web/lib/api.ts` + `actions.ts`) against the
+generic `/api/resources` surface — there is no generated OpenAPI spec.
 
 **Console (Next.js)**:
-- **Auth**: MSAL.js against the multi-tenant app; role + `tid` drive which views render.
-- **Tenant Admin views**: catalog browse (entitled), enable/configure agent (form-driven by the agent
-  definition's config schema), choose publish targets, **Install Cortex** (calls `/tenant/install`,
-  launches the Marketplace deploy), status/health, usage/showback.
-- **Platform Admin views**: catalog authoring, release version + canary %, graduate, entitlements per tenant,
-  fleet dashboard from heartbeats.
-- **Definition-owned agents (I8)**: every catalog agent is a `prompt` or `hosted` type, and each
-  version carries the full **definition** (see AGENT-MODEL.md) — the publisher owns the substance;
-  tenant enable is light (publish targets + optional knowledge binding). No per-tenant config schema.
+- **Auth**: Auth.js (NextAuth) against the multi-tenant Entra app. The API access token lives in the
+  encrypted, httpOnly session cookie and is forwarded server-side as a Bearer token (never exposed to the
+  browser); `role` + `tid` drive which views render.
+- **Tenant Admin views**: browse the entitled catalog, enable resources (agents, apps, infrastructure,
+  memory stores) into desired state, connect an agent to a memory store, **Install / topology** (cluster +
+  footprint status), health.
+- **Platform Admin views**: author resources (create via the unified `/api/resources` batch; edit/remove via
+  the generic surface), per-tenant entitlements in one consolidated panel, tenant enable/disable, fleet
+  dashboard from heartbeats.
+- **Definition-owned agents**: every catalog agent is a `prompt` or `hosted` type carrying a single full
+  **definition** (see AGENT-MODEL.md) — the publisher owns the substance; tenant enable is light (publish
+  targets + optional memory-store binding). No per-tenant config schema, and **no per-version rollout** —
+  edits replace the definition in place.
+
 
 ---
 
