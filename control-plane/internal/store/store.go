@@ -443,6 +443,39 @@ func (s *Store) CatalogAgentOwner(ctx context.Context, agentID string) (string, 
 	return owner, err
 }
 
+// DeleteCatalogAgent removes a catalog agent (and its versions, via cascade),
+// un-entitles it everywhere, and removes any enabled instances. Deletion is not
+// blocked by in-use — the dep tree is trusted; the admin is choosing to remove it.
+func (s *Store) DeleteCatalogAgent(ctx context.Context, id string) error {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM catalog_agents WHERE id = $1`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	_, _ = s.pool.Exec(ctx, `UPDATE tenants SET entitled_agents = array_remove(entitled_agents, $1)`, id)
+	_, _ = s.pool.Exec(ctx, `DELETE FROM agents WHERE agent_id = $1`, id)
+	return nil
+}
+
+// UpdateCatalogAgent edits an agent's name/description/model and overwrites its
+// single definition (type is immutable). Versioning is not surfaced, so the edit
+// replaces the current definition in place.
+func (s *Store) UpdateCatalogAgent(ctx context.Context, id, name, description, agentModel string, def shared.AgentDefinition) error {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE catalog_agents SET name = $2, description = $3, model = $4 WHERE id = $1`,
+		id, name, description, agentModel)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	_, err = s.pool.Exec(ctx, `UPDATE catalog_versions SET definition = $2 WHERE agent_id = $1`, id, defToText(def))
+	return err
+}
+
 /* ── Memory stores ──────────────────────────────────────────────────────── */
 
 const memoryStoreCols = `m.id, m.name, m.description, m.owner_tenant,
