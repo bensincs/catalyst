@@ -155,6 +155,34 @@ az acr build -r "$ACR" -t cortex-api:latest     -f control-plane/Dockerfile .
 az acr build -r "$ACR" -t cortex-console:latest -f web/Dockerfile .
 ```
 
+### The reconciler image (must be publicly pullable)
+
+The per-tenant footprint (`onboarding/footprint.bicep`) runs the reconciler as a
+Container App **in the customer's subscription**, pulling its image with *no
+registry credentials* by default (`registryServer` empty → anonymous pull). So the
+reconciler image must live in a registry the customer's Container App can pull
+**anonymously** — a private ACR (like `$ACR` above) fails the footprint with
+`ContainerAppOperationError … DENIED: requested access to the resource is denied`.
+
+Keep the `cortex-api`/`cortex-console` images private and publish only the
+reconciler to a small, dedicated **anonymous-pull** registry. Build it, then import
+into a Standard ACR with anonymous pull enabled (anonymous pull needs Standard+):
+
+```bash
+# build the reconciler (its own Dockerfile) into the private registry
+az acr build -r "$ACR" -t cortex-reconciler:<git-sha> -f reconciler/Dockerfile .
+
+# a dedicated PUBLIC registry holding ONLY the reconciler image
+PUBLIC_ACR="cortexpublic<hash>"
+az acr create -g "$RG" -n "$PUBLIC_ACR" --sku Standard
+az acr update -n "$PUBLIC_ACR" --anonymous-pull-enabled true
+az acr import -n "$PUBLIC_ACR" \
+  --source "$ACR.azurecr.io/cortex-reconciler:<git-sha>" --image cortex-reconciler:<git-sha>
+```
+
+Then point the control plane at it via `RECONCILER_IMAGE` (see
+[Cross-tenant provisioning](#cross-tenant-provisioning-azure-lighthouse)).
+
 ---
 
 ## 5. Pass 2 — deploy the apps
@@ -275,6 +303,22 @@ service-principal secret. To enable it, deploy pass 2 with:
   -p reconcilerImage="<your published reconciler image>"
 ```
 
+> **`RECONCILER_IMAGE`** is the image the control plane stamps into every footprint
+> it provisions. It **must be anonymously pullable** by the customer's Container App
+> (see [The reconciler image](#the-reconciler-image-must-be-publicly-pullable)) —
+> unset, it defaults to `ghcr.io/inception42/cortex-reconciler:latest`. On an
+> already-running control plane, set it without a full redeploy:
+>
+> ```bash
+> az containerapp update -g "$RG" -n cortex-cp-api \
+>   --set-env-vars RECONCILER_IMAGE="$PUBLIC_ACR.azurecr.io/cortex-reconciler:<git-sha>"
+> ```
+>
+> A footprint that already failed on a bad image won't retry on its own (a `Failed`
+> ARM deployment is terminal). After fixing `RECONCILER_IMAGE`, delete the failed
+> deployment so the control plane resubmits: `az deployment group delete -g cortex -n
+> cortex-footprint` (in the customer sub — deletes the record, not the resources).
+
 The control plane then uses `DefaultAzureCredential` (it sets `AZURE_CLIENT_ID` to
 the identity's client id automatically) to discover Lighthouse-delegated
 subscriptions and provision into them.
@@ -310,6 +354,7 @@ Injected by `main.bicep`; app defaults come from
 | `PLATFORM_TENANT_ID` | `platformTenantId` |
 | `CORS_ORIGIN` | `https://catalyst.msft.ae` |
 | `SEED_DEMO` | `false` |
+| `RECONCILER_IMAGE` | `<public-acr>.azurecr.io/cortex-reconciler:<git-sha>` — anonymously pullable (see [above](#the-reconciler-image-must-be-publicly-pullable)) |
 
 **Console (`cortex-cp-console`)**
 
