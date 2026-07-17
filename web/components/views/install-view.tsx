@@ -14,8 +14,14 @@ import {
 import { PageHeader } from "@/components/ui/page-header";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/ui/status";
-import { LIFECYCLE_META, type TenantContextInfo } from "@/lib/types";
-import { InstallStatusChecks, ReconcilerStatus, type InfraSummary } from "./install-status";
+import {
+  LIFECYCLE_META,
+  type Application,
+  type EnabledAgent,
+  type Infrastructure,
+  type TenantContextInfo,
+} from "@/lib/types";
+import { InstallStatusChecks, ReconcilerStatus } from "./install-status";
 import styles from "./install-view.module.css";
 
 const DEPLOY_URL =
@@ -30,15 +36,17 @@ export function InstallView({
   tenant,
   cortexTenantId,
   cortexPrincipalId,
-  agentCount,
-  infra,
+  infrastructure,
+  applications,
+  agents,
   now,
 }: {
   tenant: TenantContextInfo;
   cortexTenantId: string;
   cortexPrincipalId: string;
-  agentCount: number;
-  infra: InfraSummary;
+  infrastructure: Infrastructure[];
+  applications: Application[];
+  agents: EnabledAgent[];
   now: number;
 }) {
   const lc = LIFECYCLE_META[tenant.lifecycle];
@@ -67,7 +75,7 @@ export function InstallView({
 
       {/* Live install status — staged checks that read top-to-bottom as the
           install comes online, plus the reconciler heartbeat. */}
-      <InstallStatusChecks tenant={tenant} agentCount={agentCount} infra={infra} />
+      <InstallStatusChecks tenant={tenant} infrastructure={infrastructure} applications={applications} agents={agents} />
       <ReconcilerStatus tenant={tenant} now={now} />
 
       {/* Infrastructure delegation — how the control plane gets to provision infra */}

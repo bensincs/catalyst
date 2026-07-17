@@ -3,9 +3,10 @@
 import {
   AlertTriangle,
   Bot,
+  Boxes,
   Check,
-  Cloud,
   Fingerprint,
+  Layers,
   Minus,
   Radio,
   RefreshCw,
@@ -16,35 +17,37 @@ import {
 } from "lucide-react";
 import { StatusDot } from "@/components/ui/status";
 import { formatRelative } from "@/lib/format";
-import { type ClusterInfo, type Lifecycle, type TenantContextInfo } from "@/lib/types";
+import {
+  type Application,
+  type ClusterInfo,
+  type EnabledAgent,
+  type Infrastructure,
+  type Lifecycle,
+  type TenantContextInfo,
+} from "@/lib/types";
 import styles from "./install-view.module.css";
 
-/** Aggregate provisioning state of a tenant's enabled deployments that carry
- *  Azure infra (deployed by the control plane via Lighthouse). */
-export interface InfraSummary {
-  total: number;
-  ready: number;
-  provisioning: number;
-  failed: number;
-}
-
-// Staged system checks — reads top to bottom as the install comes online.
+// Staged system checks — reads top to bottom as the install comes online. The
+// last three mirror the topology's deployable kinds: infrastructure → applications
+// → agents, each summarized from the tenant's enabled resources.
 export function InstallStatusChecks({
   tenant,
-  agentCount,
-  infra,
+  infrastructure,
+  applications,
+  agents,
 }: {
   tenant: TenantContextInfo;
-  agentCount: number;
-  infra: InfraSummary;
+  infrastructure: Infrastructure[];
+  applications: Application[];
+  agents: EnabledAgent[];
 }) {
   const checks = buildChecks({
-    bound: tenant.enrollment === "bound",
     live: tenant.lifecycle === "live",
     degraded: tenant.lifecycle === "degraded",
-    agentCount,
     cluster: tenant.cluster,
-    infra,
+    infrastructure,
+    applications,
+    agents,
   });
 
   return (
@@ -164,16 +167,16 @@ function CheckMark({ check }: { check: Check }) {
 // buildChecks reads top-to-bottom as the install comes online. Onboarding is a
 // single Lighthouse delegation; everything after it is provisioned by the control
 // plane: directory → delegation → environment (reconciler + Foundry) → reconciler
-// heartbeat → application infra → agents.
+// heartbeat → infrastructure → applications → agents.
 function buildChecks(x: {
-  bound: boolean;
   live: boolean;
   degraded: boolean;
-  agentCount: number;
   cluster: ClusterInfo;
-  infra: InfraSummary;
+  infrastructure: Infrastructure[];
+  applications: Application[];
+  agents: EnabledAgent[];
 }): Check[] {
-  const { live, degraded, agentCount, cluster, infra } = x;
+  const { live, degraded, cluster, infrastructure, applications, agents } = x;
 
   const lighthouse: Check = cluster.infraDelegated
     ? {
@@ -211,23 +214,48 @@ function buildChecks(x: {
       ? { key: "reconciler", title: "Reconciler unreachable", note: "The last heartbeat is stale — it may be restarting or blocked from the control plane.", status: "warn", icon: ShieldCheck }
       : { key: "reconciler", title: "Reconciler", note: "Comes online once the environment is provisioned.", status: "pending", icon: ShieldCheck };
 
+  // Infrastructure (Azure/Bicep) — provisioned by the control plane via Lighthouse.
+  const infraTotal = infrastructure.length;
+  const infraReady = infrastructure.filter((i) => i.infraState === "ready").length;
+  const infraFailed = infrastructure.filter((i) => i.infraState === "failed").length;
+  const infraWorking = infraTotal - infraReady - infraFailed;
   let infraCheck: Check;
-  if (infra.total === 0) {
-    infraCheck = { key: "infra", title: "Application infrastructure", note: "No deployment declares Azure infrastructure yet.", status: "pending", icon: Cloud };
-  } else if (infra.failed > 0) {
-    infraCheck = { key: "infra", title: "Infrastructure failed", note: `${infra.failed} of ${infra.total} deployment${infra.total === 1 ? "" : "s"} failed to provision — check its module + parameters.`, status: "failed", icon: Cloud };
-  } else if (infra.provisioning > 0) {
-    infraCheck = { key: "infra", title: "Provisioning infrastructure", note: `${infra.ready}/${infra.total} ready · ${infra.provisioning} deploying via Lighthouse…`, status: "working", icon: Cloud };
+  if (infraTotal === 0) {
+    infraCheck = { key: "infra", title: "Infrastructure", note: "No infrastructure enabled yet.", status: "pending", icon: Boxes };
+  } else if (infraFailed > 0) {
+    infraCheck = { key: "infra", title: "Infrastructure failed", note: `${infraFailed} of ${infraTotal} module${infraTotal === 1 ? "" : "s"} failed to provision — check its module + parameters.`, status: "failed", icon: Boxes };
+  } else if (infraWorking > 0) {
+    infraCheck = { key: "infra", title: "Provisioning infrastructure", note: `${infraReady}/${infraTotal} ready · ${infraWorking} deploying via Lighthouse…`, status: "working", icon: Boxes };
   } else {
-    infraCheck = { key: "infra", title: "Application infrastructure", note: `${infra.total} deployment${infra.total === 1 ? "" : "s"} provisioned into your subscription.`, status: "ok", icon: Cloud };
+    infraCheck = { key: "infra", title: "Infrastructure ready", note: `${infraTotal} module${infraTotal === 1 ? "" : "s"} provisioned into your subscription.`, status: "ok", icon: Boxes };
   }
 
-  const agents: Check =
-    live && agentCount > 0
-      ? { key: "agents", title: "Agents serving", note: `${agentCount} enabled and converged.`, status: "ok", icon: Bot }
-      : agentCount > 0
-        ? { key: "agents", title: "Agents converging", note: `${agentCount} enabled · awaiting reconciler.`, status: "working", icon: Bot }
-        : { key: "agents", title: "Agents", note: "Enable agents from your catalog.", status: "pending", icon: Bot };
+  // Applications (Helm) — synced into the cluster by the reconciler's Argo CD.
+  const appTotal = applications.length;
+  const appLive = applications.filter((a) => a.health === "live").length;
+  const appBlocked = applications.filter((a) => a.health === "blocked").length;
+  let appsCheck: Check;
+  if (appTotal === 0) {
+    appsCheck = { key: "applications", title: "Applications", note: "No applications enabled yet.", status: "pending", icon: Layers };
+  } else if (appBlocked > 0) {
+    appsCheck = { key: "applications", title: "Applications blocked", note: `${appBlocked} of ${appTotal} deployment${appTotal === 1 ? "" : "s"} blocked — check its chart + dependencies.`, status: "failed", icon: Layers };
+  } else if (appLive < appTotal) {
+    appsCheck = { key: "applications", title: "Applications converging", note: `${appLive}/${appTotal} live · syncing into the cluster via Argo CD…`, status: "working", icon: Layers };
+  } else {
+    appsCheck = { key: "applications", title: "Applications serving", note: `${appTotal} deployment${appTotal === 1 ? "" : "s"} synced and healthy.`, status: "ok", icon: Layers };
+  }
+
+  // Agents — converged into the tenant's Foundry project by the reconciler.
+  const agentTotal = agents.length;
+  const agentsLive = agents.filter((a) => a.health === "live").length;
+  let agentsCheck: Check;
+  if (agentTotal === 0) {
+    agentsCheck = { key: "agents", title: "Agents", note: "Enable agents from your catalog.", status: "pending", icon: Bot };
+  } else if (live && agentsLive === agentTotal) {
+    agentsCheck = { key: "agents", title: "Agents serving", note: `${agentTotal} enabled and converged.`, status: "ok", icon: Bot };
+  } else {
+    agentsCheck = { key: "agents", title: "Agents converging", note: `${agentsLive}/${agentTotal} live · awaiting reconciler.`, status: "working", icon: Bot };
+  }
 
   return [
     { key: "directory", title: "Directory connected", note: "Signed in with Microsoft Entra.", status: "ok", icon: Fingerprint },
@@ -235,6 +263,7 @@ function buildChecks(x: {
     environment,
     reconciler,
     infraCheck,
-    agents,
+    appsCheck,
+    agentsCheck,
   ];
 }
