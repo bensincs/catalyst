@@ -84,8 +84,14 @@ type FleetResponse struct {
 }
 
 type TenantContextResponse struct {
-	Tenant Tenant  `json:"tenant"`
+	Tenant Tenant `json:"tenant"`
 	Agents []Agent `json:"agents"`
+	// The tenant's ENABLED resources — enough to draw its dependency topology
+	// (both on the tenant's own overview and the platform drill-in) without extra
+	// round-trips.
+	Infrastructure []Infrastructure `json:"infrastructure"`
+	Applications   []Application    `json:"applications"`
+	Stores         []MemoryStore    `json:"stores"`
 }
 
 type MeResponse struct {

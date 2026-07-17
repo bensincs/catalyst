@@ -305,7 +305,62 @@ func (s *Server) writeTenantContext(w http.ResponseWriter, r *http.Request, t mo
 		s.fail(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, model.TenantContextResponse{Tenant: t, Agents: gateAgentHealth(t, agents)})
+	// The tenant's enabled resources, so the console can draw its topology from a
+	// single context call (works for the platform drill-in too, which has no
+	// tenant-scoped session of its own).
+	infra, err := s.store.InfrastructureForTenant(r.Context(), t.ID)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	apps, err := s.store.ApplicationsForTenant(r.Context(), t.ID)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	stores, err := s.store.MemoryStoresForTenant(r.Context(), t.ID)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, model.TenantContextResponse{
+		Tenant:         t,
+		Agents:         gateAgentHealth(t, agents),
+		Infrastructure: enabledInfra(infra),
+		Applications:   enabledApps(apps),
+		Stores:         enabledStores(stores),
+	})
+}
+
+// enabled* keep only the resources actually enabled in the tenant (what's
+// provisioned in its subscription) — the topology shows the live footprint, not
+// the whole entitlement catalog.
+func enabledInfra(in []model.Infrastructure) []model.Infrastructure {
+	out := []model.Infrastructure{}
+	for _, i := range in {
+		if i.Enabled {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+func enabledApps(in []model.Application) []model.Application {
+	out := []model.Application{}
+	for _, a := range in {
+		if a.Enabled {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+func enabledStores(in []model.MemoryStore) []model.MemoryStore {
+	out := []model.MemoryStore{}
+	for _, s := range in {
+		if s.Enabled {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // gateAgentHealth blanks out health the control plane can't vouch for. An agent's
