@@ -98,7 +98,6 @@ func (s *Server) Router() http.Handler {
 			// Catalog
 			r.Get("/catalog", s.handleCatalog)
 			r.Post("/catalog", s.handleCreateCatalogAgent)
-			r.Post("/catalog/{id}/versions", s.handlePublishVersion)
 
 			// Tenant registry + entitlements + access (platform)
 			r.Get("/tenants", s.handleTenantsRegistry)
@@ -475,46 +474,6 @@ func (s *Server) catalogWriteAllowed(w http.ResponseWriter, r *http.Request, id 
 		return false
 	}
 	return true
-}
-
-func (s *Server) handlePublishVersion(w http.ResponseWriter, r *http.Request) {
-	id, _ := auth.IdentityFrom(r.Context())
-	agentID := chi.URLParam(r, "id")
-	if !s.catalogWriteAllowed(w, r, id, agentID) {
-		return
-	}
-	var body struct {
-		Version        string                 `json:"version"`
-		Channel        string                 `json:"channel"`
-		Notes          string                 `json:"notes"`
-		RolloutPercent int                    `json:"rolloutPercent"`
-		Definition     shared.AgentDefinition `json:"definition"`
-	}
-	if !decodeJSON(w, r, &body) {
-		return
-	}
-	version := strings.TrimSpace(body.Version)
-	if version == "" {
-		writeErr(w, http.StatusBadRequest, "version is required")
-		return
-	}
-	channel := "stable"
-	if body.Channel == "beta" {
-		channel = "beta"
-	}
-	rollout := body.RolloutPercent
-	if rollout <= 0 || rollout > 100 {
-		rollout = 100
-	}
-	if err := s.store.PublishVersion(r.Context(), agentID, version, channel, strings.TrimSpace(body.Notes), rollout, body.Definition); err != nil {
-		if isDup(err) {
-			writeErr(w, http.StatusConflict, "that version already exists")
-			return
-		}
-		s.fail(w, r, err)
-		return
-	}
-	writeJSON(w, http.StatusCreated, map[string]string{"status": "published"})
 }
 
 /* ── Tenants registry + entitlements (platform) ──────────────────────────── */

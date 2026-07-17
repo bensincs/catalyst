@@ -172,13 +172,10 @@ func (s *Store) TenantByTID(ctx context.Context, tid string) (model.Tenant, erro
 
 func (s *Store) Agents(ctx context.Context, slug string) ([]model.Agent, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT a.agent_id, a.name, coalesce(ca.type,'prompt'), a.version, a.channel, a.model,
+		`SELECT a.agent_id, a.name, coalesce(ca.type,'prompt'), a.model,
 		        a.health, a.publish_to, a.calls_30d, a.note,
-		        coalesce((SELECT v.version FROM catalog_versions v
-		                  WHERE v.agent_id = a.agent_id AND v.channel = a.channel
-		                  ORDER BY v.created_at DESC LIMIT 1), a.version) AS desired_version,
 		        coalesce((SELECT v.definition FROM catalog_versions v
-		                  WHERE v.agent_id = a.agent_id AND v.channel = a.channel
+		                  WHERE v.agent_id = a.agent_id
 		                  ORDER BY v.created_at DESC LIMIT 1), '{}'::jsonb) AS definition,
 		        a.memory_store
 		 FROM agents a LEFT JOIN catalog_agents ca ON ca.id = a.agent_id
@@ -193,14 +190,13 @@ func (s *Store) Agents(ctx context.Context, slug string) ([]model.Agent, error) 
 		var a model.Agent
 		var defRaw []byte
 		var override string
-		if err := rows.Scan(&a.ID, &a.Name, &a.Type, &a.Version, &a.Channel, &a.Model,
+		if err := rows.Scan(&a.ID, &a.Name, &a.Type, &a.Model,
 			&a.Health, &a.PublishTo, &a.Calls30d, &a.Note,
-			&a.DesiredVersion, &defRaw, &override); err != nil {
+			&defRaw, &override); err != nil {
 			return nil, err
 		}
 		a.Definition = defFromRaw(defRaw)
 		a.MemoryStore = firstNonEmpty(override, a.Definition.MemoryStore)
-		a.Drift = a.DesiredVersion != "" && a.DesiredVersion != a.Version
 		agents = append(agents, a)
 	}
 	return agents, rows.Err()
@@ -281,22 +277,12 @@ func (s *Store) SetTenantEnabled(ctx context.Context, slug string, enabled bool)
 
 func computeStats(tenants []model.Tenant) model.FleetStats {
 	st := model.FleetStats{Tenants: len(tenants)}
-	latest := ""
 	for _, t := range tenants {
 		if t.Enrollment == "bound" {
 			st.Bound++
 		}
 		st.Agents += t.AgentCount
 		st.CallsMonth += t.MonthlyCalls
-		if t.Version != "" && compareVersions(t.Version, latest) > 0 {
-			latest = t.Version
-		}
-	}
-	st.LatestVersion = latest
-	for _, t := range tenants {
-		if t.Version == latest && latest != "" {
-			st.OnLatest++
-		}
 	}
 	return st
 }
@@ -342,7 +328,6 @@ func (s *Store) CatalogList(ctx context.Context) ([]model.CatalogAgent, error) {
 			return nil, err
 		}
 		a.Platform = a.Owner == ""
-		a.Versions = []model.CatalogVersion{}
 		byID[a.ID] = &a
 		order = append(order, a.ID)
 	}
@@ -353,9 +338,10 @@ func (s *Store) CatalogList(ctx context.Context) ([]model.CatalogAgent, error) {
 		return []model.CatalogAgent{}, nil
 	}
 
+	// The current definition is the latest version's; catalog_versions is kept as
+	// the internal definition store (versioning is not surfaced in the model).
 	vrows, err := s.pool.Query(ctx,
-		`SELECT agent_id, version, channel, notes, rollout_percent, definition, created_at
-		 FROM catalog_versions ORDER BY created_at`)
+		`SELECT agent_id, definition FROM catalog_versions ORDER BY created_at`)
 	if err != nil {
 		return nil, err
 	}
@@ -363,16 +349,11 @@ func (s *Store) CatalogList(ctx context.Context) ([]model.CatalogAgent, error) {
 	for vrows.Next() {
 		var agentID string
 		var defRaw []byte
-		var v model.CatalogVersion
-		if err := vrows.Scan(&agentID, &v.Version, &v.Channel, &v.Notes, &v.RolloutPercent, &defRaw, &v.CreatedAt); err != nil {
+		if err := vrows.Scan(&agentID, &defRaw); err != nil {
 			return nil, err
 		}
-		v.Definition = defFromRaw(defRaw)
 		if a := byID[agentID]; a != nil {
-			a.Versions = append(a.Versions, v)
-			if a.LatestVersion == "" || compareVersions(v.Version, a.LatestVersion) > 0 {
-				a.LatestVersion = v.Version
-			}
+			a.Definition = defFromRaw(defRaw) // ORDER BY created_at asc → latest wins
 		}
 	}
 	if err := vrows.Err(); err != nil {
@@ -461,7 +442,7 @@ func (s *Store) CreateCatalogAgent(ctx context.Context, id, name, description, a
 }
 
 // CatalogAgentOwner returns a catalog agent's owner ("" = platform-authored),
-// used to enforce that a tenant may only edit/version agents it owns.
+// used to enforce that a tenant may only edit agents it owns.
 func (s *Store) CatalogAgentOwner(ctx context.Context, agentID string) (string, error) {
 	var owner string
 	err := s.pool.QueryRow(ctx, `SELECT owner_tenant FROM catalog_agents WHERE id = $1`, agentID).Scan(&owner)
@@ -469,14 +450,6 @@ func (s *Store) CatalogAgentOwner(ctx context.Context, agentID string) (string, 
 		return "", ErrNotFound
 	}
 	return owner, err
-}
-
-func (s *Store) PublishVersion(ctx context.Context, agentID, version, channel, notes string, rollout int, def shared.AgentDefinition) error {
-	_, err := s.pool.Exec(ctx,
-		`INSERT INTO catalog_versions (id, agent_id, version, channel, notes, rollout_percent, definition)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-		agentID+":"+version, agentID, version, channel, notes, rollout, defToText(def))
-	return err
 }
 
 /* ── Memory stores ──────────────────────────────────────────────────────── */

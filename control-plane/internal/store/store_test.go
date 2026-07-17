@@ -43,28 +43,25 @@ func TestCatalogEntitleEnableLoop(t *testing.T) {
 	cleanup()
 	defer cleanup()
 
-	// 1. Author a catalog agent (creates v1.0.0), then publish v1.1.0.
+	// 1. Author a catalog agent (with its definition).
 	if err := st.CreateCatalogAgent(ctx, agentID, "ZZ Test Agent", "desc", "prompt", "gpt-4o", "", "oid-test", shared.AgentDefinition{Instructions: "v1"}); err != nil {
 		t.Fatalf("create catalog agent: %v", err)
-	}
-	if err := st.PublishVersion(ctx, agentID, "1.1.0", "stable", "notes", 25, shared.AgentDefinition{Instructions: "v1.1"}); err != nil {
-		t.Fatalf("publish version: %v", err)
 	}
 	cat, err := st.CatalogList(ctx)
 	if err != nil {
 		t.Fatalf("catalog list: %v", err)
 	}
-	var found *struct{ latest string }
+	found := false
 	for _, a := range cat {
 		if a.ID == agentID {
-			found = &struct{ latest string }{a.LatestVersion}
-			if len(a.Versions) != 2 {
-				t.Fatalf("expected 2 versions, got %d", len(a.Versions))
+			found = true
+			if a.Definition.Instructions != "v1" {
+				t.Fatalf("expected definition v1, got %+v", a.Definition)
 			}
 		}
 	}
-	if found == nil || found.latest != "1.1.0" {
-		t.Fatalf("expected latest 1.1.0, got %+v", found)
+	if !found {
+		t.Fatalf("catalog agent %s not found in list", agentID)
 	}
 
 	// 2. A tenant exists.
@@ -90,7 +87,7 @@ func TestCatalogEntitleEnableLoop(t *testing.T) {
 	if err != nil || len(agents) != 1 {
 		t.Fatalf("expected 1 enabled agent, got %d (err %v)", len(agents), err)
 	}
-	if agents[0].Name != "ZZ Test Agent" || agents[0].Version != "1.1.0" {
+	if agents[0].Name != "ZZ Test Agent" || agents[0].Definition.Instructions != "v1" {
 		t.Fatalf("unexpected enabled agent: %+v", agents[0])
 	}
 

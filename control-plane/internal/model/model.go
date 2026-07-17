@@ -51,31 +51,25 @@ type Tenant struct {
 
 // Agent is an enabled agent running in a tenant.
 type Agent struct {
-	ID             string                 `json:"id"`
-	Name           string                 `json:"name"`
-	Type           string                 `json:"type"`           // prompt | hosted
-	Version        string                 `json:"version"`        // actual — what the reconciler has converged to
-	DesiredVersion string                 `json:"desiredVersion"` // desired — latest catalog version for its channel
-	Drift          bool                   `json:"drift"`          // desired ≠ actual (a reconcile is pending/underway)
-	Channel        string                 `json:"channel"`
-	Model          string                 `json:"model"`
-	Definition     shared.AgentDefinition `json:"definition"`
-	Health         string                 `json:"health"`
-	PublishTo      []string               `json:"publishTo"`
-	Calls30d       int64                  `json:"calls30d"`
-	Note           string                 `json:"note,omitempty"`
+	ID         string                 `json:"id"`
+	Name       string                 `json:"name"`
+	Type       string                 `json:"type"` // prompt | hosted
+	Model      string                 `json:"model"`
+	Definition shared.AgentDefinition `json:"definition"`
+	Health     string                 `json:"health"`
+	PublishTo  []string               `json:"publishTo"`
+	Calls30d   int64                  `json:"calls30d"`
+	Note       string                 `json:"note,omitempty"`
 	// MemoryStore is the effective store this tenant's agent connects to (the
 	// per-tenant override if set, else the catalog definition's memoryStore).
 	MemoryStore string `json:"memoryStore,omitempty"`
 }
 
 type FleetStats struct {
-	Tenants       int    `json:"tenants"`
-	Bound         int    `json:"bound"`
-	Agents        int    `json:"agents"`
-	CallsMonth    int64  `json:"callsMonth"`
-	LatestVersion string `json:"latestVersion"`
-	OnLatest      int    `json:"onLatest"`
+	Tenants    int   `json:"tenants"`
+	Bound      int   `json:"bound"`
+	Agents     int   `json:"agents"`
+	CallsMonth int64 `json:"callsMonth"`
 }
 
 type FleetResponse struct {
@@ -100,29 +94,18 @@ type MeResponse struct {
 	Tenant *Tenant `json:"tenant"`
 }
 
-// CatalogVersion is a published version of a catalog agent.
-type CatalogVersion struct {
-	Version        string                 `json:"version"`
-	Channel        string                 `json:"channel"`
-	Notes          string                 `json:"notes,omitempty"`
-	RolloutPercent int                    `json:"rolloutPercent"`
-	Definition     shared.AgentDefinition `json:"definition"`
-	CreatedAt      time.Time              `json:"createdAt"`
-}
-
-// CatalogAgent is an agent definition (+ its versions), authored by the platform
-// (Owner == "") or by a tenant (Owner == <tenant slug>, private to it). Platform
-// agents are granted to tenants via entitlements; tenant agents are private.
+// CatalogAgent is an agent definition, authored by the platform (Owner == "") or
+// by a tenant (Owner == <tenant slug>, private to it). Platform agents are granted
+// to tenants via entitlements; tenant agents are private.
 type CatalogAgent struct {
-	ID            string           `json:"id"`
-	Name          string           `json:"name"`
-	Description   string           `json:"description"`
-	Type          string           `json:"type"` // prompt | hosted (immutable)
-	Model         string           `json:"model"`
-	Owner         string           `json:"owner"` // "" = platform-authored; else tenant slug
-	LatestVersion string           `json:"latestVersion"`
-	Versions      []CatalogVersion `json:"versions"`
-	CreatedAt     time.Time        `json:"createdAt"`
+	ID          string                 `json:"id"`
+	Name        string                 `json:"name"`
+	Description string                 `json:"description"`
+	Type        string                 `json:"type"` // prompt | hosted (immutable)
+	Model       string                 `json:"model"`
+	Owner       string                 `json:"owner"` // "" = platform-authored; else tenant slug
+	Definition  shared.AgentDefinition `json:"definition"`
+	CreatedAt   time.Time              `json:"createdAt"`
 
 	// Populated in the tenant view:
 	Platform bool `json:"platform"` // platform-authored (vs tenant-owned)
