@@ -426,16 +426,7 @@ func (s *Store) CreateCatalogAgent(ctx context.Context, id, name, description, a
 		return err
 	}
 	defer tx.Rollback(ctx)
-
-	if _, err := tx.Exec(ctx,
-		`INSERT INTO catalog_agents (id, name, description, type, model, owner_tenant, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-		id, name, description, agentType, agentModel, owner, createdBy); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(ctx,
-		`INSERT INTO catalog_versions (id, agent_id, version, channel, notes, rollout_percent, definition)
-		 VALUES ($1,$2,'1.0.0','stable','Initial version',100,$3)`,
-		id+":1.0.0", id, defToText(def)); err != nil {
+	if err := insertCatalogAgent(ctx, tx, id, name, description, agentType, agentModel, owner, createdBy, def); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -550,16 +541,7 @@ func (s *Store) MemoryStoreByID(ctx context.Context, id string) (model.MemorySto
 }
 
 func (s *Store) CreateMemoryStore(ctx context.Context, id, name, description, owner string, def shared.MemoryStoreDefinition, createdBy string) error {
-	_, err := s.pool.Exec(ctx,
-		`INSERT INTO memory_stores
-		   (id, name, description, owner_tenant,
-		    chat_model, embedding_model, user_profile_enabled, user_profile_details,
-		    chat_summary_enabled, procedural_memory_enabled, ttl_seconds, created_by)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-		id, name, description, owner,
-		def.ChatModel, def.EmbeddingModel, def.UserProfileEnabled, def.UserProfileDetails,
-		def.ChatSummaryEnabled, def.ProceduralMemoryEnabled, def.TTLSeconds, createdBy)
-	return err
+	return insertMemoryStore(ctx, s.pool, id, name, description, owner, def, createdBy)
 }
 
 // UpdateMemoryStore updates only the store's name + description. The definition
@@ -1644,12 +1626,7 @@ func (s *Store) ApplicationByID(ctx context.Context, id string) (model.Applicati
 
 // CreateApplication inserts a Helm deployment definition (Owner "" = platform).
 func (s *Store) CreateApplication(ctx context.Context, a model.Application, createdBy string) error {
-	_, err := s.pool.Exec(ctx,
-		`INSERT INTO applications (id, name, description, owner_tenant, namespace, repo_url, chart, target_revision, values, wiring, dependencies, created_by)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-		a.ID, a.Name, a.Description, a.Owner, a.Namespace, a.RepoURL, a.Chart, a.TargetRevision, a.Values,
-		wiringJSON(a.Wiring), depsJSON(a.Dependencies), createdBy)
-	return err
+	return insertApplication(ctx, s.pool, a, createdBy)
 }
 
 // UpdateApplication updates the full Helm deployment definition (chart, values,
@@ -1845,11 +1822,7 @@ func (s *Store) InfrastructureByID(ctx context.Context, id string) (model.Infras
 
 // CreateInfrastructure inserts an infrastructure definition (Owner "" = platform).
 func (s *Store) CreateInfrastructure(ctx context.Context, i model.Infrastructure, createdBy string) error {
-	_, err := s.pool.Exec(ctx,
-		`INSERT INTO infrastructure (id, name, description, owner_tenant, bicep, arm_template, bicep_params, bicep_outputs, dependencies, created_by)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-		i.ID, i.Name, i.Description, i.Owner, i.BicepModule, i.ArmTemplate, paramsJSON(i.BicepParams), depsArray(i.BicepOutputs), depsJSON(i.Dependencies), createdBy)
-	return err
+	return insertInfrastructure(ctx, s.pool, i, createdBy)
 }
 
 func (s *Store) UpdateInfrastructure(ctx context.Context, i model.Infrastructure) error {

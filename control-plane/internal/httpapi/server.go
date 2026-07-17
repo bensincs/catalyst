@@ -95,6 +95,11 @@ func (s *Server) Router() http.Handler {
 			r.Get("/tenant/context", s.handleMyContext)
 			r.Get("/tenants/{slug}/context", s.handleTenantContext)
 
+			// Unified transactional create — any combination of infrastructure,
+			// memory stores, agents, and applications in one request (the single-
+			// resource endpoints below are conveniences over this).
+			r.Post("/resources", s.handleApply)
+
 			// Catalog
 			r.Get("/catalog", s.handleCatalog)
 			r.Post("/catalog", s.handleCreateCatalogAgent)
@@ -447,6 +452,142 @@ func (s *Server) handleCreateCatalogAgent(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]string{"id": slug})
+}
+
+// handleApply is the unified transactional create: one request creates any
+// combination of infrastructure, memory stores, agents, and applications, in
+// dependency order, atomically. Scoped by the caller — platform admins author
+// platform resources (owner ""); a tenant authors its own (owner = its slug,
+// ids namespaced). The single-resource create endpoints are thin wrappers; a CLI
+// can send a whole application graph in one call.
+func (s *Server) handleApply(w http.ResponseWriter, r *http.Request) {
+	id, _ := auth.IdentityFrom(r.Context())
+	var body struct {
+		Infrastructure []struct {
+			Name         string             `json:"name"`
+			Description  string             `json:"description"`
+			BicepModule  string             `json:"bicepModule"`
+			BicepParams  map[string]any     `json:"bicepParams"`
+			Dependencies []model.Dependency `json:"dependencies"`
+		} `json:"infrastructure"`
+		MemoryStores []struct {
+			Name        string                       `json:"name"`
+			Description string                       `json:"description"`
+			Definition  shared.MemoryStoreDefinition `json:"definition"`
+		} `json:"memoryStores"`
+		Agents []struct {
+			Name        string                 `json:"name"`
+			Description string                 `json:"description"`
+			Type        string                 `json:"type"`
+			Model       string                 `json:"model"`
+			Definition  shared.AgentDefinition `json:"definition"`
+		} `json:"agents"`
+		Applications []struct {
+			Name           string             `json:"name"`
+			Description    string             `json:"description"`
+			Namespace      string             `json:"namespace"`
+			RepoURL        string             `json:"repoURL"`
+			Chart          string             `json:"chart"`
+			TargetRevision string             `json:"targetRevision"`
+			Values         string             `json:"values"`
+			Wiring         []shared.WireLink  `json:"wiring"`
+			Dependencies   []model.Dependency `json:"dependencies"`
+		} `json:"applications"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+
+	// Scope: platform authors platform resources; a tenant authors its own,
+	// with ids namespaced to avoid collisions with platform slugs.
+	owner, prefix := "", ""
+	if id.Role == model.RoleTenant {
+		t, ok := s.callerTenant(w, r)
+		if !ok {
+			return
+		}
+		owner, prefix = t.ID, t.ID+"-"
+	}
+
+	var batch store.ApplyBatch
+	for _, in := range body.Infrastructure {
+		name := strings.TrimSpace(in.Name)
+		if slugify(name) == "" {
+			writeErr(w, http.StatusBadRequest, "infrastructure name is required")
+			return
+		}
+		if strings.TrimSpace(in.BicepModule) == "" {
+			writeErr(w, http.StatusBadRequest, "a Bicep module reference is required")
+			return
+		}
+		infra := model.Infrastructure{
+			ID: prefix + slugify(name), Name: name, Description: strings.TrimSpace(in.Description),
+			Owner: owner, BicepModule: strings.TrimSpace(in.BicepModule),
+			BicepParams: in.BicepParams, Dependencies: in.Dependencies,
+		}
+		if !s.resolveInfra(w, r, &infra) {
+			return
+		}
+		batch.Infrastructure = append(batch.Infrastructure, infra)
+	}
+	for _, ms := range body.MemoryStores {
+		name := strings.TrimSpace(ms.Name)
+		if slugify(name) == "" {
+			writeErr(w, http.StatusBadRequest, "memory store name is required")
+			return
+		}
+		batch.MemoryStores = append(batch.MemoryStores, model.MemoryStore{
+			ID: prefix + slugify(name), Name: name, Description: strings.TrimSpace(ms.Description),
+			Owner: owner, Definition: ms.Definition,
+		})
+	}
+	for _, ag := range body.Agents {
+		name := strings.TrimSpace(ag.Name)
+		if slugify(name) == "" {
+			writeErr(w, http.StatusBadRequest, "agent name is required")
+			return
+		}
+		agentType := "prompt"
+		if ag.Type == "hosted" {
+			agentType = "hosted"
+		}
+		agentModel := strings.TrimSpace(ag.Model)
+		if agentModel == "" {
+			agentModel = "gpt-4o"
+		}
+		batch.Agents = append(batch.Agents, store.ApplyAgent{
+			ID: prefix + slugify(name), Name: name, Description: strings.TrimSpace(ag.Description),
+			Type: agentType, Model: agentModel, Owner: owner, Definition: ag.Definition,
+		})
+	}
+	for _, ap := range body.Applications {
+		name := strings.TrimSpace(ap.Name)
+		if slugify(name) == "" {
+			writeErr(w, http.StatusBadRequest, "application name is required")
+			return
+		}
+		batch.Applications = append(batch.Applications, model.Application{
+			ID: prefix + slugify(name), Name: name, Description: strings.TrimSpace(ap.Description),
+			Owner: owner, Namespace: strings.TrimSpace(ap.Namespace), RepoURL: strings.TrimSpace(ap.RepoURL),
+			Chart: strings.TrimSpace(ap.Chart), TargetRevision: strings.TrimSpace(ap.TargetRevision),
+			Values: ap.Values, Wiring: ap.Wiring, Dependencies: ap.Dependencies,
+		})
+	}
+
+	res, err := s.store.Apply(r.Context(), id.OID, batch)
+	if err != nil {
+		if errors.Is(err, store.ErrBadDependency) || errors.Is(err, store.ErrDependencyCycle) {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if isDup(err) {
+			writeErr(w, http.StatusConflict, "a resource with that name already exists")
+			return
+		}
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, res)
 }
 
 // catalogWriteAllowed loads an agent and checks the caller may modify it: platform
