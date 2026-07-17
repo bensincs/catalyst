@@ -44,12 +44,12 @@ var footprintProviders = []string{
 	"Microsoft.Storage",             // AKS/agent storage
 }
 
-// registerProviders registers the footprint's resource providers in the
-// subscription (idempotent, best-effort). ARM registration is asynchronous —
-// a provider moves Registering → Registered within seconds — so a submit in the
-// same sweep may still be rejected; the next sweep then succeeds.
-func (p *Provisioner) registerProviders(ctx context.Context, sub string) {
-	for _, ns := range footprintProviders {
+// registerProviders registers the given resource providers in the subscription
+// (idempotent, best-effort). ARM registration is asynchronous — a provider moves
+// Registering → Registered within seconds — so a submit in the same sweep may
+// still be rejected; the next sweep then succeeds.
+func (p *Provisioner) registerProviders(ctx context.Context, sub string, namespaces []string) {
+	for _, ns := range namespaces {
 		url := fmt.Sprintf("https://management.azure.com/subscriptions/%s/providers/%s/register?api-version=%s", sub, ns, providersAPIVersion)
 		if err := p.arm(ctx, http.MethodPost, url, nil, nil); err != nil {
 			slog.Warn("provision: register provider failed", "sub", sub, "provider", ns, "err", trunc(err.Error()))
@@ -148,7 +148,7 @@ func (p *Provisioner) ensureFootprint(ctx context.Context, t store.FootprintTarg
 	}
 	// A freshly delegated subscription usually hasn't registered the resource
 	// providers the footprint uses — register them (idempotent) before deploying.
-	p.registerProviders(ctx, t.SubscriptionID)
+	p.registerProviders(ctx, t.SubscriptionID, footprintProviders)
 	if err := p.createResourceGroup(ctx, t.SubscriptionID, p.footprintRG); err != nil {
 		slog.Warn("provision: create footprint RG failed", "tenant", t.Slug, "err", trunc(err.Error()))
 		return

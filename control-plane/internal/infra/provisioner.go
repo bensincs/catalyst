@@ -143,11 +143,57 @@ func (p *Provisioner) ensure(ctx context.Context, tgt store.InfraTarget) {
 		_ = p.store.SetInfraState(ctx, tgt.TenantSlug, tgt.InfraID, stateFailed, nil)
 		return
 	}
+	// The customer sub only has the footprint RG from onboarding, and a fresh sub
+	// won't have the app-infra's resource providers registered either. Create the
+	// app-infra RG and register the template's providers (both idempotent) before
+	// deploying into them — otherwise the deployment 404s (ResourceGroupNotFound)
+	// or is rejected for an unregistered provider.
+	p.registerProviders(ctx, tgt.SubscriptionID, templateProviders(template))
+	if err := p.createResourceGroup(ctx, tgt.SubscriptionID, p.infraRG); err != nil {
+		slog.Warn("infra: create resource group failed", "tenant", tgt.TenantSlug, "err", trunc(err.Error()))
+		return
+	}
 	if err := p.submit(ctx, tgt.SubscriptionID, name, template); err != nil {
 		slog.Warn("infra: submit deployment failed", "infra", tgt.InfraID, "tenant", tgt.TenantSlug, "err", trunc(err.Error()))
 		return
 	}
 	_ = p.store.SetInfraState(ctx, tgt.TenantSlug, tgt.InfraID, stateProvisioning, nil)
+}
+
+// templateProviders returns the distinct resource-provider namespaces an ARM
+// template uses (e.g. "Microsoft.DBforPostgreSQL"), recursing into nested
+// Microsoft.Resources/deployments (AVM modules compile to a nested deployment, so
+// the real resource types live one level down). Used to register a fresh
+// subscription's providers before deploying.
+func templateProviders(template map[string]any) []string {
+	seen := map[string]bool{}
+	collectProviders(template, seen)
+	out := make([]string, 0, len(seen))
+	for ns := range seen {
+		out = append(out, ns)
+	}
+	return out
+}
+
+func collectProviders(template map[string]any, seen map[string]bool) {
+	res, _ := template["resources"].([]any)
+	for _, r := range res {
+		m, ok := r.(map[string]any)
+		if !ok {
+			continue
+		}
+		if t, _ := m["type"].(string); t != "" {
+			if i := strings.IndexByte(t, '/'); i > 0 {
+				seen[t[:i]] = true
+			}
+		}
+		// Recurse into a nested deployment's template (AVM modules).
+		if props, ok := m["properties"].(map[string]any); ok {
+			if nested, ok := props["template"].(map[string]any); ok {
+				collectProviders(nested, seen)
+			}
+		}
+	}
 }
 
 func (p *Provisioner) deploymentURL(sub, name string) string {
