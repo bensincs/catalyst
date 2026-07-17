@@ -9,6 +9,8 @@ package infra
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -137,8 +139,12 @@ func (p *Provisioner) ensure(ctx context.Context, tgt store.InfraTarget) {
 		}
 		return
 	}
+	// Substitute per-tenant tokens (e.g. {{tenantHash}} for a globally-unique Key
+	// Vault name) into the template before deploying, so a single platform-authored
+	// infra yields tenant-unique resource names instead of colliding across tenants.
+	armStr := substituteTokens(tgt.ArmTemplate, tgt.TenantSlug, p.region)
 	var template map[string]any
-	if err := json.Unmarshal([]byte(tgt.ArmTemplate), &template); err != nil {
+	if err := json.Unmarshal([]byte(armStr), &template); err != nil {
 		slog.Warn("infra: template is not valid ARM JSON; skipping", "infra", tgt.InfraID)
 		_ = p.store.SetInfraState(ctx, tgt.TenantSlug, tgt.InfraID, stateFailed, nil)
 		return
@@ -255,4 +261,29 @@ func trunc(s string) string {
 		return s[:200]
 	}
 	return s
+}
+
+// substituteTokens replaces per-tenant template tokens in a resolved ARM template
+// before it's deployed into a tenant's subscription. Tokens survive Bicep
+// compilation as literal text (they use `{{…}}`, not Bicep's `${…}`), so an author
+// sets e.g. `name: 'cortexkv{{tenantHash}}'` once at the platform level and each
+// tenant gets a unique name:
+//
+//	{{tenant}}     — the tenant slug (e.g. t-cff8707ddd78)
+//	{{tenantHash}} — a short, stable hash of the slug (safe for length/charset-limited names)
+//	{{region}}     — the deployment region
+func substituteTokens(arm, slug, region string) string {
+	return strings.NewReplacer(
+		"{{tenant}}", slug,
+		"{{tenantHash}}", tenantHash(slug),
+		"{{region}}", region,
+	).Replace(arm)
+}
+
+// tenantHash is a short, stable, lowercase-alphanumeric hash of a tenant slug —
+// deterministic so re-provisioning targets the same resource, and safe for names
+// with tight length/character limits (Key Vault, storage accounts, …).
+func tenantHash(slug string) string {
+	sum := sha256.Sum256([]byte(slug))
+	return hex.EncodeToString(sum[:])[:10]
 }
