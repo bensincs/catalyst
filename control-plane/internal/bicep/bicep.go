@@ -95,7 +95,11 @@ func isModuleRef(s string) bool {
 // author's params and re-exports the given outputs (name → Bicep type).
 func wrapper(ref string, outputs map[string]string, params map[string]any) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "module infra '%s' = {\n  name: 'infra'\n", ref)
+	// Unique nested-deployment name per infra: each Bicep module compiles to a
+	// nested Microsoft.Resources/deployments, and two infra entities deploying into
+	// the same resource group must not collide on a shared 'infra' name. deployment()
+	// is the outer deployment (cortex-app-<id>, unique per infra), resolved at deploy.
+	fmt.Fprintf(&b, "module infra '%s' = {\n  name: '${deployment().name}-m'\n", ref)
 	if len(params) > 0 {
 		fmt.Fprintf(&b, "  params: %s\n", bicepObject(params, 1))
 	}
@@ -110,9 +114,31 @@ func wrapper(ref string, outputs map[string]string, params map[string]any) strin
 		if t == "" {
 			t = "string"
 		}
-		fmt.Fprintf(&b, "output %s %s = infra.outputs.%s\n", name, t, name)
+		// Safe re-export: AVM outputs are frequently nullable (their value is absent
+		// when an optional resource isn't deployed — e.g. systemAssignedMIPrincipalId
+		// with no system identity). A raw `.value` re-export then fails the whole
+		// deployment with DeploymentOutputEvaluationFailed. Safe-access (.?) + coalesce
+		// to a zero value keeps the deployment — and every other output — valid.
+		fmt.Fprintf(&b, "output %s %s = infra.outputs.?%s ?? %s\n", name, t, name, zeroValue(t))
 	}
 	return b.String()
+}
+
+// zeroValue is the Bicep zero literal for a re-exported output's type, used to
+// coalesce a nullable/absent module output to a concrete value.
+func zeroValue(bicepType string) string {
+	switch bicepType {
+	case "int":
+		return "0"
+	case "bool":
+		return "false"
+	case "array":
+		return "[]"
+	case "object":
+		return "{}"
+	default:
+		return "''"
+	}
 }
 
 var bicepIdent = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
