@@ -14,7 +14,8 @@ import {
   disableInfrastructure,
   type ActionResult,
 } from "@/lib/actions";
-import { HEALTH_META, type Infrastructure, type Role } from "@/lib/types";
+import { type Infrastructure, type Role } from "@/lib/types";
+import { infraStatus } from "@/lib/status";
 import styles from "./memory-stores-view.module.css";
 
 export function InfrastructureView({
@@ -95,23 +96,12 @@ export function InfrastructureView({
                   <div className={styles.rowTop}>
                     <span className={styles.rowName}>{i.name}</span>
                     <StatusBadge tone={sc.tone} label={sc.label} variant="soft" />
-                    {!platform && i.enabled && i.health && (
+                    {!platform && i.enabled && (
                       <StatusBadge
-                        tone={HEALTH_META[i.health].tone}
-                        label={HEALTH_META[i.health].label}
+                        tone={infraStatus(i.infraState).tone}
+                        label={infraStatus(i.infraState).label}
                         variant="soft"
-                        pulse={i.health === "reconciling"}
-                      />
-                    )}
-                    {!platform && i.enabled && i.waiting && (
-                      <StatusBadge tone="warning" label="Waiting on deps" variant="soft" />
-                    )}
-                    {!platform && i.enabled && i.infraState && (
-                      <StatusBadge
-                        tone={i.infraState === "ready" ? "success" : i.infraState === "failed" ? "danger" : "info"}
-                        label={`Infra ${i.infraState}`}
-                        variant="soft"
-                        pulse={i.infraState === "provisioning"}
+                        pulse={infraStatus(i.infraState).pulse}
                       />
                     )}
                     {platform && i.owner !== "" && i.ownerName && (

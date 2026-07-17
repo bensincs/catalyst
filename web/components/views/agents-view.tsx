@@ -22,13 +22,13 @@ import { useToast } from "@/components/providers/toast-provider";
 import { disableAgent, enableAgent, publishVersion, type ActionResult } from "@/lib/actions";
 import { EnableModal, OwnershipTag, PublishModal, TypeTag } from "./catalog-view";
 import {
-  HEALTH_META,
   type CatalogAgent,
   type EnabledAgent,
   type MemoryStore,
   type PublishTarget,
   type Role,
 } from "@/lib/types";
+import { agentStatus } from "@/lib/status";
 import styles from "./agents-view.module.css";
 
 const PUBLISH: Record<PublishTarget, { label: string; icon: typeof Globe }> = {
@@ -150,10 +150,10 @@ export function AgentsView({
                     {isEnabled &&
                       (ea ? (
                         <StatusBadge
-                          tone={HEALTH_META[ea.health].tone}
-                          label={HEALTH_META[ea.health].label}
+                          tone={agentStatus(ea).tone}
+                          label={agentStatus(ea).label}
                           variant="soft"
-                          pulse={ea.health === "reconciling"}
+                          pulse={agentStatus(ea).pulse}
                         />
                       ) : (
                         <StatusBadge tone="success" label="Enabled" variant="soft" />

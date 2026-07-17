@@ -6,7 +6,8 @@ import { Button } from "@/components/ui/button";
 import { StatusDot } from "@/components/ui/status";
 import { EmptyState } from "@/components/ui/empty-state";
 import { formatCount, formatInt } from "@/lib/format";
-import { HEALTH_META, type EnabledAgent } from "@/lib/types";
+import { type EnabledAgent } from "@/lib/types";
+import { agentStatus } from "@/lib/status";
 import styles from "./usage-view.module.css";
 
 const COST_DOCS_URL =
@@ -50,12 +51,12 @@ export function UsageView({ agents }: { agents: EnabledAgent[] }) {
             <h2 className={styles.sectionTitle}>Calls by agent</h2>
             <div className={styles.table}>
               {ranked.map((a) => {
-                const h = HEALTH_META[a.health];
+                const h = agentStatus(a);
                 const share = total > 0 ? a.calls30d / total : 0;
                 return (
                   <div key={a.id} className={styles.row}>
                     <div className={styles.rowHead}>
-                      <StatusDot tone={h.tone} pulse={a.health === "reconciling"} />
+                      <StatusDot tone={h.tone} pulse={h.pulse} />
                       <span className={styles.rowName}>{a.name}</span>
                       <span className={"mono " + styles.rowModel}>{a.model}</span>
                     </div>

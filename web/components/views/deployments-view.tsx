@@ -10,12 +10,12 @@ import { StatusBadge } from "@/components/ui/status";
 import { useToast } from "@/components/providers/toast-provider";
 import { deleteApplication, enableDeployment, disableDeployment, type ActionResult } from "@/lib/actions";
 import {
-  HEALTH_META,
   type Application,
   type ClusterInfo,
   type HealthMeta,
   type Role,
 } from "@/lib/types";
+import { applicationStatus } from "@/lib/status";
 import styles from "./memory-stores-view.module.css";
 
 type Tone = HealthMeta["tone"];
@@ -115,16 +115,13 @@ export function DeploymentsView({
                   <div className={styles.rowTop}>
                     <span className={styles.rowName}>{a.name}</span>
                     <StatusBadge tone={sc.tone} label={sc.label} variant="soft" />
-                    {!platform && a.enabled && a.health && (
+                    {!platform && a.enabled && (
                       <StatusBadge
-                        tone={HEALTH_META[a.health].tone}
-                        label={HEALTH_META[a.health].label}
+                        tone={applicationStatus(a).tone}
+                        label={applicationStatus(a).label}
                         variant="soft"
-                        pulse={a.health === "reconciling"}
+                        pulse={applicationStatus(a).pulse}
                       />
-                    )}
-                    {!platform && a.enabled && a.waiting && (
-                      <StatusBadge tone="warning" label="Waiting on deps" variant="soft" />
                     )}
                     {platform && a.owner !== "" && a.ownerName && (
                       <span className={styles.count}>owned by {a.ownerName}</span>

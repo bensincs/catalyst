@@ -11,7 +11,8 @@ import { StatusBadge, StatusDot } from "@/components/ui/status";
 import { useToast } from "@/components/providers/toast-provider";
 import { connectAgentStore, disableAgent } from "@/lib/actions";
 import { formatInt, formatRelative } from "@/lib/format";
-import { HEALTH_META, type EnabledAgent, type MemoryStore, type PublishTarget } from "@/lib/types";
+import { type EnabledAgent, type MemoryStore, type PublishTarget } from "@/lib/types";
+import { agentStatus } from "@/lib/status";
 import styles from "./agent-detail-view.module.css";
 
 const PUBLISH: Record<PublishTarget, { label: string; icon: typeof Globe }> = {
@@ -37,7 +38,7 @@ export function AgentDetailView({
   const { toast } = useToast();
   const [pending, startTransition] = useTransition();
   const [storeSel, setStoreSel] = useState(agent.memoryStore ?? "");
-  const h = HEALTH_META[agent.health];
+  const h = agentStatus(agent);
 
   const disable = () =>
     startTransition(async () => {

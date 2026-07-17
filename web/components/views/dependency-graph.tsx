@@ -4,6 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import Link from "next/link";
 import { Bot, Boxes, Brain, Layers, type LucideIcon } from "lucide-react";
 import type { Application, EnabledAgent, Infrastructure, MemoryStore } from "@/lib/types";
+import { agentStatus, applicationStatus, infraStatus, storeStatus } from "@/lib/status";
 import styles from "./dependency-graph.module.css";
 
 type Kind = "infrastructure" | "application" | "agent" | "memory_store";
@@ -34,34 +35,6 @@ const ICON: Record<Kind, LucideIcon> = { infrastructure: Boxes, application: Lay
 
 const nkey = (kind: Kind, id: string) => `${kind}:${id}`;
 
-function infraTone(state: string): { tone: Tone; label: string; pulse: boolean } {
-  switch (state) {
-    case "ready":
-      return { tone: "success", label: "Ready", pulse: false };
-    case "failed":
-      return { tone: "danger", label: "Failed", pulse: false };
-    case "":
-      return { tone: "neutral", label: "Queued", pulse: false };
-    default:
-      return { tone: "info", label: "Provisioning", pulse: true };
-  }
-}
-function healthTone(health: string | undefined, waiting?: boolean): { tone: Tone; label: string; pulse: boolean } {
-  if (waiting) return { tone: "warning", label: "Waiting on deps", pulse: false };
-  switch (health) {
-    case "live":
-      return { tone: "success", label: "Live", pulse: true };
-    case "blocked":
-      return { tone: "danger", label: "Blocked", pulse: false };
-    case "drift":
-      return { tone: "warning", label: "Drift", pulse: false };
-    case "reconciling":
-      return { tone: "info", label: "Reconciling", pulse: true };
-    default:
-      return { tone: "neutral", label: "Pending", pulse: false };
-  }
-}
-
 export function DependencyGraph({
   infrastructure,
   applications,
@@ -83,19 +56,19 @@ export function DependencyGraph({
     };
 
     for (const i of infrastructure) {
-      const t = infraTone(i.infraState ?? "");
+      const t = infraStatus(i.infraState);
       add({ key: nkey("infrastructure", i.id), id: i.id, kind: "infrastructure", name: i.name, tone: t.tone, state: t.label, pulse: t.pulse, href: "/infrastructure" });
     }
     for (const a of applications) {
-      const t = healthTone(a.health, a.waiting);
+      const t = applicationStatus(a);
       add({ key: nkey("application", a.id), id: a.id, kind: "application", name: a.name, tone: t.tone, state: t.label, pulse: t.pulse, href: "/deployments" });
     }
     for (const a of agents) {
-      const t = healthTone(a.health);
+      const t = agentStatus(a);
       add({ key: nkey("agent", a.id), id: a.id, kind: "agent", name: a.name, tone: t.tone, state: t.label, pulse: t.pulse, href: "/agents" });
     }
     for (const s of stores) {
-      const t = healthTone(s.health);
+      const t = storeStatus(s);
       add({ key: nkey("memory_store", s.id), id: s.id, kind: "memory_store", name: s.name, tone: t.tone, state: t.label, pulse: t.pulse, href: "/memory-stores" });
     }
 
@@ -214,7 +187,7 @@ export function DependencyGraph({
         </span>
         <span className={styles.summaryDivider} aria-hidden />
         {live > 0 && <span className={styles.summaryStat} data-tone="success">{live} live</span>}
-        {working > 0 && <span className={styles.summaryStat} data-tone="info">{working} converging</span>}
+        {working > 0 && <span className={styles.summaryStat} data-tone="info">{working} deploying</span>}
         {attention > 0 && <span className={styles.summaryStat} data-tone="warning">{attention} need attention</span>}
         {live === total && <span className={styles.summaryStat} data-tone="success">all live</span>}
       </div>
@@ -290,9 +263,9 @@ export function DependencyGraph({
 
       <div className={styles.legend}>
         <span className={styles.legendItem}><span className={styles.legendDot} data-tone="success" />Live</span>
-        <span className={styles.legendItem}><span className={styles.legendDot} data-tone="info" />Converging</span>
+        <span className={styles.legendItem}><span className={styles.legendDot} data-tone="info" />Deploying</span>
         <span className={styles.legendItem}><span className={styles.legendDot} data-tone="warning" />Waiting / drift</span>
-        <span className={styles.legendItem}><span className={styles.legendDot} data-tone="danger" />Blocked</span>
+        <span className={styles.legendItem}><span className={styles.legendDot} data-tone="danger" />Failed</span>
       </div>
     </div>
   );

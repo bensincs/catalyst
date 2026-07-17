@@ -9,7 +9,8 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { StatusBadge } from "@/components/ui/status";
 import { useToast } from "@/components/providers/toast-provider";
 import { deleteMemoryStore, enableStore, disableStore, type ActionResult } from "@/lib/actions";
-import { HEALTH_META, type MemoryStore, type MemoryStoreDefinition, type Role } from "@/lib/types";
+import { type MemoryStore, type MemoryStoreDefinition, type Role } from "@/lib/types";
+import { storeStatus } from "@/lib/status";
 import styles from "./memory-stores-view.module.css";
 
 export function MemoryStoresView({ role, stores }: { role: Role; stores: MemoryStore[] }) {
@@ -84,12 +85,12 @@ export function MemoryStoresView({ role, stores }: { role: Role; stores: MemoryS
                   <div className={styles.rowTop}>
                     <span className={styles.rowName}>{s.name}</span>
                     <StatusBadge tone={sc.tone} label={sc.label} variant="soft" />
-                    {!platform && s.enabled && s.health && (
+                    {!platform && s.enabled && (
                       <StatusBadge
-                        tone={HEALTH_META[s.health].tone}
-                        label={HEALTH_META[s.health].label}
+                        tone={storeStatus(s).tone}
+                        label={storeStatus(s).label}
                         variant="soft"
-                        pulse={s.health === "reconciling"}
+                        pulse={storeStatus(s).pulse}
                       />
                     )}
                     {platform && s.owner !== "" && s.ownerName && (
