@@ -34,6 +34,52 @@ async function run(fn: () => Promise<unknown>, paths: string[]): Promise<ActionR
   }
 }
 
+/*
+Every mutation flows through one generic resource surface on the control plane:
+
+  POST   /api/resources                       create (mixed batch)
+  PATCH  /api/resources/{kind}/{id}           edit a definition
+  DELETE /api/resources/{kind}/{id}           remove a definition
+  POST   /api/resources/{kind}/{id}/enable    enable in the caller's tenant
+  DELETE /api/resources/{kind}/{id}/enable    disable in the caller's tenant
+  PATCH  /api/tenants/{slug}/all-entitlements grant/revoke every kind at once
+
+`kind` is infrastructure | application | agent | memory_store. The typed
+functions below are thin, name-stable wrappers so views don't carry the URL
+vocabulary.
+*/
+
+type ResourceKind = "infrastructure" | "application" | "agent" | "memory_store";
+
+const enablePaths: Record<ResourceKind, string[]> = {
+  infrastructure: ["/infrastructure"],
+  application: ["/deployments"],
+  agent: ["/", "/agents"],
+  memory_store: ["/memory-stores"],
+};
+
+function resourcePath(kind: ResourceKind, id: string): string {
+  return `/api/resources/${kind}/${encodeURIComponent(id)}`;
+}
+
+async function deleteResource(kind: ResourceKind, id: string): Promise<ActionResult> {
+  return run(() => apiSend("DELETE", resourcePath(kind, id)), enablePaths[kind]);
+}
+
+async function enableResource(
+  kind: ResourceKind,
+  id: string,
+  body?: unknown,
+): Promise<ActionResult> {
+  return run(() => apiSend("POST", `${resourcePath(kind, id)}/enable`, body), enablePaths[kind]);
+}
+
+async function disableResource(kind: ResourceKind, id: string): Promise<ActionResult> {
+  return run(() => apiSend("DELETE", `${resourcePath(kind, id)}/enable`), enablePaths[kind]);
+}
+
+/* ── Inspectors (authoring tooling, not CRUD) ─────────────────────────────── */
+
 // Inspect a Bicep module's published interface (input params + outputs) so the
 // infrastructure form can render a typed form and show wireable outputs before save.
 export type InspectResult =
@@ -97,23 +143,23 @@ export async function inspectChart(
   }
 }
 
-export async function createCatalogAgent(input: {
-  name: string;
-  description: string;
-  type: AgentType;
-  model: string;
-  definition: AgentDefinition;
-}): Promise<ActionResult> {
-  return run(() => apiSend("POST", "/api/resources", { agents: [input] }), ["/agents"]);
-}
+/* ── Entitlements + tenant access (platform) ──────────────────────────────── */
 
-export async function setEntitlements(
+// Grant/revoke every kind for a tenant in one call (the consolidated panel sends
+// the full desired state each save).
+export async function setAllEntitlements(
   slug: string,
-  entitledAgents: string[],
+  byKind: Record<ResourceKind, string[]>,
 ): Promise<ActionResult> {
   return run(
-    () => apiSend("PATCH", `/api/tenants/${encodeURIComponent(slug)}/entitlements`, { entitledAgents }),
-    [`/tenants/${slug}`, "/agents"],
+    () =>
+      apiSend("PATCH", `/api/tenants/${encodeURIComponent(slug)}/all-entitlements`, {
+        infrastructure: byKind.infrastructure,
+        applications: byKind.application,
+        agents: byKind.agent,
+        memoryStores: byKind.memory_store,
+      }),
+    [`/tenants/${slug}`, "/agents", "/deployments", "/infrastructure", "/memory-stores"],
   );
 }
 
@@ -125,17 +171,44 @@ export async function setTenantEnabled(slug: string, enabled: boolean): Promise<
   );
 }
 
+/* ── Agents ───────────────────────────────────────────────────────────────── */
+
+export async function createCatalogAgent(input: {
+  name: string;
+  description: string;
+  type: AgentType;
+  model: string;
+  definition: AgentDefinition;
+}): Promise<ActionResult> {
+  return run(() => apiSend("POST", "/api/resources", { agents: [input] }), ["/agents"]);
+}
+
+export async function updateCatalogAgent(
+  id: string,
+  input: { name: string; description: string; model: string; definition: AgentDefinition },
+): Promise<ActionResult> {
+  return run(() => apiSend("PATCH", resourcePath("agent", id), input), ["/agents"]);
+}
+
+export async function deleteCatalogAgent(id: string): Promise<ActionResult> {
+  return deleteResource("agent", id);
+}
+
 export async function enableAgent(input: {
   catalogAgentId: string;
   publishTo: string[];
 }): Promise<ActionResult> {
-  return run(() => apiSend("POST", "/api/tenant/agents", input), ["/", "/agents"]);
+  return enableResource("agent", input.catalogAgentId, { publishTo: input.publishTo });
 }
 
 export async function disableAgent(agentId: string): Promise<ActionResult> {
+  return disableResource("agent", agentId);
+}
+
+export async function connectAgentStore(agentId: string, storeId: string): Promise<ActionResult> {
   return run(
-    () => apiSend("DELETE", `/api/tenant/agents/${encodeURIComponent(agentId)}`),
-    ["/", "/agents"],
+    () => apiSend("POST", `/api/tenant/agents/${encodeURIComponent(agentId)}/store`, { storeId }),
+    ["/", "/agents", "/memory-stores"],
   );
 }
 
@@ -155,53 +228,22 @@ export async function updateMemoryStore(
   id: string,
   input: { name: string; description: string },
 ): Promise<ActionResult> {
-  return run(
-    () => apiSend("PATCH", `/api/memory-stores/${encodeURIComponent(id)}`, input),
-    ["/memory-stores"],
-  );
+  return run(() => apiSend("PATCH", resourcePath("memory_store", id), input), ["/memory-stores"]);
 }
 
 export async function deleteMemoryStore(id: string): Promise<ActionResult> {
-  return run(
-    () => apiSend("DELETE", `/api/memory-stores/${encodeURIComponent(id)}`),
-    ["/memory-stores"],
-  );
+  return deleteResource("memory_store", id);
 }
 
-export async function setStoreEntitlements(
-  slug: string,
-  entitledStores: string[],
-): Promise<ActionResult> {
-  return run(
-    () => apiSend("PATCH", `/api/tenants/${encodeURIComponent(slug)}/store-entitlements`, { entitledStores }),
-    [`/tenants/${slug}`, "/memory-stores"],
-  );
-}
-
-export async function connectAgentStore(agentId: string, storeId: string): Promise<ActionResult> {
-  return run(
-    () => apiSend("POST", `/api/tenant/agents/${encodeURIComponent(agentId)}/store`, { storeId }),
-    ["/", "/agents", "/memory-stores"],
-  );
-}
-
-// Enable/disable a memory store in the caller's tenant — the store lifecycle
-// mirror of enabling/disabling an agent.
 export async function enableStore(storeId: string): Promise<ActionResult> {
-  return run(
-    () => apiSend("POST", `/api/tenant/stores/${encodeURIComponent(storeId)}`),
-    ["/memory-stores"],
-  );
+  return enableResource("memory_store", storeId);
 }
 
 export async function disableStore(storeId: string): Promise<ActionResult> {
-  return run(
-    () => apiSend("DELETE", `/api/tenant/stores/${encodeURIComponent(storeId)}`),
-    ["/memory-stores"],
-  );
+  return disableResource("memory_store", storeId);
 }
 
-/* ── Deployments — catalog entities (like memory stores) ──────────────────── */
+/* ── Deployments (Helm → Argo CD) ─────────────────────────────────────────── */
 
 export async function createApplication(input: {
   name: string;
@@ -231,47 +273,22 @@ export async function updateApplication(
     dependencies: Dependency[];
   },
 ): Promise<ActionResult> {
-  return run(
-    () => apiSend("PATCH", `/api/applications/${encodeURIComponent(id)}`, input),
-    ["/deployments"],
-  );
+  return run(() => apiSend("PATCH", resourcePath("application", id), input), ["/deployments"]);
 }
 
 export async function deleteApplication(id: string): Promise<ActionResult> {
-  return run(
-    () => apiSend("DELETE", `/api/applications/${encodeURIComponent(id)}`),
-    ["/deployments"],
-  );
-}
-
-export async function setDeploymentEntitlements(
-  slug: string,
-  entitledDeployments: string[],
-): Promise<ActionResult> {
-  return run(
-    () =>
-      apiSend("PATCH", `/api/tenants/${encodeURIComponent(slug)}/deployment-entitlements`, {
-        entitledDeployments,
-      }),
-    [`/tenants/${slug}`, "/deployments"],
-  );
+  return deleteResource("application", id);
 }
 
 export async function enableDeployment(id: string): Promise<ActionResult> {
-  return run(
-    () => apiSend("POST", `/api/tenant/deployments/${encodeURIComponent(id)}`),
-    ["/deployments"],
-  );
+  return enableResource("application", id);
 }
 
 export async function disableDeployment(id: string): Promise<ActionResult> {
-  return run(
-    () => apiSend("DELETE", `/api/tenant/deployments/${encodeURIComponent(id)}`),
-    ["/deployments"],
-  );
+  return disableResource("application", id);
 }
 
-/* ── Infrastructure — catalog entities (the Azure/Bicep half) ─────────────── */
+/* ── Infrastructure (Azure/Bicep) ─────────────────────────────────────────── */
 
 export async function createInfrastructure(input: {
   name: string;
@@ -293,42 +310,17 @@ export async function updateInfrastructure(
     dependencies: Dependency[];
   },
 ): Promise<ActionResult> {
-  return run(
-    () => apiSend("PATCH", `/api/infrastructure/${encodeURIComponent(id)}`, input),
-    ["/infrastructure"],
-  );
+  return run(() => apiSend("PATCH", resourcePath("infrastructure", id), input), ["/infrastructure"]);
 }
 
 export async function deleteInfrastructure(id: string): Promise<ActionResult> {
-  return run(
-    () => apiSend("DELETE", `/api/infrastructure/${encodeURIComponent(id)}`),
-    ["/infrastructure"],
-  );
-}
-
-export async function setInfrastructureEntitlements(
-  slug: string,
-  entitledInfrastructure: string[],
-): Promise<ActionResult> {
-  return run(
-    () =>
-      apiSend("PATCH", `/api/tenants/${encodeURIComponent(slug)}/infrastructure-entitlements`, {
-        entitledInfrastructure,
-      }),
-    [`/tenants/${slug}`, "/infrastructure"],
-  );
+  return deleteResource("infrastructure", id);
 }
 
 export async function enableInfrastructure(id: string): Promise<ActionResult> {
-  return run(
-    () => apiSend("POST", `/api/tenant/infrastructure/${encodeURIComponent(id)}`),
-    ["/infrastructure"],
-  );
+  return enableResource("infrastructure", id);
 }
 
 export async function disableInfrastructure(id: string): Promise<ActionResult> {
-  return run(
-    () => apiSend("DELETE", `/api/tenant/infrastructure/${encodeURIComponent(id)}`),
-    ["/infrastructure"],
-  );
+  return disableResource("infrastructure", id);
 }

@@ -402,31 +402,30 @@ interface ApiCatalogAgent {
   enabled: boolean;
 }
 
-export const getCatalog = cache(async (): Promise<CatalogAgent[]> => {
-  const c = await apiGet<{ agents: ApiCatalogAgent[] }>("/api/catalog");
-  return (c.agents ?? []).map((a) => {
-    // The backend still returns a versions array until its own strip lands; take
-    // the single current definition from `definition` when present, else the
-    // latest version's definition.
-    const versions = a.versions ?? [];
-    const latest = versions.find((v) => v.version === a.latestVersion) ?? versions[versions.length - 1];
-    return {
-      id: a.id,
-      name: a.name,
-      description: a.description,
-      type: (a.type as AgentType) || "prompt",
-      model: a.model,
-      owner: a.owner ?? "",
-      definition: a.definition ?? latest?.definition ?? {},
-      createdAt: a.createdAt,
-      ownerName: a.ownerName,
-      platform: a.platform ?? (a.owner ?? "") === "",
-      owned: Boolean(a.owned),
-      entitled: Boolean(a.entitled),
-      enabled: Boolean(a.enabled),
-    };
-  });
-});
+function toCatalogAgent(a: ApiCatalogAgent): CatalogAgent {
+  // The backend may still return a versions array until its own strip lands; take
+  // the single current definition from `definition` when present, else the latest
+  // version's definition.
+  const versions = a.versions ?? [];
+  const latest = versions.find((v) => v.version === a.latestVersion) ?? versions[versions.length - 1];
+  return {
+    id: a.id,
+    name: a.name,
+    description: a.description,
+    type: (a.type as AgentType) || "prompt",
+    model: a.model,
+    owner: a.owner ?? "",
+    definition: a.definition ?? latest?.definition ?? {},
+    createdAt: a.createdAt,
+    ownerName: a.ownerName,
+    platform: a.platform ?? (a.owner ?? "") === "",
+    owned: Boolean(a.owned),
+    entitled: Boolean(a.entitled),
+    enabled: Boolean(a.enabled),
+  };
+}
+
+export const getCatalog = async (): Promise<CatalogAgent[]> => (await getResources()).agents;
 
 interface ApiRegistryRow extends ApiTenant {
   entitledAgents: string[];
@@ -484,10 +483,8 @@ interface ApiApplication {
   waiting?: boolean;
 }
 
-export const getApplications = cache(async (): Promise<Application[]> => {
-  const c = await apiGet<{ applications: ApiApplication[] }>("/api/applications");
-  return (c.applications ?? []).map(toApplication);
-});
+export const getApplications = async (): Promise<Application[]> =>
+  (await getResources()).applications;
 
 /* ── Infrastructure (Azure/Bicep → control plane) ─────────────────────────── */
 
@@ -511,10 +508,8 @@ interface ApiInfrastructure {
   waiting?: boolean;
 }
 
-export const getInfrastructure = cache(async (): Promise<Infrastructure[]> => {
-  const c = await apiGet<{ infrastructure: ApiInfrastructure[] }>("/api/infrastructure");
-  return (c.infrastructure ?? []).map(toInfrastructure);
-});
+export const getInfrastructure = async (): Promise<Infrastructure[]> =>
+  (await getResources()).infrastructure;
 
 /* ── Memory stores ────────────────────────────────────────────────────────── */
 
@@ -547,7 +542,34 @@ function normalizeStoreDefinition(d?: Partial<MemoryStoreDefinition> | null): Me
   };
 }
 
-export const getMemoryStores = cache(async (): Promise<MemoryStore[]> => {
-  const c = await apiGet<{ stores: ApiMemoryStore[] }>("/api/memory-stores");
-  return (c.stores ?? []).map(toStore);
+export const getMemoryStores = async (): Promise<MemoryStore[]> =>
+  (await getResources()).stores;
+
+/* ── Combined resource fetch (one call powers every catalog view) ─────────── */
+
+interface ApiResources {
+  infrastructure?: ApiInfrastructure[] | null;
+  applications?: ApiApplication[] | null;
+  agents?: ApiCatalogAgent[] | null;
+  memoryStores?: ApiMemoryStore[] | null;
+}
+
+export interface Resources {
+  infrastructure: Infrastructure[];
+  applications: Application[];
+  agents: CatalogAgent[];
+  stores: MemoryStore[];
+}
+
+// One request returns every catalog entity the caller can see (role-aware on the
+// control plane). Cached per request, so the four public fetchers above share a
+// single round-trip when a page needs more than one kind.
+export const getResources = cache(async (): Promise<Resources> => {
+  const r = await apiGet<ApiResources>("/api/resources");
+  return {
+    infrastructure: (r.infrastructure ?? []).map(toInfrastructure),
+    applications: (r.applications ?? []).map(toApplication),
+    agents: (r.agents ?? []).map(toCatalogAgent),
+    stores: (r.memoryStores ?? []).map(toStore),
+  };
 });

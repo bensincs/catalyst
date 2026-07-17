@@ -50,6 +50,62 @@
   flex: none;
   color: var(--text-secondary);
 }
+.sub svg {
+  vertical-align: -1px;
+  color: var(--text-secondary);
+}
+.groups {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.groupHead {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 8px;
+  font-size: var(--text-body-sm);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.groupHead svg {
+  color: var(--text-muted);
+}
+.groupCount {
+  display: inline-grid;
+  place-items: center;
+  min-width: 20px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: var(--radius-full);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  font-size: var(--text-caption);
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.item[data-locked] {
+  opacity: 0.9;
+}
+.reqTag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: none;
+  margin-right: 8px;
+  padding: 2px 7px;
+  border-radius: var(--radius-full);
+  background: var(--accent-bg);
+  color: var(--accent-ink);
+  font-size: 10px;
+  font-weight: 600;
+}
 @media (max-width: 620px) {
   .head {
     flex-direction: column;

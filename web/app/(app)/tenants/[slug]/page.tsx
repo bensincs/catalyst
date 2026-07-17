@@ -3,9 +3,6 @@ import { ApiError, getApplications, getCatalog, getInfrastructure, getMe, getMem
 import { TenantOverview } from "@/components/views/tenant-overview";
 import { TenantAccessPanel } from "@/components/views/tenant-access-panel";
 import { EntitlementsPanel } from "@/components/views/entitlements-panel";
-import { StoreEntitlementsPanel } from "@/components/views/store-entitlements-panel";
-import { DeploymentEntitlementsPanel } from "@/components/views/deployment-entitlements-panel";
-import { InfrastructureEntitlementsPanel } from "@/components/views/infrastructure-entitlements-panel";
 
 export default async function TenantDrillInPage({
   params,
@@ -34,26 +31,14 @@ export default async function TenantDrillInPage({
           <EntitlementsPanel
             slug={slug}
             name={ctx.tenant.name}
-            entitled={row?.entitledAgents ?? []}
-            catalog={catalog}
-          />
-          <StoreEntitlementsPanel
-            slug={slug}
-            name={ctx.tenant.name}
-            entitled={row?.entitledStores ?? []}
-            stores={stores.filter((s) => s.owner === "")}
-          />
-          <DeploymentEntitlementsPanel
-            slug={slug}
-            name={ctx.tenant.name}
-            entitled={row?.entitledDeployments ?? []}
-            deployments={deployments.filter((d) => d.owner === "")}
-          />
-          <InfrastructureEntitlementsPanel
-            slug={slug}
-            name={ctx.tenant.name}
-            entitled={row?.entitledInfrastructure ?? []}
             infrastructure={infrastructure.filter((i) => i.owner === "")}
+            deployments={deployments.filter((d) => d.owner === "")}
+            agents={catalog.filter((a) => a.owner === "")}
+            stores={stores.filter((s) => s.owner === "")}
+            entitledInfrastructure={row?.entitledInfrastructure ?? []}
+            entitledDeployments={row?.entitledDeployments ?? []}
+            entitledAgents={row?.entitledAgents ?? []}
+            entitledStores={row?.entitledStores ?? []}
           />
         </>
       );
