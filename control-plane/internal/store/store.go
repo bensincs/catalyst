@@ -89,7 +89,7 @@ func scanTenant(row pgx.Row) (model.Tenant, error) {
 	if installedAt != "" {
 		t.InstalledAt = &installedAt
 	}
-	t.Lifecycle = deriveLifecycle(t.Enrollment, t.LastHeartbeat)
+	t.Lifecycle = deriveLifecycle(t.Enrollment, t.LastHeartbeat, t.Cluster.InfraDelegated, t.Cluster.FootprintState)
 	return t, err
 }
 
@@ -97,28 +97,38 @@ func scanTenant(row pgx.Row) (model.Tenant, error) {
 // still considered live; past it, the reconciler is presumed unhealthy.
 const heartbeatFreshWindow = 30 * time.Second
 
-// deriveLifecycle maps stored enrollment + heartbeat freshness to the tenant's
-// operational lifecycle, surfaced as a badge in the console:
+// deriveLifecycle maps the install flow to the tenant's operational lifecycle,
+// surfaced as a badge throughout the console:
 //
-//	enrolling  — not bound yet, or bound but awaiting the first heartbeat
-//	live       — bound and heartbeating within the freshness window
-//	degraded   — bound, had heartbeated, but has now gone stale (reconciler down)
-//	suspended  — administratively suspended
-func deriveLifecycle(enrollment string, lastHeartbeat *time.Time) string {
-	switch enrollment {
-	case "suspended":
+//	pending      — not delegated yet (awaiting the Lighthouse delegation)
+//	provisioning — delegated; Cortex is provisioning the footprint (reconciler + Foundry + AKS)
+//	enrolling    — footprint ready, awaiting the reconciler's first heartbeat
+//	live         — reconciler heartbeating within the freshness window
+//	degraded     — a bound reconciler has gone stale, or provisioning failed
+//	suspended    — administratively suspended
+func deriveLifecycle(enrollment string, lastHeartbeat *time.Time, delegated bool, footprintState string) string {
+	if enrollment == "suspended" {
 		return "suspended"
-	case "bound":
-		if lastHeartbeat == nil {
-			return "enrolling" // installed/bound but no reconciler report yet
-		}
-		if time.Since(*lastHeartbeat) < heartbeatFreshWindow {
-			return "live"
-		}
-		return "degraded"
-	default:
-		return "enrolling"
 	}
+	// A fresh heartbeat means the reconciler is up — live, regardless of the rest.
+	if lastHeartbeat != nil && time.Since(*lastHeartbeat) < heartbeatFreshWindow {
+		return "live"
+	}
+	// Had a reconciler that has now gone stale.
+	if lastHeartbeat != nil {
+		return "degraded"
+	}
+	// Environment provisioning failed.
+	if footprintState == "failed" {
+		return "degraded"
+	}
+	if delegated {
+		if footprintState == "ready" {
+			return "enrolling" // provisioned; awaiting the reconciler's first heartbeat
+		}
+		return "provisioning" // delegated; Cortex is provisioning the footprint
+	}
+	return "pending" // awaiting the Lighthouse delegation
 }
 
 // Fleet returns every customer tenant (excludes the platform tenant) + stats.
@@ -850,7 +860,7 @@ func (s *Store) TenantsRegistry(ctx context.Context) ([]model.TenantRegistryRow,
 		if installedAt != "" {
 			r.InstalledAt = &installedAt
 		}
-		r.Lifecycle = deriveLifecycle(r.Enrollment, r.LastHeartbeat)
+		r.Lifecycle = deriveLifecycle(r.Enrollment, r.LastHeartbeat, r.Cluster.InfraDelegated, r.Cluster.FootprintState)
 		if r.EntitledAgents == nil {
 			r.EntitledAgents = []string{}
 		}
@@ -1143,6 +1153,25 @@ func (s *Store) SyncDesired(ctx context.Context, tid string) (shared.DesiredStat
 		memo[id] = ok
 		return ok
 	}
+	// Wireable outputs of every dependency kind, keyed "<kind>:<id>": an
+	// infrastructure entity's resolved Bicep outputs, plus derived values for a
+	// dependency application (name / namespace / serviceHost) and agent (agentId /
+	// name). A dependent app wires any of these into its Helm values.
+	sources := map[string]map[string]any{}
+	for id, outs := range infraOutputs {
+		sources["infrastructure:"+id] = outs
+	}
+	for _, a := range apps {
+		sources["application:"+a.da.ID] = map[string]any{
+			"name":        a.da.Name,
+			"namespace":   a.da.Namespace,
+			"serviceHost": a.da.Name + "." + a.da.Namespace + ".svc.cluster.local",
+		}
+	}
+	for _, ag := range out.Agents {
+		sources["agent:"+ag.AgentID] = map[string]any{"agentId": ag.AgentID, "name": ag.Name}
+	}
+
 	for _, a := range apps {
 		deployable := ready(a.da.ID)
 		_, _ = s.pool.Exec(ctx, `UPDATE tenant_deployments SET waiting = $3 WHERE tenant_slug = $1 AND app_id = $2`,
@@ -1151,7 +1180,7 @@ func (s *Store) SyncDesired(ctx context.Context, tid string) (shared.DesiredStat
 			continue
 		}
 		da := a.da
-		da.Values = applyWiring(da.Values, a.wiring, infraOutputs)
+		da.Values = applyWiring(da.Values, a.wiring, sources)
 		for _, dep := range a.deps { // only app→app edges gate cluster ordering
 			if dep.Kind == model.DepApplication {
 				da.DependsOn = append(da.DependsOn, dep.ID)
@@ -1284,11 +1313,11 @@ func (s *Store) SetFootprintState(ctx context.Context, slug, state, detail strin
 	return err
 }
 
-// applyWiring merges an application's infrastructure-dependency outputs into its
-// Helm values at the wired paths (types preserved; malformed values left
-// untouched). infraOutputs is keyed by infrastructure id → its resolved outputs.
-func applyWiring(values string, wiring []shared.WireLink, infraOutputs map[string]map[string]any) string {
-	if len(wiring) == 0 || len(infraOutputs) == 0 {
+// applyWiring merges a dependency's outputs into an application's Helm values at
+// the wired paths (types preserved; malformed values left untouched). sources is
+// keyed "<sourceKind>:<sourceId>" → that dependency's output map.
+func applyWiring(values string, wiring []shared.WireLink, sources map[string]map[string]any) string {
+	if len(wiring) == 0 || len(sources) == 0 {
 		return values
 	}
 	m := map[string]any{}
@@ -1299,11 +1328,11 @@ func applyWiring(values string, wiring []shared.WireLink, infraOutputs map[strin
 	}
 	changed := false
 	for _, w := range wiring {
-		outs := infraOutputs[w.Infrastructure]
+		outs := sources[w.SourceKind+":"+w.SourceID]
 		if outs == nil {
 			continue
 		}
-		v, ok := outs[w.BicepOutput]
+		v, ok := outs[w.Output]
 		if !ok || strings.TrimSpace(w.HelmPath) == "" {
 			continue
 		}

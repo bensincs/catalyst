@@ -83,14 +83,16 @@ type DesiredAgent struct {
 	PublishTo  []string        `json:"publishTo"`
 }
 
-// WireLink maps one Bicep deployment output to a Helm values path, so the chart
-// is configured with the address/secret of the Azure infra that backs it. The
-// output comes from the application's infrastructure DEPENDENCY (Infrastructure
-// is that infrastructure entity's id).
+// WireLink maps one output of a dependency into a Helm values path on the
+// dependent application, so the chart is configured from what it depends on. The
+// source is any of the app's dependencies: an infrastructure entity (its resolved
+// Bicep outputs), a dependency application (derived: name / namespace /
+// serviceHost), or a dependency agent (derived: agentId / name).
 type WireLink struct {
-	Infrastructure string `json:"infrastructure"` // id of the depended-on infrastructure entity
-	BicepOutput    string `json:"bicepOutput"`    // name of a Bicep `output` on that infrastructure
-	HelmPath       string `json:"helmPath"`       // dotted Helm values path, e.g. database.host
+	SourceKind string `json:"sourceKind"` // infrastructure | application | agent
+	SourceID   string `json:"sourceId"`   // id of the depended-on entity
+	Output     string `json:"output"`     // the source's output name
+	HelmPath   string `json:"helmPath"`   // dotted Helm values path, e.g. database.host
 }
 
 // DesiredApplication is a Helm deployment a tenant wants running in its cluster
