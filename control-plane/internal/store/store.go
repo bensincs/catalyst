@@ -227,8 +227,17 @@ func (s *Store) UpsertUser(ctx context.Context, id model.Identity, tenantSlug *s
 }
 
 // EnsureTenantForTID JIT-provisions a tenant row for a real signed-in directory.
+// If the tenant already exists but still carries the placeholder name, a better
+// name learned later — the signed-in directory (sign-in), or a delegated
+// subscription's display name (Lighthouse discovery) — replaces it. A real name
+// already on the row is never clobbered.
 func (s *Store) EnsureTenantForTID(ctx context.Context, tid, name string) (model.Tenant, error) {
 	if t, err := s.TenantByTID(ctx, tid); err == nil {
+		if better := strings.TrimSpace(name); better != "" && better != t.Name && isPlaceholderName(t.Name) {
+			if _, e := s.pool.Exec(ctx, `UPDATE tenants SET name = $2 WHERE id = $1`, t.ID, better); e == nil {
+				t.Name = better
+			}
+		}
 		return t, nil
 	} else if !errors.Is(err, ErrNotFound) {
 		return model.Tenant{}, err
@@ -248,6 +257,13 @@ func (s *Store) EnsureTenantForTID(ctx context.Context, tid, name string) (model
 		return model.Tenant{}, err
 	}
 	return s.TenantByTID(ctx, tid)
+}
+
+// isPlaceholderName reports whether a tenant name is only the default placeholder
+// (or empty) — safe to replace once a real name is known.
+func isPlaceholderName(n string) bool {
+	n = strings.TrimSpace(n)
+	return n == "" || n == "New tenant"
 }
 
 // SetTenantEnabled enables or disables a tenant's access (console/API sign-in +
