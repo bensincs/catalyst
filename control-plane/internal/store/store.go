@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -287,27 +286,6 @@ func computeStats(tenants []model.Tenant) model.FleetStats {
 	return st
 }
 
-// compareVersions compares dotted numeric versions ("1.6.2" vs "1.6.1").
-func compareVersions(a, b string) int {
-	pa, pb := strings.Split(a, "."), strings.Split(b, ".")
-	for i := 0; i < len(pa) || i < len(pb); i++ {
-		var x, y int
-		if i < len(pa) {
-			x, _ = strconv.Atoi(pa[i])
-		}
-		if i < len(pb) {
-			y, _ = strconv.Atoi(pb[i])
-		}
-		if x != y {
-			if x > y {
-				return 1
-			}
-			return -1
-		}
-	}
-	return 0
-}
-
 /* ── Catalog ────────────────────────────────────────────────────────────── */
 
 func (s *Store) CatalogList(ctx context.Context) ([]model.CatalogAgent, error) {
@@ -420,20 +398,6 @@ func (s *Store) CatalogForTenant(ctx context.Context, slug string) ([]model.Cata
 	return out, nil
 }
 
-func (s *Store) CreateCatalogAgent(ctx context.Context, id, name, description, agentType, agentModel, owner, createdBy string, def shared.AgentDefinition) error {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-	if err := insertCatalogAgent(ctx, tx, id, name, description, agentType, agentModel, owner, createdBy, def); err != nil {
-		return err
-	}
-	return tx.Commit(ctx)
-}
-
-// CatalogAgentOwner returns a catalog agent's owner ("" = platform-authored),
-// used to enforce that a tenant may only edit agents it owns.
 func (s *Store) CatalogAgentOwner(ctx context.Context, agentID string) (string, error) {
 	var owner string
 	err := s.pool.QueryRow(ctx, `SELECT owner_tenant FROM catalog_agents WHERE id = $1`, agentID).Scan(&owner)
@@ -571,10 +535,6 @@ func (s *Store) MemoryStoreByID(ctx context.Context, id string) (model.MemorySto
 		return m, ErrNotFound
 	}
 	return m, err
-}
-
-func (s *Store) CreateMemoryStore(ctx context.Context, id, name, description, owner string, def shared.MemoryStoreDefinition, createdBy string) error {
-	return insertMemoryStore(ctx, s.pool, id, name, description, owner, def, createdBy)
 }
 
 // UpdateMemoryStore updates only the store's name + description. The definition
@@ -766,33 +726,6 @@ func (s *Store) storesReferencedByEnabledAgents(ctx context.Context, slug string
 		}
 		if id != nil && *id != "" {
 			out[*id] = true
-		}
-	}
-	return out, rows.Err()
-}
-
-// agentStoreRefs returns the store ids referenced by the latest definition of
-// each given catalog agent (any ownership; non-empty only).
-func (s *Store) agentStoreRefs(ctx context.Context, agentIDs []string) ([]string, error) {
-	if len(agentIDs) == 0 {
-		return nil, nil
-	}
-	rows, err := s.pool.Query(ctx,
-		`SELECT (SELECT v.definition->>'memoryStore' FROM catalog_versions v
-		         WHERE v.agent_id = ca.id ORDER BY v.created_at DESC LIMIT 1)
-		 FROM catalog_agents ca WHERE ca.id = ANY($1)`, agentIDs)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []string
-	for rows.Next() {
-		var id *string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		if id != nil && *id != "" {
-			out = append(out, *id)
 		}
 	}
 	return out, rows.Err()
@@ -1657,11 +1590,6 @@ func (s *Store) ApplicationByID(ctx context.Context, id string) (model.Applicati
 	return a, err
 }
 
-// CreateApplication inserts a Helm deployment definition (Owner "" = platform).
-func (s *Store) CreateApplication(ctx context.Context, a model.Application, createdBy string) error {
-	return insertApplication(ctx, s.pool, a, createdBy)
-}
-
 // UpdateApplication updates the full Helm deployment definition (chart, values,
 // wiring, dependencies). Argo re-syncs on the next reconcile.
 func (s *Store) UpdateApplication(ctx context.Context, a model.Application) error {
@@ -1851,11 +1779,6 @@ func (s *Store) InfrastructureByID(ctx context.Context, id string) (model.Infras
 	i.Dependencies = depsFromRaw(draw)
 	i.Platform = i.Owner == ""
 	return i, err
-}
-
-// CreateInfrastructure inserts an infrastructure definition (Owner "" = platform).
-func (s *Store) CreateInfrastructure(ctx context.Context, i model.Infrastructure, createdBy string) error {
-	return insertInfrastructure(ctx, s.pool, i, createdBy)
 }
 
 func (s *Store) UpdateInfrastructure(ctx context.Context, i model.Infrastructure) error {

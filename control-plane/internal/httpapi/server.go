@@ -231,8 +231,7 @@ func (s *Server) handleSetTenantEnabled(w http.ResponseWriter, r *http.Request) 
 
 func (s *Server) handleFleet(w http.ResponseWriter, r *http.Request) {
 	id, _ := auth.IdentityFrom(r.Context())
-	if id.Role != model.RolePlatform {
-		writeErr(w, http.StatusForbidden, "platform admins only")
+	if !s.requirePlatform(w, id) {
 		return
 	}
 	fleet, err := s.store.Fleet(r.Context())
@@ -245,14 +244,8 @@ func (s *Server) handleFleet(w http.ResponseWriter, r *http.Request) {
 
 // handleMyContext returns the caller's own tenant (Tenant Admins).
 func (s *Server) handleMyContext(w http.ResponseWriter, r *http.Request) {
-	id, _ := auth.IdentityFrom(r.Context())
-	if id.Role != model.RoleTenant {
-		writeErr(w, http.StatusBadRequest, "platform admins have no single tenant context; use a tenant drill-in")
-		return
-	}
-	t, err := s.store.EnsureTenantForTID(r.Context(), id.TID, orgNameFromEmail(id.Email))
-	if err != nil {
-		s.fail(w, r, err)
+	t, ok := s.callerTenant(w, r)
+	if !ok {
 		return
 	}
 	s.writeTenantContext(w, r, t)

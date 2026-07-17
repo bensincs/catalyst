@@ -44,7 +44,7 @@ func TestCatalogEntitleEnableLoop(t *testing.T) {
 	defer cleanup()
 
 	// 1. Author a catalog agent (with its definition).
-	if err := st.CreateCatalogAgent(ctx, agentID, "ZZ Test Agent", "desc", "prompt", "gpt-4o", "", "oid-test", shared.AgentDefinition{Instructions: "v1"}); err != nil {
+	if err := insertCatalogAgent(ctx, st.pool, agentID, "ZZ Test Agent", "desc", "prompt", "gpt-4o", "", "oid-test", shared.AgentDefinition{Instructions: "v1"}); err != nil {
 		t.Fatalf("create catalog agent: %v", err)
 	}
 	cat, err := st.CatalogList(ctx)
@@ -136,11 +136,11 @@ func TestMemoryStoreLifecycle(t *testing.T) {
 	defer cleanup()
 
 	// 1. Platform authors a memory store; a catalog agent references it.
-	if err := st.CreateMemoryStore(ctx, storeID, "ZZ Store", "platform memory", "",
+	if err := insertMemoryStore(ctx, st.pool, storeID, "ZZ Store", "platform memory", "",
 		shared.MemoryStoreDefinition{ChatModel: "gpt-4o", EmbeddingModel: "text-embedding-3-small", UserProfileEnabled: true, ChatSummaryEnabled: true}, "oid-test"); err != nil {
 		t.Fatalf("create store: %v", err)
 	}
-	if err := st.CreateCatalogAgent(ctx, agentID, "ZZ MS Agent", "d", "prompt", "gpt-4o", "", "oid-test",
+	if err := insertCatalogAgent(ctx, st.pool, agentID, "ZZ MS Agent", "d", "prompt", "gpt-4o", "", "oid-test",
 		shared.AgentDefinition{Instructions: "v1", MemoryStore: storeID}); err != nil {
 		t.Fatalf("create agent: %v", err)
 	}
@@ -185,7 +185,7 @@ func TestMemoryStoreLifecycle(t *testing.T) {
 
 	// 4. Tenant creates their own store and connects the agent to it (override).
 	tenantStore := slug + "-notes"
-	if err := st.CreateMemoryStore(ctx, tenantStore, "Notes", "tenant memory", slug,
+	if err := insertMemoryStore(ctx, st.pool, tenantStore, "Notes", "tenant memory", slug,
 		shared.MemoryStoreDefinition{ChatModel: "gpt-4o", EmbeddingModel: "text-embedding-3-small", UserProfileEnabled: true}, "oid-tenant"); err != nil {
 		t.Fatalf("create tenant store: %v", err)
 	}
@@ -225,7 +225,7 @@ func TestStoreEnablementLifecycle(t *testing.T) {
 	cleanup()
 	defer cleanup()
 
-	if err := st.CreateMemoryStore(ctx, storeID, "EN Store", "", "",
+	if err := insertMemoryStore(ctx, st.pool, storeID, "EN Store", "", "",
 		shared.MemoryStoreDefinition{ChatModel: "gpt-4o", EmbeddingModel: "text-embedding-3-small"}, "oid"); err != nil {
 		t.Fatalf("create store: %v", err)
 	}
@@ -298,10 +298,10 @@ func TestTenantOwnedAgentVisibility(t *testing.T) {
 		`INSERT INTO tenants (id, name, tenant_id, enrollment) VALUES ($1,'Own Tenant',$2,'bound')`, slug, tid); err != nil {
 		t.Fatalf("insert tenant: %v", err)
 	}
-	if err := st.CreateCatalogAgent(ctx, ownAgent, "My Agent", "", "prompt", "gpt-4o", slug, "oid", shared.AgentDefinition{Instructions: "x"}); err != nil {
+	if err := insertCatalogAgent(ctx, st.pool, ownAgent, "My Agent", "", "prompt", "gpt-4o", slug, "oid", shared.AgentDefinition{Instructions: "x"}); err != nil {
 		t.Fatalf("create owned agent: %v", err)
 	}
-	if err := st.CreateCatalogAgent(ctx, platAgent, "Plat Agent", "", "prompt", "gpt-4o", "", "oid", shared.AgentDefinition{Instructions: "x"}); err != nil {
+	if err := insertCatalogAgent(ctx, st.pool, platAgent, "Plat Agent", "", "prompt", "gpt-4o", "", "oid", shared.AgentDefinition{Instructions: "x"}); err != nil {
 		t.Fatalf("create platform agent: %v", err)
 	}
 
@@ -389,7 +389,7 @@ func TestDeploymentLifecycle(t *testing.T) {
 	defer cleanup()
 
 	// Platform authors a deployable chart.
-	if err := st.CreateApplication(ctx, model.Application{
+	if err := insertApplication(ctx, st.pool, model.Application{
 		ID: appID, Name: "ZZ Nginx", Owner: "", Namespace: "web",
 		RepoURL: "https://charts.example/repo", Chart: "nginx", TargetRevision: "1.0.0",
 	}, "oid"); err != nil {
@@ -507,7 +507,7 @@ func TestDeploymentDependencyCascade(t *testing.T) {
 	defer cleanup()
 
 	mk := func(id, name string, deps []model.Dependency) {
-		if err := st.CreateApplication(ctx, model.Application{
+		if err := insertApplication(ctx, st.pool, model.Application{
 			ID: id, Name: name, Owner: "", Namespace: "web", RepoURL: "https://r", Chart: "c", Dependencies: deps,
 		}, "oid"); err != nil {
 			t.Fatalf("create %s: %v", id, err)
@@ -596,19 +596,19 @@ func TestDependencyGraphEnforcement(t *testing.T) {
 	defer cleanup()
 
 	// Platform entities: a store, an agent that uses it, two infra (infra1→infra2).
-	if err := st.CreateMemoryStore(ctx, store1, "Store", "", "", shared.MemoryStoreDefinition{ChatModel: "gpt-4o", EmbeddingModel: "e"}, "oid"); err != nil {
+	if err := insertMemoryStore(ctx, st.pool, store1, "Store", "", "", shared.MemoryStoreDefinition{ChatModel: "gpt-4o", EmbeddingModel: "e"}, "oid"); err != nil {
 		t.Fatalf("store: %v", err)
 	}
-	if err := st.CreateCatalogAgent(ctx, agent1, "Agent", "", "prompt", "gpt-4o", "", "oid", shared.AgentDefinition{Instructions: "x", MemoryStore: store1}); err != nil {
+	if err := insertCatalogAgent(ctx, st.pool, agent1, "Agent", "", "prompt", "gpt-4o", "", "oid", shared.AgentDefinition{Instructions: "x", MemoryStore: store1}); err != nil {
 		t.Fatalf("agent: %v", err)
 	}
-	if err := st.CreateInfrastructure(ctx, model.Infrastructure{ID: infra2, Name: "Infra2"}, "oid"); err != nil {
+	if err := insertInfrastructure(ctx, st.pool, model.Infrastructure{ID: infra2, Name: "Infra2"}, "oid"); err != nil {
 		t.Fatalf("infra2: %v", err)
 	}
 	if err := st.ValidateDependencies(ctx, model.DepInfrastructure, infra1, "", []model.Dependency{{Kind: model.DepInfrastructure, ID: infra2}}); err != nil {
 		t.Fatalf("valid infra→infra rejected: %v", err)
 	}
-	if err := st.CreateInfrastructure(ctx, model.Infrastructure{ID: infra1, Name: "Infra1", Dependencies: []model.Dependency{{Kind: model.DepInfrastructure, ID: infra2}}}, "oid"); err != nil {
+	if err := insertInfrastructure(ctx, st.pool, model.Infrastructure{ID: infra1, Name: "Infra1", Dependencies: []model.Dependency{{Kind: model.DepInfrastructure, ID: infra2}}}, "oid"); err != nil {
 		t.Fatalf("infra1: %v", err)
 	}
 
@@ -631,7 +631,7 @@ func TestDependencyGraphEnforcement(t *testing.T) {
 	if err := st.ValidateDependencies(ctx, model.DepApplication, app1, "", appDeps); err != nil {
 		t.Fatalf("valid app deps rejected: %v", err)
 	}
-	if err := st.CreateApplication(ctx, model.Application{ID: app1, Name: "App", Namespace: "web", RepoURL: "https://r", Chart: "c", Dependencies: appDeps}, "oid"); err != nil {
+	if err := insertApplication(ctx, st.pool, model.Application{ID: app1, Name: "App", Namespace: "web", RepoURL: "https://r", Chart: "c", Dependencies: appDeps}, "oid"); err != nil {
 		t.Fatalf("app: %v", err)
 	}
 
@@ -706,5 +706,52 @@ func TestDependencyGraphEnforcement(t *testing.T) {
 	}
 	if err := st.SetInfrastructureEntitlements(ctx, slug, []string{}); err != nil {
 		t.Fatalf("un-entitle infra after app removed: %v", err)
+	}
+}
+
+// TestEnableInfrastructureAccessibility locks in the tenant-scoping invariant for
+// infrastructure: a tenant may only enable infrastructure it owns or is entitled
+// to (the other three kinds are covered by the enable tests above).
+func TestEnableInfrastructureAccessibility(t *testing.T) {
+	st, ctx := testStore(t)
+	defer st.Close()
+
+	const (
+		slug      = "zz-infra-acc-tenant"
+		tid       = "zz-infra-acc-tid-0001"
+		platInfra = "zz-infra-acc-plat"
+	)
+	cleanup := func() {
+		st.pool.Exec(ctx, `DELETE FROM tenant_infrastructure WHERE tenant_slug = $1`, slug)
+		st.pool.Exec(ctx, `DELETE FROM infrastructure WHERE id = $1`, platInfra)
+		st.pool.Exec(ctx, `DELETE FROM tenants WHERE id = $1`, slug)
+	}
+	cleanup()
+	defer cleanup()
+
+	// A platform-authored infrastructure, and a tenant NOT entitled to it.
+	if err := insertInfrastructure(ctx, st.pool, model.Infrastructure{ID: platInfra, Name: "Plat Infra"}, "oid"); err != nil {
+		t.Fatalf("insert infra: %v", err)
+	}
+	if _, err := st.pool.Exec(ctx,
+		`INSERT INTO tenants (id, name, tenant_id, enrollment) VALUES ($1,'ZZ Infra Acc Tenant',$2,'bound')`,
+		slug, tid); err != nil {
+		t.Fatalf("insert tenant: %v", err)
+	}
+
+	// Not entitled → refused. Non-existent → refused.
+	if err := st.EnableInfrastructure(ctx, slug, platInfra); err != ErrInfrastructureNotAccessible {
+		t.Fatalf("expected ErrInfrastructureNotAccessible for un-entitled infra, got %v", err)
+	}
+	if err := st.EnableInfrastructure(ctx, slug, "no-such-infra"); err != ErrInfrastructureNotAccessible {
+		t.Fatalf("expected ErrInfrastructureNotAccessible for missing infra, got %v", err)
+	}
+
+	// Entitle → now the tenant may enable it.
+	if err := st.SetInfrastructureEntitlements(ctx, slug, []string{platInfra}); err != nil {
+		t.Fatalf("entitle infra: %v", err)
+	}
+	if err := st.EnableInfrastructure(ctx, slug, platInfra); err != nil {
+		t.Fatalf("enable entitled infra: %v", err)
 	}
 }
