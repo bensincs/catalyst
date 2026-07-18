@@ -1,0 +1,75 @@
+name: Deploy
+
+# Build the api + console images in ACR and roll the Container Apps to the new
+# git SHA. Auth to Azure is passwordless (OIDC federated credential) — see
+# .github/README.md for the one-time setup (or run .github/scripts/azure-oidc-setup.sh).
+
+on:
+  push:
+    branches: [main, feat/k8s-gitops-mesh]
+    # Skip deploys for changes that touch nothing shipped in these two images.
+    paths-ignore:
+      - "reconciler/**"
+      - "cli/**"
+      - "**/*.md"
+      - ".github/**"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false # never interrupt an in-flight deploy
+
+permissions:
+  id-token: write # OIDC token for azure/login
+  contents: read
+
+jobs:
+  deploy:
+    name: ${{ matrix.image }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: cortex-api
+            app: cortex-cp-api
+            dockerfile: control-plane/Dockerfile
+          - image: cortex-console
+            app: cortex-cp-console
+            dockerfile: web/Dockerfile
+    env:
+      RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP || 'cortex-control-plane' }}
+      ACR_NAME: ${{ vars.ACR_NAME || 'cortexcpacrzo7yflmq' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build + push image (${{ matrix.image }})
+        run: |
+          set -euo pipefail
+          SHA="${GITHUB_SHA:0:7}"
+          echo "Building ${{ matrix.image }}:$SHA"
+          az acr build \
+            --registry "$ACR_NAME" \
+            --image "${{ matrix.image }}:$SHA" \
+            --image "${{ matrix.image }}:latest" \
+            --file "${{ matrix.dockerfile }}" \
+            .
+
+      - name: Deploy to Container App (${{ matrix.app }})
+        run: |
+          set -euo pipefail
+          SHA="${GITHUB_SHA:0:7}"
+          rev=$(az containerapp update \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "${{ matrix.app }}" \
+            --image "$ACR_NAME.azurecr.io/${{ matrix.image }}:$SHA" \
+            --query "properties.latestRevisionName" -o tsv)
+          echo "Deployed ${{ matrix.app }} → $rev"
+          echo "### ${{ matrix.app }} → \`$SHA\` ($rev)" >> "$GITHUB_STEP_SUMMARY"

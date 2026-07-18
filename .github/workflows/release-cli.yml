@@ -1,0 +1,55 @@
+name: Release cortexctl
+
+# Cross-compile the CLI and attach the binaries to a GitHub Release. Tag a
+# release as `cortexctl-vX.Y.Z`; workflow_dispatch just builds the artifacts.
+
+on:
+  push:
+    tags: ["cortexctl-v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write # create the release / upload assets
+
+jobs:
+  build:
+    name: build · package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Cross-compile
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          version="${GITHUB_REF_NAME}"
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
+            os="${target%/*}"; arch="${target#*/}"
+            ext=""; [ "$os" = "windows" ] && ext=".exe"
+            out="dist/cortexctl-${os}-${arch}${ext}"
+            echo "→ $out"
+            CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" \
+              go build -trimpath -ldflags="-s -w" -o "$out" ./cli/
+          done
+          (cd dist && sha256sum cortexctl-* > checksums.txt)
+          ls -la dist
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cortexctl
+          path: dist/*
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "cortexctl $GITHUB_REF_NAME" \
+            --generate-notes

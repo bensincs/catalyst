@@ -1,0 +1,73 @@
+name: Deploy reconciler
+
+# The in-tenant reconciler is pulled by every customer's Container App, so it
+# lives in a dedicated anonymous-pull registry. This builds it into the private
+# ACR and imports it to the public one. It does NOT change what tenants run until
+# you deliberately promote it (workflow_dispatch → promote) — a web/api deploy
+# must never re-ship the reconciler to customers.
+
+on:
+  push:
+    branches: [main, feat/k8s-gitops-mesh]
+    paths:
+      - "reconciler/**"
+      - "shared/**"
+      - "go.mod"
+      - "go.sum"
+  workflow_dispatch:
+    inputs:
+      promote:
+        description: "Point the control plane's RECONCILER_IMAGE at this build (ships it into new tenant footprints)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: deploy-reconciler-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  reconciler:
+    name: build · import${{ github.event.inputs.promote == 'true' && ' · promote' || '' }}
+    runs-on: ubuntu-latest
+    env:
+      RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP || 'cortex-control-plane' }}
+      ACR_NAME: ${{ vars.ACR_NAME || 'cortexcpacrzo7yflmq' }}
+      PUBLIC_ACR_NAME: ${{ vars.PUBLIC_ACR_NAME || 'cortexpubliczo7yflmq' }}
+      API_APP: ${{ vars.API_APP || 'cortex-cp-api' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build + publish reconciler
+        run: |
+          set -euo pipefail
+          SHA="${GITHUB_SHA:0:7}"
+          az acr build --registry "$ACR_NAME" \
+            --image "cortex-reconciler:$SHA" \
+            --file reconciler/Dockerfile .
+          # Copy into the anonymous-pull registry the customer Container Apps use.
+          az acr import --name "$PUBLIC_ACR_NAME" --force \
+            --source "$ACR_NAME.azurecr.io/cortex-reconciler:$SHA" \
+            --image "cortex-reconciler:$SHA"
+          echo "Published $PUBLIC_ACR_NAME.azurecr.io/cortex-reconciler:$SHA"
+          echo "### reconciler published: \`$SHA\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Promote to tenants (RECONCILER_IMAGE)
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.promote == 'true' }}
+        run: |
+          set -euo pipefail
+          SHA="${GITHUB_SHA:0:7}"
+          az containerapp update --resource-group "$RESOURCE_GROUP" --name "$API_APP" \
+            --set-env-vars "RECONCILER_IMAGE=$PUBLIC_ACR_NAME.azurecr.io/cortex-reconciler:$SHA"
+          echo "Promoted: new tenant footprints will pull cortex-reconciler:$SHA"
+          echo "### reconciler promoted to tenants: \`$SHA\`" >> "$GITHUB_STEP_SUMMARY"
