@@ -35,10 +35,9 @@ type config struct {
 	tenant   string
 }
 
-// delegatedScope is the user (browser/device) scope; appScope is the service-
-// principal (.default) scope.
+// delegatedScope is the user (browser/device) scope. The service-principal
+// (.default) scope is built where it is used (from the stored/env sp entry).
 func (c *config) delegatedScope() []string { return []string{"api://" + c.apiApp + "/access_as_user"} }
-func (c *config) appScope() []string       { return []string{"api://" + c.apiApp + "/.default"} }
 
 func envOr(key, def string) string {
 	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
