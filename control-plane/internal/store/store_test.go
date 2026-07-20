@@ -756,10 +756,11 @@ func TestEnableInfrastructureAccessibility(t *testing.T) {
 	}
 }
 
-// TestInfraTeardownQueue: disabling/deleting provisioned infra queues an Azure
-// teardown (with the tenant's sub); never-provisioned infra queues nothing;
-// re-enabling cancels a pending teardown.
-func TestInfraTeardownQueue(t *testing.T) {
+// TestInfraTeardownLifecycle: a provisioned instance is kept as "deprovisioning"
+// and targeted for teardown on disable/delete, then removed on finalize; a
+// deleted definition survives (as "Deleting") until its last instance is torn
+// down; never-provisioned infra is removed immediately.
+func TestInfraTeardownLifecycle(t *testing.T) {
 	st, ctx := testStore(t)
 	defer st.Close()
 
@@ -770,7 +771,6 @@ func TestInfraTeardownQueue(t *testing.T) {
 		infra = "zz-td-infra"
 	)
 	cleanup := func() {
-		st.pool.Exec(ctx, `DELETE FROM infra_teardowns WHERE tenant_slug = $1`, slug)
 		st.pool.Exec(ctx, `DELETE FROM tenant_infrastructure WHERE tenant_slug = $1`, slug)
 		st.pool.Exec(ctx, `DELETE FROM infrastructure WHERE id = $1`, infra)
 		st.pool.Exec(ctx, `DELETE FROM tenants WHERE id = $1`, slug)
@@ -778,20 +778,30 @@ func TestInfraTeardownQueue(t *testing.T) {
 	cleanup()
 	defer cleanup()
 
-	if err := insertInfrastructure(ctx, st.pool,
-		model.Infrastructure{ID: infra, Name: "TD", ArmTemplate: `{"resources":[]}`}, "oid"); err != nil {
-		t.Fatalf("insert infra: %v", err)
+	mkInfra := func() {
+		if err := insertInfrastructure(ctx, st.pool,
+			model.Infrastructure{ID: infra, Name: "TD", ArmTemplate: `{"resources":[]}`}, "oid"); err != nil {
+			t.Fatalf("insert infra: %v", err)
+		}
 	}
+	mkInfra()
 	if _, err := st.pool.Exec(ctx,
 		`INSERT INTO tenants (id, name, tenant_id, subscription_id, enrollment, entitled_infrastructure)
-		 VALUES ($1,'TD Tenant',$2,$3,'bound',ARRAY[$4])`, slug, tid, sub, infra); err != nil {
+		 VALUES ($1,'TD',$2,$3,'bound',ARRAY[$4])`, slug, tid, sub, infra); err != nil {
 		t.Fatalf("insert tenant: %v", err)
 	}
 
-	queued := func() bool {
-		tds, err := st.InfraTeardowns(ctx)
+	count := func(q string, args ...any) int {
+		var n int
+		if err := st.pool.QueryRow(ctx, q, args...).Scan(&n); err != nil {
+			t.Fatalf("count: %v", err)
+		}
+		return n
+	}
+	targeted := func() bool {
+		tds, err := st.InfraTeardownTargets(ctx)
 		if err != nil {
-			t.Fatalf("teardowns: %v", err)
+			t.Fatalf("targets: %v", err)
 		}
 		for _, td := range tds {
 			if td.TenantSlug == slug && td.InfraID == infra {
@@ -803,61 +813,74 @@ func TestInfraTeardownQueue(t *testing.T) {
 		}
 		return false
 	}
+	instanceRows := func() int {
+		return count(`SELECT count(*) FROM tenant_infrastructure WHERE tenant_slug=$1 AND infra_id=$2`, slug, infra)
+	}
+	deprovisioning := func() int {
+		return count(`SELECT count(*) FROM tenant_infrastructure WHERE tenant_slug=$1 AND infra_id=$2 AND pending_delete AND infra_state='deprovisioning'`, slug, infra)
+	}
+	defRows := func() int { return count(`SELECT count(*) FROM infrastructure WHERE id=$1`, infra) }
+	defPending := func() int { return count(`SELECT count(*) FROM infrastructure WHERE id=$1 AND pending_delete`, infra) }
 
-	// Enable + mark provisioned, then disable → a teardown is queued.
+	// Enable + provision, then Disable → instance kept, deprovisioning + targeted.
 	if err := st.EnableInfrastructure(ctx, slug, infra); err != nil {
 		t.Fatalf("enable: %v", err)
 	}
-	if err := st.SetInfraState(ctx, slug, infra, "ready", map[string]any{"x": 1}); err != nil {
-		t.Fatalf("set state: %v", err)
+	if err := st.SetInfraState(ctx, slug, infra, "ready", nil); err != nil {
+		t.Fatalf("state: %v", err)
 	}
 	if err := st.DisableInfrastructure(ctx, slug, infra); err != nil {
 		t.Fatalf("disable: %v", err)
 	}
-	if !queued() {
-		t.Fatal("expected a queued teardown after disabling provisioned infra")
+	if deprovisioning() != 1 || !targeted() {
+		t.Fatal("disabled provisioned infra should be kept deprovisioning + targeted")
 	}
-	var n int
-	st.pool.QueryRow(ctx, `SELECT count(*) FROM tenant_infrastructure WHERE tenant_slug=$1 AND infra_id=$2`, slug, infra).Scan(&n)
-	if n != 0 {
-		t.Fatalf("tenant_infrastructure row should be gone, got %d", n)
+	if defPending() != 0 {
+		t.Fatal("disable must not mark the definition")
 	}
 
-	// Clearing removes it (what the provisioner does after teardown).
-	if err := st.ClearInfraTeardown(ctx, slug, infra); err != nil {
-		t.Fatalf("clear: %v", err)
+	// Finalize → instance gone; definition remains (disable, not delete).
+	if err := st.FinalizeInfraTeardown(ctx, slug, infra); err != nil {
+		t.Fatalf("finalize: %v", err)
 	}
-	if queued() {
-		t.Fatal("teardown should be cleared")
+	if instanceRows() != 0 || defRows() != 1 {
+		t.Fatal("finalize should remove the instance but keep the definition")
 	}
 
-	// Enable (fresh, never provisioned) then disable → nothing to tear down.
+	// Re-enable + provision, then DELETE the definition → def "Deleting", instance deprovisioning.
 	if err := st.EnableInfrastructure(ctx, slug, infra); err != nil {
 		t.Fatalf("re-enable: %v", err)
 	}
-	if err := st.DisableInfrastructure(ctx, slug, infra); err != nil {
-		t.Fatalf("disable2: %v", err)
+	if err := st.SetInfraState(ctx, slug, infra, "ready", nil); err != nil {
+		t.Fatalf("state2: %v", err)
 	}
-	if queued() {
-		t.Fatal("no teardown expected for never-provisioned infra")
+	if err := st.DeleteInfrastructure(ctx, infra); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if defPending() != 1 || deprovisioning() != 1 || !targeted() {
+		t.Fatal("deleting a provisioned definition should keep both, marked + targeted")
 	}
 
-	// Re-enabling cancels a pending teardown.
+	// Finalize the last instance → the definition is removed.
+	if err := st.FinalizeInfraTeardown(ctx, slug, infra); err != nil {
+		t.Fatalf("finalize2: %v", err)
+	}
+	if instanceRows() != 0 || defRows() != 0 {
+		t.Fatal("finalizing the last instance should remove the definition")
+	}
+
+	// Never-provisioned: enable + disable → removed immediately, no teardown.
+	mkInfra()
+	if _, err := st.pool.Exec(ctx, `UPDATE tenants SET entitled_infrastructure = ARRAY[$2] WHERE id = $1`, slug, infra); err != nil {
+		t.Fatalf("re-entitle: %v", err)
+	}
 	if err := st.EnableInfrastructure(ctx, slug, infra); err != nil {
 		t.Fatalf("enable3: %v", err)
 	}
-	if err := st.SetInfraState(ctx, slug, infra, "ready", nil); err != nil {
-		t.Fatalf("state3: %v", err)
+	if err := st.DisableInfrastructure(ctx, slug, infra); err != nil {
+		t.Fatalf("disable3: %v", err)
 	}
-	if _, err := st.pool.Exec(ctx,
-		`INSERT INTO infra_teardowns (tenant_slug, subscription_id, infra_id) VALUES ($1,$2,$3)
-		 ON CONFLICT DO NOTHING`, slug, sub, infra); err != nil {
-		t.Fatalf("seed teardown: %v", err)
-	}
-	if err := st.EnableInfrastructure(ctx, slug, infra); err != nil {
-		t.Fatalf("enable4: %v", err)
-	}
-	if queued() {
-		t.Fatal("re-enable should have cancelled the pending teardown")
+	if instanceRows() != 0 || targeted() {
+		t.Fatal("never-provisioned infra should be removed with no teardown target")
 	}
 }

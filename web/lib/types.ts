@@ -181,9 +181,10 @@ export interface Infrastructure {
   owned: boolean;
   entitled: boolean;
   enabled?: boolean; // explicitly enabled (provisioned) in the viewing tenant
-  infraState?: string; // Bicep infra: "" | provisioning | ready | failed
+  infraState?: string; // Bicep infra: "" | provisioning | ready | failed | deprovisioning
   health?: Health; // per-tenant lifecycle when enabled: reconciling | live | blocked
   waiting?: boolean; // enabled but held until dependencies converge
+  pendingDelete?: boolean; // definition is being deleted + torn down ("Deleting")
 }
 
 /** A deployment defined as a catalog entity (like an agent or memory store):

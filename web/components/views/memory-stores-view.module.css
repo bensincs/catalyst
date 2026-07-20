@@ -32,6 +32,11 @@
 .list .row:last-child {
   border-bottom: none;
 }
+/* Being torn down — visually recede while the resources are removed. */
+.row[data-removing] .rowName,
+.row[data-removing] .rowDesc {
+  opacity: 0.6;
+}
 
 .rowIcon {
   display: grid;

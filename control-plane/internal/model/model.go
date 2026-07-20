@@ -207,9 +207,12 @@ type Infrastructure struct {
 	Owned      bool   `json:"owned"`
 	Entitled   bool   `json:"entitled"`
 	Enabled    bool   `json:"enabled"`
-	InfraState string `json:"infraState,omitempty"` // "" | provisioning | ready | failed
+	InfraState string `json:"infraState,omitempty"` // "" | provisioning | ready | failed | deprovisioning
 	Health     string `json:"health,omitempty"`     // reconciling | live | blocked
 	Waiting    bool   `json:"waiting,omitempty"`     // enabled but held for unmet infra deps
+	// PendingDelete: the definition is being deleted and torn down; kept visible
+	// as "Deleting" until its last provisioned instance is gone.
+	PendingDelete bool `json:"pendingDelete,omitempty"`
 	// Populated in the platform view:
 	OwnerName string `json:"ownerName,omitempty"`
 }

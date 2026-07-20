@@ -8,7 +8,7 @@
 export type StatusTone = "success" | "info" | "warning" | "danger" | "neutral";
 
 export interface ResourceStatus {
-  key: "queued" | "waiting" | "deploying" | "live" | "failed" | "drift";
+  key: "queued" | "waiting" | "deploying" | "live" | "failed" | "drift" | "deprovisioning" | "deleting";
   label: string;
   tone: StatusTone;
   pulse: boolean;
@@ -20,6 +20,10 @@ const DEPLOYING: ResourceStatus = { key: "deploying", label: "Deploying", tone: 
 const LIVE: ResourceStatus = { key: "live", label: "Live", tone: "success", pulse: true };
 const FAILED: ResourceStatus = { key: "failed", label: "Failed", tone: "danger", pulse: false };
 const DRIFT: ResourceStatus = { key: "drift", label: "Drift", tone: "warning", pulse: false };
+const DEPROVISIONING: ResourceStatus = { key: "deprovisioning", label: "Deprovisioning", tone: "info", pulse: true };
+/** DELETING is the definition-level counterpart: the catalog entry itself is
+ *  being removed once its last provisioned instance is torn down. */
+export const DELETING: ResourceStatus = { key: "deleting", label: "Deleting", tone: "warning", pulse: true };
 
 // Reconciler health (applications / agents / memory stores) → unified status.
 function fromHealth(health?: string): ResourceStatus {
@@ -48,6 +52,8 @@ export function infraStatus(infraState?: string): ResourceStatus {
       return FAILED;
     case "provisioning":
       return DEPLOYING;
+    case "deprovisioning":
+      return DEPROVISIONING;
     default:
       return QUEUED;
   }

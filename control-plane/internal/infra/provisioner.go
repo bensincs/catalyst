@@ -277,7 +277,7 @@ func trunc(s string) string {
 // it only touches resources a Cortex deployment (cortex-app-<id>) created, and a
 // transient failure leaves the queue row for the next sweep.
 func (p *Provisioner) teardown(ctx context.Context) {
-	tds, err := p.store.InfraTeardowns(ctx)
+	tds, err := p.store.InfraTeardownTargets(ctx)
 	if err != nil {
 		slog.Warn("infra: list teardowns failed", "err", trunc(err.Error()))
 		return
@@ -289,7 +289,7 @@ func (p *Provisioner) teardown(ctx context.Context) {
 
 func (p *Provisioner) deprovision(ctx context.Context, td store.InfraTeardown) {
 	if td.SubscriptionID == "" {
-		_ = p.store.ClearInfraTeardown(ctx, td.TenantSlug, td.InfraID)
+		_ = p.store.FinalizeInfraTeardown(ctx, td.TenantSlug, td.InfraID)
 		return
 	}
 	name := deploymentName(td.InfraID)
@@ -300,7 +300,7 @@ func (p *Provisioner) deprovision(ctx context.Context, td store.InfraTeardown) {
 	}
 	if !found {
 		// Never provisioned, or already gone — nothing to delete.
-		_ = p.store.ClearInfraTeardown(ctx, td.TenantSlug, td.InfraID)
+		_ = p.store.FinalizeInfraTeardown(ctx, td.TenantSlug, td.InfraID)
 		return
 	}
 	allGone := true
@@ -316,7 +316,7 @@ func (p *Provisioner) deprovision(ctx context.Context, td store.InfraTeardown) {
 	// Resources deleted → drop the deployment records (metadata) + clear the queue.
 	_ = p.armDelete(ctx, p.deploymentURL(td.SubscriptionID, name))
 	_ = p.armDelete(ctx, p.deploymentURL(td.SubscriptionID, name+"-m"))
-	_ = p.store.ClearInfraTeardown(ctx, td.TenantSlug, td.InfraID)
+	_ = p.store.FinalizeInfraTeardown(ctx, td.TenantSlug, td.InfraID)
 	slog.Info("infra: deprovisioned", "infra", td.InfraID, "tenant", td.TenantSlug, "resources", len(resources))
 }
 

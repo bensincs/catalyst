@@ -31,3 +31,6 @@ Thumbs.db
 # ── agent / local tooling ──────────────────────────────
 .opencode/
 .impeccable/
+
+# local scratch
+arch.tldraw

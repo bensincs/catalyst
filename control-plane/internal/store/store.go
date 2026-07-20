@@ -1149,7 +1149,7 @@ func (s *Store) InfraTargets(ctx context.Context) ([]InfraTarget, error) {
 		 FROM tenant_infrastructure ti
 		 JOIN infrastructure i ON i.id = ti.infra_id
 		 JOIN tenants t ON t.id = ti.tenant_slug
-		 WHERE i.arm_template <> '' AND coalesce(t.subscription_id,'') <> ''`)
+		 WHERE i.arm_template <> '' AND coalesce(t.subscription_id,'') <> '' AND ti.pending_delete = false`)
 	if err != nil {
 		return nil, err
 	}
@@ -1686,10 +1686,10 @@ func (s *Store) DisableDeployment(ctx context.Context, slug, appID string) error
 // infrastructure it neither owns nor is entitled to.
 var ErrInfrastructureNotAccessible = errors.New("infrastructure not accessible to tenant")
 
-const infraCols = `i.id, i.name, i.description, i.owner_tenant, i.bicep, i.bicep_params, i.bicep_outputs, i.dependencies, i.created_by, i.created_at`
+const infraCols = `i.id, i.name, i.description, i.owner_tenant, i.bicep, i.bicep_params, i.bicep_outputs, i.dependencies, i.created_by, i.created_at, i.pending_delete`
 
 func infraScanDest(i *model.Infrastructure, paramsRaw, depsRaw *[]byte) []any {
-	return []any{&i.ID, &i.Name, &i.Description, &i.Owner, &i.BicepModule, paramsRaw, &i.BicepOutputs, depsRaw, &i.CreatedBy, &i.CreatedAt}
+	return []any{&i.ID, &i.Name, &i.Description, &i.Owner, &i.BicepModule, paramsRaw, &i.BicepOutputs, depsRaw, &i.CreatedBy, &i.CreatedAt, &i.PendingDelete}
 }
 
 // InfrastructureList is the platform view: every infrastructure definition + owner.
@@ -1737,7 +1737,8 @@ func (s *Store) InfrastructureForTenant(ctx context.Context, slug string) ([]mod
 		        (ti.infra_id IS NOT NULL) AS enabled, coalesce(ti.infra_state,''), coalesce(ti.health,''), coalesce(ti.auto,false)
 		 FROM infrastructure i
 		 LEFT JOIN tenant_infrastructure ti ON ti.infra_id = i.id AND ti.tenant_slug = $1
-		 WHERE i.owner_tenant = $1 OR (i.owner_tenant = '' AND i.id = ANY($2))
+		 WHERE (i.owner_tenant = $1 OR (i.owner_tenant = '' AND i.id = ANY($2)))
+		   AND (ti.infra_id IS NOT NULL OR i.pending_delete = false)
 		 ORDER BY i.created_at DESC`, slug, entitled)
 	if err != nil {
 		return nil, err
@@ -1761,7 +1762,7 @@ func (s *Store) InfrastructureForTenant(ctx context.Context, slug string) ([]mod
 		if enabled {
 			i.InfraState = infraState
 			i.Health = health
-			i.Waiting = infraState != "ready" && infraState != "failed"
+			i.Waiting = infraState != "ready" && infraState != "failed" && infraState != "deprovisioning"
 		}
 		out = append(out, i)
 	}
@@ -1797,20 +1798,36 @@ func (s *Store) UpdateInfrastructure(ctx context.Context, i model.Infrastructure
 }
 
 func (s *Store) DeleteInfrastructure(ctx context.Context, id string) error {
-	tag, err := s.pool.Exec(ctx, `DELETE FROM infrastructure WHERE id = $1`, id)
+	// Mark the definition as being deleted (shown "Deleting"); it is removed once
+	// its last provisioned instance is torn down.
+	tag, err := s.pool.Exec(ctx, `UPDATE infrastructure SET pending_delete = true WHERE id = $1`, id)
 	if err != nil {
 		return err
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
 	}
+	// Stop offering it — detach from every tenant's entitlements.
 	_, _ = s.pool.Exec(ctx, `UPDATE tenants SET entitled_infrastructure = array_remove(entitled_infrastructure, $1)`, id)
-	// Capture a teardown for every tenant that provisioned it, then drop the rows.
-	if err := enqueueInfraTeardownsForDefinition(ctx, s.pool, id); err != nil {
+	// Provisioned instances → mark for teardown (kept as "Deprovisioning").
+	if _, err := s.pool.Exec(ctx,
+		`UPDATE tenant_infrastructure ti SET pending_delete = true, infra_state = 'deprovisioning', health = 'reconciling', auto = false
+		 FROM tenants t WHERE ti.tenant_slug = t.id AND ti.infra_id = $1
+		   AND ti.infra_state <> '' AND coalesce(t.subscription_id, '') <> ''`, id); err != nil {
 		return err
 	}
-	_, _ = s.pool.Exec(ctx, `DELETE FROM tenant_infrastructure WHERE infra_id = $1`, id)
-	return nil
+	// Never-provisioned instances → drop immediately (nothing in Azure).
+	if _, err := s.pool.Exec(ctx,
+		`DELETE FROM tenant_infrastructure ti USING tenants t
+		 WHERE ti.tenant_slug = t.id AND ti.infra_id = $1
+		   AND (ti.infra_state = '' OR coalesce(t.subscription_id, '') = '')`, id); err != nil {
+		return err
+	}
+	// Nothing left to tear down anywhere → remove the definition now.
+	_, err = s.pool.Exec(ctx,
+		`DELETE FROM infrastructure WHERE id = $1 AND pending_delete = true
+		   AND NOT EXISTS (SELECT 1 FROM tenant_infrastructure WHERE infra_id = $1)`, id)
+	return err
 }
 
 // InfrastructureOwner returns an infrastructure entity's owner ("" = platform).
@@ -1830,7 +1847,7 @@ func (s *Store) SetInfrastructureEntitlements(ctx context.Context, slug string, 
 func (s *Store) infrastructureAccessible(ctx context.Context, slug, id string) (bool, error) {
 	var ok bool
 	err := s.pool.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM infrastructure i WHERE i.id = $2 AND
+		`SELECT EXISTS(SELECT 1 FROM infrastructure i WHERE i.id = $2 AND i.pending_delete = false AND
 		   (i.owner_tenant = $1 OR (i.owner_tenant = '' AND i.id IN
 		     (SELECT unnest(entitled_infrastructure) FROM tenants WHERE id = $1))))`,
 		slug, id).Scan(&ok)
@@ -1852,12 +1869,12 @@ func (s *Store) EnableInfrastructure(ctx context.Context, slug, id string) error
 		`INSERT INTO tenant_infrastructure (tenant_slug, infra_id, health, auto, sort_order)
 		 VALUES ($1,$2,'reconciling',false,
 		         coalesce((SELECT max(sort_order)+1 FROM tenant_infrastructure WHERE tenant_slug=$1),1))
-		 ON CONFLICT (tenant_slug, infra_id) DO UPDATE SET auto = false`,
+		 ON CONFLICT (tenant_slug, infra_id) DO UPDATE SET
+		   auto = false,
+		   pending_delete = false,
+		   infra_state = CASE WHEN tenant_infrastructure.pending_delete THEN '' ELSE tenant_infrastructure.infra_state END,
+		   health = CASE WHEN tenant_infrastructure.pending_delete THEN 'reconciling' ELSE tenant_infrastructure.health END`,
 		slug, id); err != nil {
-		return err
-	}
-	// Re-enabling before the sweep runs cancels any queued teardown.
-	if err := s.ClearInfraTeardown(ctx, slug, id); err != nil {
 		return err
 	}
 	return s.autoEnableDeps(ctx, slug, model.DepInfrastructure, id)
@@ -1873,17 +1890,29 @@ func (s *Store) DisableInfrastructure(ctx context.Context, slug, id string) erro
 	if len(deps) > 0 {
 		return ErrInUse
 	}
-	// Capture the Azure teardown (if it was provisioned) before dropping the row.
-	if err := enqueueInfraTeardown(ctx, s.pool, slug, id); err != nil {
-		return err
+	// A provisioned instance (has a deployment + subscription) is marked for
+	// teardown and stays visible as "Deprovisioning" until the provisioner removes
+	// its Azure resources; anything never provisioned is dropped immediately.
+	var infraState, sub string
+	err = s.pool.QueryRow(ctx,
+		`SELECT ti.infra_state, coalesce(t.subscription_id, '')
+		 FROM tenant_infrastructure ti JOIN tenants t ON t.id = ti.tenant_slug
+		 WHERE ti.tenant_slug = $1 AND ti.infra_id = $2`, slug, id).Scan(&infraState, &sub)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
 	}
-	tag, err := s.pool.Exec(ctx,
-		`DELETE FROM tenant_infrastructure WHERE tenant_slug = $1 AND infra_id = $2`, slug, id)
 	if err != nil {
 		return err
 	}
-	if tag.RowsAffected() == 0 {
-		return ErrNotFound
+	if infraState != "" && sub != "" {
+		if _, err := s.pool.Exec(ctx,
+			`UPDATE tenant_infrastructure SET pending_delete = true, infra_state = 'deprovisioning', health = 'reconciling', auto = false
+			 WHERE tenant_slug = $1 AND infra_id = $2`, slug, id); err != nil {
+			return err
+		}
+	} else if _, err := s.pool.Exec(ctx,
+		`DELETE FROM tenant_infrastructure WHERE tenant_slug = $1 AND infra_id = $2`, slug, id); err != nil {
+		return err
 	}
 	return s.pruneAutoDeps(ctx, slug)
 }

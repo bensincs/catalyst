@@ -15,7 +15,7 @@ import {
   type ActionResult,
 } from "@/lib/actions";
 import { type Infrastructure, type Role } from "@/lib/types";
-import { infraStatus } from "@/lib/status";
+import { DELETING, infraStatus } from "@/lib/status";
 import styles from "./memory-stores-view.module.css";
 
 export function InfrastructureView({
@@ -87,16 +87,23 @@ export function InfrastructureView({
         <ul className={styles.list} role="list">
           {infrastructure.map((i) => {
             const sc = scope(i);
+            // Being removed: the definition ("Deleting") or a tenant instance
+            // ("Deprovisioning"). Held visible until its Azure resources are gone.
+            const removing = i.pendingDelete || i.infraState === "deprovisioning";
             return (
-              <li key={i.id} className={styles.row}>
+              <li key={i.id} className={styles.row} data-removing={removing || undefined}>
                 <div className={styles.rowIcon} aria-hidden>
                   <Boxes size={17} strokeWidth={2} />
                 </div>
                 <div className={styles.rowMain}>
                   <div className={styles.rowTop}>
                     <span className={styles.rowName}>{i.name}</span>
-                    <StatusBadge tone={sc.tone} label={sc.label} variant="soft" />
-                    {!platform && i.enabled && (
+                    {i.pendingDelete ? (
+                      <StatusBadge tone={DELETING.tone} label={DELETING.label} variant="soft" pulse />
+                    ) : (
+                      <StatusBadge tone={sc.tone} label={sc.label} variant="soft" />
+                    )}
+                    {!platform && i.enabled && !i.pendingDelete && (
                       <StatusBadge
                         tone={infraStatus(i.infraState).tone}
                         label={infraStatus(i.infraState).label}
@@ -111,7 +118,7 @@ export function InfrastructureView({
                   {i.description && <p className={styles.rowDesc}>{i.description}</p>}
                   <DefinitionChips infra={i} />
                 </div>
-                {(manageable(i) || (!platform && (i.owned || i.entitled))) && (
+                {!removing && (manageable(i) || (!platform && (i.owned || i.entitled))) && (
                   <div className={styles.rowActions}>
                     {!platform &&
                       (i.owned || i.entitled) &&

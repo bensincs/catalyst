@@ -294,6 +294,9 @@ CREATE TABLE IF NOT EXISTS infrastructure (
   created_at    timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS infrastructure_owner_idx ON infrastructure(owner_tenant);
+-- pending_delete: the definition is being deleted (the UI shows it "Deleting");
+-- it's removed once its last provisioned instance has been torn down.
+ALTER TABLE infrastructure ADD COLUMN IF NOT EXISTS pending_delete boolean NOT NULL DEFAULT false;
 
 -- Per-tenant infrastructure enablement/instance (mirrors tenant_deployments).
 -- The control-plane infra worker provisions it and reports state + resolved
@@ -310,17 +313,12 @@ CREATE TABLE IF NOT EXISTS tenant_infrastructure (
 );
 CREATE INDEX IF NOT EXISTS tenant_infrastructure_tenant_idx ON tenant_infrastructure(tenant_slug);
 
--- Queued cross-tenant teardowns. When a provisioned infrastructure entity is
--- disabled or deleted, a row is captured here (with the tenant's subscription)
--- before its tenant_infrastructure row is removed; the control-plane provisioner
--- deletes the Azure resources its ARM deployment created, then clears the row.
-CREATE TABLE IF NOT EXISTS infra_teardowns (
-  tenant_slug     text NOT NULL,
-  subscription_id text NOT NULL,
-  infra_id        text NOT NULL,
-  requested_at    timestamptz NOT NULL DEFAULT now(),
-  PRIMARY KEY (tenant_slug, infra_id)
-);
+-- pending_delete: the instance is being torn down in Azure (the UI shows it
+-- "Deprovisioning"); the control-plane provisioner deletes the resources its ARM
+-- deployment created, then removes the row. Replaces the old teardown queue —
+-- keeping the row lets the UI show the removal in progress rather than vanishing.
+ALTER TABLE tenant_infrastructure ADD COLUMN IF NOT EXISTS pending_delete boolean NOT NULL DEFAULT false;
+DROP TABLE IF EXISTS infra_teardowns;
 
 -- Which platform infrastructure entities a tenant is entitled to enable.
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS entitled_infrastructure text[] NOT NULL DEFAULT '{}';

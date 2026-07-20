@@ -307,6 +307,7 @@ function toInfrastructure(i: ApiInfrastructure): Infrastructure {
     infraState: i.infraState || undefined,
     health: (i.health as Infrastructure["health"]) || undefined,
     waiting: Boolean(i.waiting),
+    pendingDelete: Boolean(i.pendingDelete),
   };
 }
 
@@ -506,6 +507,7 @@ interface ApiInfrastructure {
   infraState?: string;
   health?: string;
   waiting?: boolean;
+  pendingDelete?: boolean;
 }
 
 export const getInfrastructure = async (): Promise<Infrastructure[]> =>
