@@ -38,11 +38,11 @@ func main() {
 	var clusterClient *cluster.Client
 	if cfg.ClusterEnabled {
 		clusterClient = cluster.New(cred, cluster.Options{
-			SubscriptionID:           cfg.SubscriptionID,
-			ResourceGroup:            cfg.ClusterResourceGroup,
-			ClusterName:              cfg.ClusterName,
-			ArgoVersion:              cfg.ArgoCDVersion,
-			IngressTLSCredentialName: cfg.IngressTLSCredentialName,
+			SubscriptionID: cfg.SubscriptionID,
+			ResourceGroup:  cfg.ClusterResourceGroup,
+			ClusterName:    cfg.ClusterName,
+			ArgoVersion:    cfg.ArgoCDVersion,
+			AppsDomain:     cfg.AppsDomain,
 		})
 	}
 

@@ -100,8 +100,8 @@ param nodeCount int = 2
 @description('Argo CD version the reconciler bootstraps into the cluster.')
 param argocdVersion string = 'v2.13.2'
 
-@description('Name of the Kubernetes TLS secret (in the cortex-ingress namespace) the Envoy ingress terminates HTTPS from. Empty = HTTP only (JWT auth still enforced).')
-param ingressTlsCredentialName string = ''
+@description('DNS suffix for per-app hosts served by the AKS-managed Azure Application Gateway (AGIC), e.g. apps.contoso.com gives <app>.apps.contoso.com. Empty = host-less routing via the gateway default backend.')
+param appsDomain string = ''
 
 @description('Reconciler container image (published by Cortex, or your own registry).')
 param reconcilerImage string = 'ghcr.io/inception42/cortex-reconciler:latest'
@@ -281,6 +281,19 @@ resource aks 'Microsoft.ContainerService/managedClusters@2024-09-01' = if (deplo
         type: 'VirtualMachineScaleSets'
       }
     ]
+    // AGIC (greenfield): the addon provisions and manages an Azure Application
+    // Gateway (+ its own identity and RBAC) in a new subnet, and programs it from
+    // the plain Ingress objects the reconciler stamps per app. This replaces the
+    // in-cluster Envoy ingress; edge identity is no longer enforced.
+    addonProfiles: {
+      ingressApplicationGateway: {
+        enabled: true
+        config: {
+          applicationGatewayName: '${clusterName}-agw'
+          subnetCIDR: '10.225.0.0/16'
+        }
+      }
+    }
   }
 }
 
@@ -383,7 +396,7 @@ resource reconciler 'Microsoft.App/containerApps@2024-03-01' = if (deployReconci
             { name: 'CLUSTER_NAME', value: clusterName }
             { name: 'CLUSTER_RESOURCE_GROUP', value: resourceGroup().name }
             { name: 'ARGOCD_VERSION', value: argocdVersion }
-            { name: 'INGRESS_TLS_CREDENTIAL_NAME', value: ingressTlsCredentialName }
+            { name: 'APPS_DOMAIN', value: appsDomain }
           ]
         }
       ]

@@ -128,9 +128,12 @@ func (k *kube) restMapper() (meta.RESTMapper, error) {
 	return restmapper.NewDiscoveryRESTMapper(gr), nil
 }
 
-// reconcileApplications stamps a desired Argo Application for each deployment,
-// prunes managed Applications no longer desired, and reports each app's status.
-func (k *kube) reconcileApplications(ctx context.Context, apps []shared.DesiredApplication) []shared.ApplicationStatus {
+// reconcileApplications stamps a desired Argo Application + an AGIC Ingress for
+// each deployment, prunes managed Applications/Ingresses no longer desired, and
+// reports each app's status. The Ingress routes the app's host to the Helm
+// release's Service (release name : 80) so the Azure Application Gateway serves
+// it publicly.
+func (k *kube) reconcileApplications(ctx context.Context, apps []shared.DesiredApplication, o Options) []shared.ApplicationStatus {
 	out := make([]shared.ApplicationStatus, 0, len(apps))
 	desired := map[string]bool{}
 	ri := k.dyn.Resource(appGVR).Namespace(argoNamespace)
@@ -139,6 +142,9 @@ func (k *kube) reconcileApplications(ctx context.Context, apps []shared.DesiredA
 		name := appName(a.ID)
 		desired[name] = true
 		k.ensureWorkloadNamespace(ctx, a.Namespace) // make sure the target namespace exists
+		// Expose the app through the App Gateway (AGIC reads this Ingress).
+		ing := appIngress(name, a.Namespace, a.ID, appHost(name, o.AppsDomain))
+		_, _ = k.dyn.Resource(ingGVR).Namespace(a.Namespace).Apply(ctx, name, ing, ssaOpts)
 		st := shared.ApplicationStatus{ID: a.ID, SyncStatus: "pending", HealthStatus: "pending"}
 		if _, err := ri.Apply(ctx, name, buildApplication(a, name), metav1.ApplyOptions{FieldManager: fieldManager, Force: true}); err != nil {
 			st.SyncStatus, st.HealthStatus = "Unknown", "Unknown"
@@ -156,7 +162,8 @@ func (k *kube) reconcileApplications(ctx context.Context, apps []shared.DesiredA
 		out = append(out, st)
 	}
 
-	if list, err := ri.List(ctx, metav1.ListOptions{LabelSelector: labelManaged + "=true," + labelSystem + "!=true"}); err == nil {
+	managed := metav1.ListOptions{LabelSelector: labelManaged + "=true," + labelSystem + "!=true"}
+	if list, err := ri.List(ctx, managed); err == nil {
 		for i := range list.Items {
 			n := list.Items[i].GetName()
 			if !desired[n] {
@@ -164,68 +171,52 @@ func (k *kube) reconcileApplications(ctx context.Context, apps []shared.DesiredA
 			}
 		}
 	}
+	// GC orphaned Ingresses cluster-wide (namespaced resource, listed across all
+	// namespaces) so a removed app stops being served.
+	if list, err := k.dyn.Resource(ingGVR).List(ctx, managed); err == nil {
+		for i := range list.Items {
+			n := list.Items[i].GetName()
+			if !desired[n] {
+				_ = k.dyn.Resource(ingGVR).Namespace(list.Items[i].GetNamespace()).Delete(ctx, n, metav1.DeleteOptions{})
+			}
+		}
+	}
 	return out
-}
-
-// ingressResult is what reconcileIngress reports back for the heartbeat.
-type ingressResult struct {
-	ingressInstalled bool
-	gatewayIP        string
-	issuer           string
 }
 
 // ssaOpts is the server-side-apply option every apply uses.
 var ssaOpts = metav1.ApplyOptions{FieldManager: fieldManager, Force: true}
 
-// reconcileIngress installs the standalone Envoy ingress: a hardened public
-// LoadBalancer whose Envoy config enforces the tenant's Entra JWT (native
-// jwt_authn) and hardens response headers. The config is rendered from the
-// tenant's issuer rules — with none it fails closed (403). It also stamps the
-// restricted tenant Argo project. Reports ingress presence, the public address,
-// and the enforced issuer ("" ⇒ closed).
-func (k *kube) reconcileIngress(ctx context.Context, o Options, auth *shared.IngressAuth) ingressResult {
-	// Bound tenant Helm apps first, so they're restricted the moment they're stamped.
+// ensureTenantProject stamps the restricted Argo project that bounds tenant Helm
+// apps (allowed sources/destinations), so they're constrained the moment they're
+// stamped.
+func (k *kube) ensureTenantProject(ctx context.Context) {
 	_, _ = k.dyn.Resource(prjGVR).Namespace(argoNamespace).Apply(ctx, projectTenants, argoTenantProject(), ssaOpts)
-
-	rules := validAuthRules(auth)
-	cfg := envoyConfig(rules, o.IngressTLSCredentialName)
-
-	_, _ = k.dyn.Resource(nsGVR).Apply(ctx, ingressNS, ingressNamespace(), ssaOpts)
-	_, _ = k.dyn.Resource(saGVR).Namespace(ingressNS).Apply(ctx, ingressName, ingressServiceAccount(), ssaOpts)
-	_, _ = k.dyn.Resource(cmGVR).Namespace(ingressNS).Apply(ctx, ingressCMName, ingressConfigMap(cfg), ssaOpts)
-	_, _ = k.dyn.Resource(depGVR).Namespace(ingressNS).Apply(ctx, ingressName, ingressDeployment(cfg, o.IngressTLSCredentialName), ssaOpts)
-	_, _ = k.dyn.Resource(svcGVR).Namespace(ingressNS).Apply(ctx, ingressName, ingressService(o.IngressTLSCredentialName), ssaOpts)
-
-	res := ingressResult{gatewayIP: k.ingressIP(ctx)}
-	if _, err := k.dyn.Resource(depGVR).Namespace(ingressNS).Get(ctx, ingressName, metav1.GetOptions{}); err == nil {
-		res.ingressInstalled = true
-	}
-	if len(rules) > 0 {
-		res.issuer = rules[0].Issuer
-	}
-	return res
 }
 
-// ingressIP returns the public address (IP or hostname) of the Envoy ingress
-// LoadBalancer Service, or "" until Azure has assigned one.
-func (k *kube) ingressIP(ctx context.Context) string {
-	svc, err := k.dyn.Resource(svcGVR).Namespace(ingressNS).Get(ctx, ingressName, metav1.GetOptions{})
+// appGatewayIP returns the public address (IP or hostname) the Azure Application
+// Gateway assigned, read from any managed app Ingress' status, or "" until AGIC
+// has programmed the gateway.
+func (k *kube) appGatewayIP(ctx context.Context) string {
+	list, err := k.dyn.Resource(ingGVR).List(ctx, metav1.ListOptions{LabelSelector: labelManaged + "=true," + labelSystem + "!=true"})
 	if err != nil {
 		return ""
 	}
-	ing, found, _ := unstructured.NestedSlice(svc.Object, "status", "loadBalancer", "ingress")
-	if !found || len(ing) == 0 {
-		return ""
-	}
-	m, ok := ing[0].(map[string]any)
-	if !ok {
-		return ""
-	}
-	if ip, ok := m["ip"].(string); ok && ip != "" {
-		return ip
-	}
-	if host, ok := m["hostname"].(string); ok {
-		return host
+	for i := range list.Items {
+		ing, found, _ := unstructured.NestedSlice(list.Items[i].Object, "status", "loadBalancer", "ingress")
+		if !found || len(ing) == 0 {
+			continue
+		}
+		m, ok := ing[0].(map[string]any)
+		if !ok {
+			continue
+		}
+		if ip, ok := m["ip"].(string); ok && ip != "" {
+			return ip
+		}
+		if host, ok := m["hostname"].(string); ok && host != "" {
+			return host
+		}
 	}
 	return ""
 }

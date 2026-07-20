@@ -57,19 +57,19 @@ var (
 	prjGVR = schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "appprojects"}
 	nsGVR  = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "namespaces"}
 	depGVR = schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
-	svcGVR = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "services"}
-	saGVR  = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "serviceaccounts"}
-	cmGVR  = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "configmaps"}
+	ingGVR = schema.GroupVersionResource{Group: "networking.k8s.io", Version: "v1", Resource: "ingresses"}
 )
 
 // Options is the full address + policy for one tenant's cluster. Grouping them
 // keeps the constructor stable as the platform surface grows.
 type Options struct {
-	SubscriptionID           string
-	ResourceGroup            string
-	ClusterName              string
-	ArgoVersion              string
-	IngressTLSCredentialName string // cert secret name ⇒ Envoy terminates HTTPS + redirects HTTP
+	SubscriptionID string
+	ResourceGroup  string
+	ClusterName    string
+	ArgoVersion    string
+	// AppsDomain is the DNS suffix for per-app hosts (<app>.<AppsDomain>). Empty
+	// ⇒ host-less Ingress (App Gateway default backend).
+	AppsDomain string
 }
 
 // Client drives one tenant's cluster (one reconciler → one cluster).
@@ -93,8 +93,10 @@ func New(cred azcore.TokenCredential, o Options) *Client {
 }
 
 // Reconcile ensures Argo CD is installed and the desired Helm deployments are
-// stamped as Argo Applications, then returns cluster + per-app status.
-func (c *Client) Reconcile(ctx context.Context, apps []shared.DesiredApplication, auth *shared.IngressAuth) (shared.ClusterStatus, []shared.ApplicationStatus) {
+// stamped as Argo Applications, then returns cluster + per-app status. Apps are
+// exposed through the AKS-managed Azure Application Gateway (AGIC) — the edge no
+// longer enforces identity, so the auth policy is accepted but ignored.
+func (c *Client) Reconcile(ctx context.Context, apps []shared.DesiredApplication, _ *shared.IngressAuth) (shared.ClusterStatus, []shared.ApplicationStatus) {
 	status := shared.ClusterStatus{Name: c.o.ClusterName, Phase: shared.ClusterProvisioning}
 
 	m, err := c.getCluster(ctx)
@@ -137,17 +139,18 @@ func (c *Client) Reconcile(ctx context.Context, apps []shared.DesiredApplication
 	status.ArgoInstalled = true
 	status.Phase = shared.ClusterReady
 
-	// Bootstrap the public ingress: a hardened Envoy LoadBalancer that enforces
-	// this tenant's Entra identity (native JWT) and fails closed when none is set.
-	ir := k.reconcileIngress(ctx, c.o, auth)
-	status.IngressInstalled = ir.ingressInstalled
-	status.GatewayIP = ir.gatewayIP
-	status.IngressIssuer = ir.issuer
+	// Bound tenant apps to their Argo project, then stamp each app's Argo
+	// Application + a plain Ingress. AGIC programs the Azure Application Gateway
+	// from those Ingresses; report the gateway address it assigns.
+	k.ensureTenantProject(ctx)
+	appStatuses := k.reconcileApplications(ctx, apps, c.o)
+	status.GatewayIP = k.appGatewayIP(ctx)
+	status.IngressInstalled = status.GatewayIP != ""
 
 	// Each app's Azure infra is provisioned by the control plane (via Lighthouse)
 	// and its outputs are already merged into the Helm values by the time an app
 	// is served here — the reconciler just stamps the Argo CD Application.
-	return status, k.reconcileApplications(ctx, apps)
+	return status, appStatuses
 }
 
 // --- ARM (cluster metadata + kubeconfig) ------------------------------------

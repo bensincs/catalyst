@@ -1,88 +1,87 @@
 package cluster
 
 import (
-	"strings"
 	"testing"
 
-	"github.com/inception42/cortex/shared"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
-func sampleRule() shared.IngressJWTRule {
-	return shared.IngressJWTRule{
-		Issuer:    "https://login.microsoftonline.com/tid/v2.0",
-		JWKSURI:   "https://login.microsoftonline.com/tid/discovery/v2.0/keys",
-		Audiences: []string{"api://cortex"},
+func TestAppHost(t *testing.T) {
+	if got := appHost("shop", "apps.example.com"); got != "shop.apps.example.com" {
+		t.Fatalf("host: %q", got)
+	}
+	if got := appHost("shop", "  apps.example.com  "); got != "shop.apps.example.com" {
+		t.Fatalf("host should trim domain: %q", got)
+	}
+	if got := appHost("shop", ""); got != "" {
+		t.Fatalf("empty domain should be host-less, got %q", got)
+	}
+	if got := appHost("shop", "   "); got != "" {
+		t.Fatalf("blank domain should be host-less, got %q", got)
 	}
 }
 
-func TestEnvoyConfigFailsClosed(t *testing.T) {
-	cfg := envoyConfig(nil, "")
-	if strings.Contains(cfg, "jwt_authn") {
-		t.Fatalf("no rules should mean no jwt filter:\n%s", cfg)
+func TestAppIngressRoutesToReleaseService(t *testing.T) {
+	ing := appIngress("shop", "tenant-ns", "app-123", "shop.apps.example.com")
+
+	if got := ing.GetAPIVersion(); got != "networking.k8s.io/v1" {
+		t.Fatalf("apiVersion: %q", got)
 	}
-	if !strings.Contains(cfg, "403") {
-		t.Fatalf("no rules should deny closed (403):\n%s", cfg)
+	if got := ing.GetKind(); got != "Ingress" {
+		t.Fatalf("kind: %q", got)
+	}
+	if got := ing.GetName(); got != "shop" {
+		t.Fatalf("name: %q", got)
+	}
+	if got := ing.GetNamespace(); got != "tenant-ns" {
+		t.Fatalf("namespace: %q", got)
+	}
+
+	// Managed (so GC finds it) but NOT system (system resources are excluded
+	// from the app GC selector).
+	labels := ing.GetLabels()
+	if labels[labelManaged] != "true" {
+		t.Fatalf("expected managed label, got %v", labels)
+	}
+	if _, ok := labels[labelSystem]; ok {
+		t.Fatalf("app ingress must not carry the system label: %v", labels)
+	}
+	if labels[labelAppID] != "app-123" {
+		t.Fatalf("expected app-id label, got %v", labels)
+	}
+
+	// AGIC class annotation routes it through the Azure Application Gateway.
+	ann := ing.GetAnnotations()
+	if ann["kubernetes.io/ingress.class"] != appGatewayIngressClass {
+		t.Fatalf("expected AGIC ingress class, got %v", ann)
+	}
+
+	rules, found, err := unstructured.NestedSlice(ing.Object, "spec", "rules")
+	if err != nil || !found || len(rules) != 1 {
+		t.Fatalf("expected one rule, got %v (found=%v err=%v)", rules, found, err)
+	}
+	rule := rules[0].(map[string]any)
+	if rule["host"] != "shop.apps.example.com" {
+		t.Fatalf("expected host on rule, got %v", rule["host"])
+	}
+
+	paths := rule["http"].(map[string]any)["paths"].([]any)
+	backend := paths[0].(map[string]any)["backend"].(map[string]any)
+	svc := backend["service"].(map[string]any)
+	if svc["name"] != "shop" {
+		t.Fatalf("backend must target the release-name Service, got %v", svc["name"])
+	}
+	port := svc["port"].(map[string]any)
+	if port["number"] != int64(80) {
+		t.Fatalf("backend port should be 80, got %v", port["number"])
 	}
 }
 
-func TestEnvoyConfigWithJWT(t *testing.T) {
-	cfg := envoyConfig([]shared.IngressJWTRule{sampleRule()}, "")
-	for _, want := range []string{
-		"jwt_authn",
-		"https://login.microsoftonline.com/tid/v2.0", // issuer
-		"api://cortex",                   // audience
-		"jwks_login_microsoftonline_com", // generated JWKS cluster
-		"UpstreamTlsContext",             // JWKS fetched over TLS
-		"strict-transport-security",      // security-header Lua present
-		"404",                            // authenticated but no backend wired
-	} {
-		if !strings.Contains(cfg, want) {
-			t.Fatalf("config missing %q:\n%s", want, cfg)
-		}
-	}
-	if strings.Contains(cfg, "DownstreamTlsContext") {
-		t.Fatalf("no TLS cred should mean plain HTTP listener")
-	}
-}
-
-func TestEnvoyConfigTLS(t *testing.T) {
-	cfg := envoyConfig([]shared.IngressJWTRule{sampleRule()}, "cortex-tls")
-	for _, want := range []string{"DownstreamTlsContext", "TLSv1_2", "https_redirect", "/etc/envoy/tls/tls.crt"} {
-		if !strings.Contains(cfg, want) {
-			t.Fatalf("TLS config missing %q:\n%s", want, cfg)
-		}
-	}
-}
-
-func TestValidAuthRules(t *testing.T) {
-	auth := &shared.IngressAuth{Rules: []shared.IngressJWTRule{
-		sampleRule(),
-		{Issuer: "x", JWKSURI: "", Audiences: []string{"a"}}, // missing JWKS
-		{Issuer: "", JWKSURI: "y", Audiences: []string{"a"}}, // missing issuer
-		{Issuer: "z", JWKSURI: "w", Audiences: nil},          // missing audience
-	}}
-	got := validAuthRules(auth)
-	if len(got) != 1 || got[0].Issuer != sampleRule().Issuer {
-		t.Fatalf("expected only the complete rule, got %v", got)
-	}
-	if validAuthRules(nil) != nil {
-		t.Fatalf("nil auth should yield nil rules")
-	}
-}
-
-func TestJwksClusterName(t *testing.T) {
-	if got := jwksClusterName("https://login.microsoftonline.com/tid/keys"); got != "jwks_login_microsoftonline_com" {
-		t.Fatalf("cluster name: %q", got)
-	}
-	if got := jwksHost("not a url"); got != "login.microsoftonline.com" {
-		t.Fatalf("bad url should fall back to Entra host, got %q", got)
-	}
-}
-
-func TestConfigHashChanges(t *testing.T) {
-	a := envoyConfig([]shared.IngressJWTRule{sampleRule()}, "")
-	b := envoyConfig(nil, "")
-	if configHash(a) == configHash(b) {
-		t.Fatalf("different configs should hash differently")
+func TestAppIngressHostlessWhenNoDomain(t *testing.T) {
+	ing := appIngress("shop", "tenant-ns", "app-123", "")
+	rules, _, _ := unstructured.NestedSlice(ing.Object, "spec", "rules")
+	rule := rules[0].(map[string]any)
+	if _, ok := rule["host"]; ok {
+		t.Fatalf("host-less ingress must omit the host key: %v", rule)
 	}
 }

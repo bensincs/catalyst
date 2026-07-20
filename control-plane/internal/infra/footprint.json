@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.40.2.10011",
-      "templateHash": "4862001940798379462"
+      "templateHash": "16259457582883746253"
     }
   },
   "parameters": {
@@ -175,11 +175,11 @@
         "description": "Argo CD version the reconciler bootstraps into the cluster."
       }
     },
-    "ingressTlsCredentialName": {
+    "appsDomain": {
       "type": "string",
       "defaultValue": "",
       "metadata": {
-        "description": "Name of the Kubernetes TLS secret (in the cortex-ingress namespace) the Envoy ingress terminates HTTPS from. Empty = HTTP only (JWT auth still enforced)."
+        "description": "DNS suffix for per-app hosts served by the AKS-managed Azure Application Gateway (AGIC), e.g. apps.contoso.com gives <app>.apps.contoso.com. Empty = host-less routing via the gateway default backend."
       }
     },
     "reconcilerImage": {
@@ -377,7 +377,16 @@
             "osSKU": "AzureLinux",
             "type": "VirtualMachineScaleSets"
           }
-        ]
+        ],
+        "addonProfiles": {
+          "ingressApplicationGateway": {
+            "enabled": true,
+            "config": {
+              "applicationGatewayName": "[format('{0}-agw', parameters('clusterName'))]",
+              "subnetCIDR": "10.225.0.0/16"
+            }
+          }
+        }
       }
     },
     {
@@ -530,8 +539,8 @@
                   "value": "[parameters('argocdVersion')]"
                 },
                 {
-                  "name": "INGRESS_TLS_CREDENTIAL_NAME",
-                  "value": "[parameters('ingressTlsCredentialName')]"
+                  "name": "APPS_DOMAIN",
+                  "value": "[parameters('appsDomain')]"
                 }
               ]
             }

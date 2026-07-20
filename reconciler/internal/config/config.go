@@ -40,9 +40,9 @@ type Config struct {
 	ClusterResourceGroup string
 	ArgoCDVersion        string
 
-	// IngressTLSCredentialName, when set, names the TLS secret the Envoy ingress
-	// terminates HTTPS from (redirecting HTTP → HTTPS).
-	IngressTLSCredentialName string
+	// AppsDomain, when set, is the DNS suffix for per-app hosts served by the
+	// Azure Application Gateway (<app>.<AppsDomain>). Empty ⇒ host-less Ingress.
+	AppsDomain string
 }
 
 // Load reads .env then the environment. Nothing is defaulted or derived — every
@@ -87,7 +87,7 @@ func Load() Config {
 		ClusterResourceGroup: strings.TrimSpace(env("CLUSTER_RESOURCE_GROUP")),
 		ArgoCDVersion:        argocd,
 
-		IngressTLSCredentialName: strings.TrimSpace(env("INGRESS_TLS_CREDENTIAL_NAME")),
+		AppsDomain: strings.TrimSpace(env("APPS_DOMAIN")),
 	}
 }
 
