@@ -1,0 +1,112 @@
+name: Infrastructure
+
+# Provision the control-plane's own Azure resources from control-plane/infra
+# (ACR, Postgres, Container Apps environment, the user-assigned identity + its
+# AcrPull grant, Log Analytics). This is deliberately preview-first: every change
+# runs `what-if`; a real apply happens only on a manual run, behind an
+# environment gate.
+#
+# IMPORTANT — the two-pass template (see its header):
+#   • deployApps=false  → base infra only; the running apps + their bound custom
+#     domains are NOT in the template, so incremental deploy leaves them untouched.
+#     This is the safe, routine path.
+#   • deployApps=true   → a full PUT of the container apps: it RESETS the running
+#     image (to imageTag) and DROPS the CLI-bound custom domains. Bootstrap /
+#     recreate only, and re-bind domains + re-pin images (via Deploy) afterwards.
+# App images are owned by deploy.yml, not this workflow.
+
+on:
+  push:
+    branches: [main, feat/k8s-gitops-mesh]
+    paths:
+      - "control-plane/infra/**"
+  pull_request:
+    paths:
+      - "control-plane/infra/**"
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Apply the change (leave off for a what-if preview only)"
+        type: boolean
+        default: false
+      deployApps:
+        description: "Include the container apps — DANGER: resets the running image and drops bound custom domains. Bootstrap/recreate only."
+        type: boolean
+        default: false
+
+concurrency:
+  group: infra-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP || 'cortex-control-plane' }}
+  DEPLOY_APPS: ${{ github.event.inputs.deployApps || 'false' }}
+  TEMPLATE: control-plane/infra/main.bicep
+  PARAMS: control-plane/infra/main.bicepparam
+  # main.bicepparam pulls these at compile time via readEnvironmentVariable().
+  # The two ids are not secret (overridable as repo variables); the three real
+  # secrets must be set as repo secrets and must MATCH the live values — a what-if
+  # will otherwise show (and an apply would perform) a password/secret rotation.
+  CORTEX_ENTRA_CLIENT_ID: ${{ vars.CORTEX_ENTRA_CLIENT_ID || '33e1686e-d227-454a-9974-4978c567720b' }}
+  CORTEX_PLATFORM_TENANT_ID: ${{ vars.CORTEX_PLATFORM_TENANT_ID || 'cab08f14-2b61-43ee-8ebe-16acd8e371bf' }}
+  CORTEX_PG_ADMIN_PASSWORD: ${{ secrets.CORTEX_PG_ADMIN_PASSWORD }}
+  CORTEX_AUTH_SECRET: ${{ secrets.CORTEX_AUTH_SECRET }}
+  CORTEX_ENTRA_CLIENT_SECRET: ${{ secrets.CORTEX_ENTRA_CLIENT_SECRET }}
+
+jobs:
+  plan:
+    name: what-if (deployApps=${{ github.event.inputs.deployApps || 'false' }})
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: What-if
+        run: |
+          set -euo pipefail
+          az deployment group what-if \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "cortex-infra-whatif-${GITHUB_SHA:0:7}" \
+            --template-file "$TEMPLATE" \
+            --parameters "$PARAMS" \
+            --parameters deployApps="$DEPLOY_APPS"
+          echo "What-if complete (deployApps=$DEPLOY_APPS). Review the diff above before applying." >> "$GITHUB_STEP_SUMMARY"
+
+  apply:
+    name: apply
+    # Real applies are manual + opt-in only.
+    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.apply == 'true' }}
+    needs: plan
+    runs-on: ubuntu-latest
+    # Configure required reviewers on this environment (repo → Settings →
+    # Environments → infra-prod) to require human approval before an apply runs.
+    environment: infra-prod
+    steps:
+      - uses: actions/checkout@v4
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Deploy
+        run: |
+          set -euo pipefail
+          az deployment group create \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "cortex-infra-${GITHUB_SHA:0:7}-${GITHUB_RUN_ID}" \
+            --template-file "$TEMPLATE" \
+            --parameters "$PARAMS" \
+            --parameters deployApps="$DEPLOY_APPS"
+          echo "### Infra applied (deployApps=$DEPLOY_APPS)" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$DEPLOY_APPS" = "true" ]; then
+            echo "> deployApps was true — re-bind custom domains and re-run Deploy to re-pin images." >> "$GITHUB_STEP_SUMMARY"
+          fi

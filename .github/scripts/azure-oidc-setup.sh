@@ -59,16 +59,19 @@ for b in "${BRANCHES[@]}"; do
   add_fic "gh-branch-$(echo "$b" | tr '/' '-')" "repo:${REPO}:ref:refs/heads/${b}"
 done
 
-# 3) RBAC — Contributor on the RG (Container Apps) + each registry (acr build/import)
+# 3) RBAC — Owner on the RG (Container Apps + ACR + Postgres, AND the AcrPull role
+#    assignment the infra Bicep declares, which Contributor alone can't create) +
+#    Contributor on each registry (covers a registry that lives outside the RG).
 assign() {
+  local role="$1" scope="$2"
   az role assignment create --assignee-object-id "$SP_OID" --assignee-principal-type ServicePrincipal \
-    --role "Contributor" --scope "$1" >/dev/null 2>&1 || true
-  echo "  + Contributor: $1"
+    --role "$role" --scope "$scope" >/dev/null 2>&1 || true
+  echo "  + $role: $scope"
 }
-assign "/subscriptions/$SUBSCRIPTION/resourceGroups/$RG"
+assign "Owner" "/subscriptions/$SUBSCRIPTION/resourceGroups/$RG"
 for acr in "$ACR_NAME" "$PUBLIC_ACR_NAME"; do
   id="$(az acr show -n "$acr" --query id -o tsv 2>/dev/null || true)"
-  [ -n "$id" ] && assign "$id"
+  [ -n "$id" ] && assign "Contributor" "$id"
 done
 
 # 4) Repo secrets -------------------------------------------------------------
@@ -85,4 +88,8 @@ if command -v gh >/dev/null 2>&1; then
 else
   echo "(gh not found — set the three secrets above manually.)"
 fi
+echo
+echo "The Infrastructure workflow additionally needs these repo secrets, set to the"
+echo "CURRENT live values (a what-if will otherwise show a rotation):"
+echo "  CORTEX_PG_ADMIN_PASSWORD, CORTEX_AUTH_SECRET, CORTEX_ENTRA_CLIENT_SECRET"
 echo "Done."
