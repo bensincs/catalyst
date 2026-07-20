@@ -20,6 +20,10 @@ const (
 	// appGatewayIngressClass routes an Ingress through AGIC ⇒ the Azure
 	// Application Gateway.
 	appGatewayIngressClass = "azure/application-gateway"
+
+	// helmOCISecretName is the Argo CD repository Secret that OCI-enables a Helm
+	// registry (e.g. GHCR) so apps pull their chart over OCI.
+	helmOCISecretName = "cortex-helm-oci"
 )
 
 const kubeAPIServer = "https://kubernetes.default.svc"
@@ -82,6 +86,36 @@ func appIngress(name, namespace, appID, host string) *unstructured.Unstructured 
 		"spec": map[string]any{
 			"rules": []any{rule},
 		},
+	}}
+}
+
+// helmOCIRepoSecret builds the Argo CD repository Secret that OCI-enables a Helm
+// registry, so an Application whose repoURL is that registry pulls its chart over
+// OCI. Credentials are included only when set (public registries need none). The
+// argocd.argoproj.io/secret-type=repository label is what makes Argo adopt it.
+func helmOCIRepoSecret(o Options) *unstructured.Unstructured {
+	data := map[string]any{
+		"type":      "helm",
+		"name":      helmOCISecretName,
+		"url":       o.HelmOCIRegistry,
+		"enableOCI": "true",
+	}
+	if strings.TrimSpace(o.HelmOCIUsername) != "" {
+		data["username"] = o.HelmOCIUsername
+	}
+	if strings.TrimSpace(o.HelmOCIPassword) != "" {
+		data["password"] = o.HelmOCIPassword
+	}
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "v1",
+		"kind":       "Secret",
+		"metadata": map[string]any{
+			"name":      helmOCISecretName,
+			"namespace": argoNamespace,
+			"labels":    sysLabels(map[string]any{"argocd.argoproj.io/secret-type": "repository"}),
+		},
+		"type":       "Opaque",
+		"stringData": data,
 	}}
 }
 

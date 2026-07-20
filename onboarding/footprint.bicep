@@ -103,6 +103,9 @@ param argocdVersion string = 'v2.13.2'
 @description('DNS suffix for per-app hosts served by the AKS-managed Azure Application Gateway (AGIC), e.g. apps.contoso.com gives <app>.apps.contoso.com. Empty = host-less routing via the gateway default backend.')
 param appsDomain string = ''
 
+@description('OCI Helm registry to OCI-enable in Argo CD (e.g. ghcr.io/bensincs), so apps whose repoURL is that registry pull their chart over OCI. Empty = no OCI Helm repo registered.')
+param helmOciRegistry string = ''
+
 @description('Reconciler container image (published by Cortex, or your own registry).')
 param reconcilerImage string = 'ghcr.io/inception42/cortex-reconciler:latest'
 
@@ -397,6 +400,7 @@ resource reconciler 'Microsoft.App/containerApps@2024-03-01' = if (deployReconci
             { name: 'CLUSTER_RESOURCE_GROUP', value: resourceGroup().name }
             { name: 'ARGOCD_VERSION', value: argocdVersion }
             { name: 'APPS_DOMAIN', value: appsDomain }
+            { name: 'HELM_OCI_REGISTRY', value: helmOciRegistry }
           ]
         }
       ]

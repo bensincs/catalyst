@@ -55,8 +55,23 @@ func Resolve(ctx context.Context, ref string, params map[string]any) (arm string
 	}
 	defer os.RemoveAll(dir)
 
+	// GHCR-class registries: Bicep's native br: restore can't fetch them, so pull
+	// the published module ourselves and reference it as a local (compiled) file —
+	// bicep then builds the wrapper with no network restore at all.
+	moduleRef := s
+	if ociHosted(s) {
+		mod, ferr := fetchOCIModule(ctx, s)
+		if ferr != nil {
+			return "", nil, ferr
+		}
+		if werr := os.WriteFile(filepath.Join(dir, localModuleFile), mod, 0o600); werr != nil {
+			return "", nil, werr
+		}
+		moduleRef = localModuleFile
+	}
+
 	// Pass 1: build a wrapper that references the module, to discover its outputs.
-	arm1, err := build(ctx, dir, wrapper(s, nil, params))
+	arm1, err := build(ctx, dir, wrapper(moduleRef, nil, params))
 	if err != nil {
 		return "", nil, err
 	}
@@ -66,7 +81,7 @@ func Resolve(ctx context.Context, ref string, params map[string]any) (arm string
 	}
 	// Pass 2: re-export the module's outputs at the top level so the deployment
 	// surfaces them (that's what the reconciler reads + wires).
-	arm2, err := build(ctx, dir, wrapper(s, outs, params))
+	arm2, err := build(ctx, dir, wrapper(moduleRef, outs, params))
 	if err != nil {
 		return "", nil, err
 	}
@@ -394,6 +409,16 @@ func Inspect(ctx context.Context, ref string) ([]ParamSpec, []OutputSpec, error)
 	}
 	if !isModuleRef(s) {
 		return nil, nil, ErrBadRef
+	}
+	// GHCR-class modules: pull the compiled module directly and read its interface
+	// — no toolchain or br: restore needed.
+	if ociHosted(s) {
+		mod, err := fetchOCIModule(ctx, s)
+		if err != nil {
+			return nil, nil, err
+		}
+		p, o := parseModuleInterface(mod)
+		return p, o, nil
 	}
 	if !Available() {
 		return nil, nil, ErrNoCompiler

@@ -43,6 +43,13 @@ type Config struct {
 	// AppsDomain, when set, is the DNS suffix for per-app hosts served by the
 	// Azure Application Gateway (<app>.<AppsDomain>). Empty ⇒ host-less Ingress.
 	AppsDomain string
+
+	// HelmOCIRegistry, when set, registers an OCI-enabled Argo CD Helm repository
+	// (e.g. ghcr.io/bensincs) so apps whose RepoURL is that registry pull their
+	// chart over OCI. HelmOCIUsername/Password are optional (private packages).
+	HelmOCIRegistry string
+	HelmOCIUsername string
+	HelmOCIPassword string
 }
 
 // Load reads .env then the environment. Nothing is defaulted or derived — every
@@ -88,6 +95,10 @@ func Load() Config {
 		ArgoCDVersion:        argocd,
 
 		AppsDomain: strings.TrimSpace(env("APPS_DOMAIN")),
+
+		HelmOCIRegistry: strings.TrimSpace(env("HELM_OCI_REGISTRY")),
+		HelmOCIUsername: strings.TrimSpace(env("HELM_OCI_USERNAME")),
+		HelmOCIPassword: env("HELM_OCI_PASSWORD"),
 	}
 }
 

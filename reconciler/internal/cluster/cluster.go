@@ -58,6 +58,7 @@ var (
 	nsGVR  = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "namespaces"}
 	depGVR = schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
 	ingGVR = schema.GroupVersionResource{Group: "networking.k8s.io", Version: "v1", Resource: "ingresses"}
+	secGVR = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "secrets"}
 )
 
 // Options is the full address + policy for one tenant's cluster. Grouping them
@@ -70,6 +71,11 @@ type Options struct {
 	// AppsDomain is the DNS suffix for per-app hosts (<app>.<AppsDomain>). Empty
 	// ⇒ host-less Ingress (App Gateway default backend).
 	AppsDomain string
+	// HelmOCIRegistry, when set, registers an OCI-enabled Argo Helm repo so apps
+	// with this RepoURL pull their chart over OCI. User/Pass are optional (private).
+	HelmOCIRegistry string
+	HelmOCIUsername string
+	HelmOCIPassword string
 }
 
 // Client drives one tenant's cluster (one reconciler → one cluster).
@@ -143,6 +149,7 @@ func (c *Client) Reconcile(ctx context.Context, apps []shared.DesiredApplication
 	// Application + a plain Ingress. AGIC programs the Azure Application Gateway
 	// from those Ingresses; report the gateway address it assigns.
 	k.ensureTenantProject(ctx)
+	k.ensureHelmOCIRepo(ctx, c.o)
 	appStatuses := k.reconcileApplications(ctx, apps, c.o)
 	status.GatewayIP = k.appGatewayIP(ctx)
 	status.IngressInstalled = status.GatewayIP != ""

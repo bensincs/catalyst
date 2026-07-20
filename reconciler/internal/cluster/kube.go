@@ -194,6 +194,16 @@ func (k *kube) ensureTenantProject(ctx context.Context) {
 	_, _ = k.dyn.Resource(prjGVR).Namespace(argoNamespace).Apply(ctx, projectTenants, argoTenantProject(), ssaOpts)
 }
 
+// ensureHelmOCIRepo registers the OCI-enabled Argo Helm repository when one is
+// configured, so apps whose RepoURL is that registry pull their chart over OCI.
+// No-op when unset (HTTP Helm repos keep working unchanged).
+func (k *kube) ensureHelmOCIRepo(ctx context.Context, o Options) {
+	if strings.TrimSpace(o.HelmOCIRegistry) == "" {
+		return
+	}
+	_, _ = k.dyn.Resource(secGVR).Namespace(argoNamespace).Apply(ctx, helmOCISecretName, helmOCIRepoSecret(o), ssaOpts)
+}
+
 // appGatewayIP returns the public address (IP or hostname) the Azure Application
 // Gateway assigned, read from any managed app Ingress' status, or "" until AGIC
 // has programmed the gateway.

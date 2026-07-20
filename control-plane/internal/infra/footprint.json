@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.40.2.10011",
-      "templateHash": "16259457582883746253"
+      "templateHash": "16639106641916215139"
     }
   },
   "parameters": {
@@ -180,6 +180,13 @@
       "defaultValue": "",
       "metadata": {
         "description": "DNS suffix for per-app hosts served by the AKS-managed Azure Application Gateway (AGIC), e.g. apps.contoso.com gives <app>.apps.contoso.com. Empty = host-less routing via the gateway default backend."
+      }
+    },
+    "helmOciRegistry": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "OCI Helm registry to OCI-enable in Argo CD (e.g. ghcr.io/bensincs), so apps whose repoURL is that registry pull their chart over OCI. Empty = no OCI Helm repo registered."
       }
     },
     "reconcilerImage": {
@@ -541,6 +548,10 @@
                 {
                   "name": "APPS_DOMAIN",
                   "value": "[parameters('appsDomain')]"
+                },
+                {
+                  "name": "HELM_OCI_REGISTRY",
+                  "value": "[parameters('helmOciRegistry')]"
                 }
               ]
             }
