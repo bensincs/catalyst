@@ -310,6 +310,18 @@ CREATE TABLE IF NOT EXISTS tenant_infrastructure (
 );
 CREATE INDEX IF NOT EXISTS tenant_infrastructure_tenant_idx ON tenant_infrastructure(tenant_slug);
 
+-- Queued cross-tenant teardowns. When a provisioned infrastructure entity is
+-- disabled or deleted, a row is captured here (with the tenant's subscription)
+-- before its tenant_infrastructure row is removed; the control-plane provisioner
+-- deletes the Azure resources its ARM deployment created, then clears the row.
+CREATE TABLE IF NOT EXISTS infra_teardowns (
+  tenant_slug     text NOT NULL,
+  subscription_id text NOT NULL,
+  infra_id        text NOT NULL,
+  requested_at    timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (tenant_slug, infra_id)
+);
+
 -- Which platform infrastructure entities a tenant is entitled to enable.
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS entitled_infrastructure text[] NOT NULL DEFAULT '{}';
 

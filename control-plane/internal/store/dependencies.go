@@ -585,15 +585,24 @@ func (s *Store) pruneAutoDeps(ctx context.Context, slug string) error {
 		removed := false
 
 		// Auto infrastructure no longer depended on by an enabled app/infra.
-		tag, err := s.pool.Exec(ctx,
-			`DELETE FROM tenant_infrastructure ti WHERE ti.tenant_slug = $1 AND ti.auto = true
+		const autoInfraOrphan = `ti.tenant_slug = $1 AND ti.auto = true
 			 AND NOT EXISTS (
 			   SELECT 1 FROM applications a JOIN tenant_deployments td ON td.app_id=a.id AND td.tenant_slug=$1
 			   WHERE a.dependencies @> jsonb_build_array(jsonb_build_object('kind','infrastructure','id',ti.infra_id)))
 			 AND NOT EXISTS (
 			   SELECT 1 FROM infrastructure i JOIN tenant_infrastructure t2 ON t2.infra_id=i.id AND t2.tenant_slug=$1
-			   WHERE i.id <> ti.infra_id AND i.dependencies @> jsonb_build_array(jsonb_build_object('kind','infrastructure','id',ti.infra_id)))`,
-			slug)
+			   WHERE i.id <> ti.infra_id AND i.dependencies @> jsonb_build_array(jsonb_build_object('kind','infrastructure','id',ti.infra_id)))`
+		// Capture the Azure teardown for any provisioned auto-infra about to be pruned.
+		if _, err := s.pool.Exec(ctx,
+			`INSERT INTO infra_teardowns (tenant_slug, subscription_id, infra_id)
+			 SELECT ti.tenant_slug, t.subscription_id, ti.infra_id
+			 FROM tenant_infrastructure ti JOIN tenants t ON t.id = ti.tenant_slug
+			 WHERE `+autoInfraOrphan+`
+			   AND ti.infra_state <> '' AND coalesce(t.subscription_id,'') <> ''
+			 ON CONFLICT (tenant_slug, infra_id) DO NOTHING`, slug); err != nil {
+			return err
+		}
+		tag, err := s.pool.Exec(ctx, `DELETE FROM tenant_infrastructure ti WHERE `+autoInfraOrphan, slug)
 		if err != nil {
 			return err
 		}

@@ -26,3 +26,23 @@ func TestSubstituteTokens(t *testing.T) {
 		t.Fatalf("hash token not applied: %s", out)
 	}
 }
+
+func TestParseResourceID(t *testing.T) {
+	cases := []struct {
+		id, sub, ns, rtype string
+		ok                 bool
+	}{
+		{"/subscriptions/S/resourceGroups/rg/providers/Microsoft.KeyVault/vaults/kv", "S", "Microsoft.KeyVault", "vaults", true},
+		{"/subscriptions/S/resourceGroups/rg/providers/Microsoft.DBforPostgreSQL/flexibleServers/pg", "S", "Microsoft.DBforPostgreSQL", "flexibleServers", true},
+		{"/subscriptions/S/resourceGroups/rg/providers/Microsoft.Sql/servers/s/databases/d", "S", "Microsoft.Sql", "servers/databases", true},
+		{"not a resource id", "", "", "", false},
+		{"", "", "", "", false},
+	}
+	for _, c := range cases {
+		sub, ns, rt, ok := parseResourceID(c.id)
+		if ok != c.ok || sub != c.sub || ns != c.ns || rt != c.rtype {
+			t.Errorf("parseResourceID(%q) = (%q,%q,%q,%v), want (%q,%q,%q,%v)",
+				c.id, sub, ns, rt, ok, c.sub, c.ns, c.rtype, c.ok)
+		}
+	}
+}

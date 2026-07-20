@@ -1805,6 +1805,10 @@ func (s *Store) DeleteInfrastructure(ctx context.Context, id string) error {
 		return ErrNotFound
 	}
 	_, _ = s.pool.Exec(ctx, `UPDATE tenants SET entitled_infrastructure = array_remove(entitled_infrastructure, $1)`, id)
+	// Capture a teardown for every tenant that provisioned it, then drop the rows.
+	if err := enqueueInfraTeardownsForDefinition(ctx, s.pool, id); err != nil {
+		return err
+	}
 	_, _ = s.pool.Exec(ctx, `DELETE FROM tenant_infrastructure WHERE infra_id = $1`, id)
 	return nil
 }
@@ -1852,6 +1856,10 @@ func (s *Store) EnableInfrastructure(ctx context.Context, slug, id string) error
 		slug, id); err != nil {
 		return err
 	}
+	// Re-enabling before the sweep runs cancels any queued teardown.
+	if err := s.ClearInfraTeardown(ctx, slug, id); err != nil {
+		return err
+	}
 	return s.autoEnableDeps(ctx, slug, model.DepInfrastructure, id)
 }
 
@@ -1864,6 +1872,10 @@ func (s *Store) DisableInfrastructure(ctx context.Context, slug, id string) erro
 	}
 	if len(deps) > 0 {
 		return ErrInUse
+	}
+	// Capture the Azure teardown (if it was provisioned) before dropping the row.
+	if err := enqueueInfraTeardown(ctx, s.pool, slug, id); err != nil {
+		return err
 	}
 	tag, err := s.pool.Exec(ctx,
 		`DELETE FROM tenant_infrastructure WHERE tenant_slug = $1 AND infra_id = $2`, slug, id)

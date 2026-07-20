@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
@@ -51,6 +52,9 @@ type Provisioner struct {
 	controlPlaneURL  string // reconciler → control plane
 	apiScope         string // Entra scope for the control-plane API
 	reconcilerImage  string // reconciler container image
+
+	mu          sync.Mutex        // guards apiVersions
+	apiVersions map[string]string // provider/type → api-version, resolved on demand for teardown
 }
 
 // Config enables cross-tenant provisioning + supplies the footprint parameters.
@@ -89,6 +93,7 @@ func New(st *store.Store, cfg Config) (*Provisioner, error) {
 		controlPlaneURL:  cfg.ControlPlaneURL,
 		apiScope:         cfg.APIScope,
 		reconcilerImage:  cfg.ReconcilerImage,
+		apiVersions:      map[string]string{},
 	}, nil
 }
 
@@ -121,6 +126,8 @@ func (p *Provisioner) reconcile(ctx context.Context) {
 	for _, tgt := range targets {
 		p.ensure(ctx, tgt)
 	}
+	// 4. Tear down the Azure resources of infra that was disabled/deleted.
+	p.teardown(ctx)
 }
 
 // ensure is idempotent + non-blocking: if the deployment already succeeded it
@@ -261,6 +268,209 @@ func trunc(s string) string {
 		return s[:200]
 	}
 	return s
+}
+
+// ── teardown ──────────────────────────────────────────────────────────────
+
+// teardown processes the queue of infrastructure that was disabled or deleted,
+// removing the Azure resources their ARM deployments created. Idempotent + safe:
+// it only touches resources a Cortex deployment (cortex-app-<id>) created, and a
+// transient failure leaves the queue row for the next sweep.
+func (p *Provisioner) teardown(ctx context.Context) {
+	tds, err := p.store.InfraTeardowns(ctx)
+	if err != nil {
+		slog.Warn("infra: list teardowns failed", "err", trunc(err.Error()))
+		return
+	}
+	for _, td := range tds {
+		p.deprovision(ctx, td)
+	}
+}
+
+func (p *Provisioner) deprovision(ctx context.Context, td store.InfraTeardown) {
+	if td.SubscriptionID == "" {
+		_ = p.store.ClearInfraTeardown(ctx, td.TenantSlug, td.InfraID)
+		return
+	}
+	name := deploymentName(td.InfraID)
+	resources, found, err := p.deploymentResources(ctx, td.SubscriptionID, name)
+	if err != nil {
+		slog.Warn("infra: read deployment for teardown failed", "infra", td.InfraID, "err", trunc(err.Error()))
+		return // transient — retry next sweep, never clear on uncertainty
+	}
+	if !found {
+		// Never provisioned, or already gone — nothing to delete.
+		_ = p.store.ClearInfraTeardown(ctx, td.TenantSlug, td.InfraID)
+		return
+	}
+	allGone := true
+	for _, id := range resources {
+		if err := p.deleteResource(ctx, id); err != nil {
+			allGone = false
+			slog.Warn("infra: delete resource failed", "infra", td.InfraID, "resource", id, "err", trunc(err.Error()))
+		}
+	}
+	if !allGone {
+		return // retry the stragglers next sweep
+	}
+	// Resources deleted → drop the deployment records (metadata) + clear the queue.
+	_ = p.armDelete(ctx, p.deploymentURL(td.SubscriptionID, name))
+	_ = p.armDelete(ctx, p.deploymentURL(td.SubscriptionID, name+"-m"))
+	_ = p.store.ClearInfraTeardown(ctx, td.TenantSlug, td.InfraID)
+	slog.Info("infra: deprovisioned", "infra", td.InfraID, "tenant", td.TenantSlug, "resources", len(resources))
+}
+
+// deploymentResources returns the resource ids a deployment created. found is
+// false only on a real 404 (so a transient error is never mistaken for "gone").
+func (p *Provisioner) deploymentResources(ctx context.Context, sub, name string) ([]string, bool, error) {
+	tok, err := p.cred.GetToken(ctx, policy.TokenRequestOptions{Scopes: []string{armScope}})
+	if err != nil {
+		return nil, false, fmt.Errorf("acquire ARM token: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.deploymentURL(sub, name), nil)
+	if err != nil {
+		return nil, false, err
+	}
+	req.Header.Set("Authorization", "Bearer "+tok.Token)
+	resp, err := p.http.Do(req)
+	if err != nil {
+		return nil, false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, false, nil
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return nil, false, fmt.Errorf("get deployment %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+	}
+	var body struct {
+		Properties struct {
+			OutputResources []struct {
+				ID string `json:"id"`
+			} `json:"outputResources"`
+		} `json:"properties"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return nil, false, err
+	}
+	ids := make([]string, 0, len(body.Properties.OutputResources))
+	for _, r := range body.Properties.OutputResources {
+		if strings.TrimSpace(r.ID) != "" {
+			ids = append(ids, r.ID)
+		}
+	}
+	return ids, true, nil
+}
+
+// deleteResource deletes an Azure resource by id, resolving the provider's
+// api-version. A 404 (already gone) counts as success.
+func (p *Provisioner) deleteResource(ctx context.Context, resourceID string) error {
+	ver, err := p.resourceAPIVersion(ctx, resourceID)
+	if err != nil {
+		return err
+	}
+	return p.armDelete(ctx, "https://management.azure.com"+resourceID+"?api-version="+ver)
+}
+
+// armDelete issues a DELETE, tolerating 404 (already gone) and 202 (async).
+func (p *Provisioner) armDelete(ctx context.Context, url string) error {
+	tok, err := p.cred.GetToken(ctx, policy.TokenRequestOptions{Scopes: []string{armScope}})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+tok.Token)
+	resp, err := p.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound || (resp.StatusCode >= 200 && resp.StatusCode < 300) {
+		return nil
+	}
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	return fmt.Errorf("delete %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+}
+
+// resourceAPIVersion resolves (and caches) a valid api-version for a resource id
+// from its provider's metadata.
+func (p *Provisioner) resourceAPIVersion(ctx context.Context, resourceID string) (string, error) {
+	sub, ns, rtype, ok := parseResourceID(resourceID)
+	if !ok {
+		return "", fmt.Errorf("unparseable resource id: %s", resourceID)
+	}
+	key := strings.ToLower(ns + "/" + rtype)
+	p.mu.Lock()
+	if v, hit := p.apiVersions[key]; hit {
+		p.mu.Unlock()
+		return v, nil
+	}
+	p.mu.Unlock()
+
+	var body struct {
+		ResourceTypes []struct {
+			ResourceType      string   `json:"resourceType"`
+			APIVersions       []string `json:"apiVersions"`
+			DefaultAPIVersion string   `json:"defaultApiVersion"`
+		} `json:"resourceTypes"`
+	}
+	url := fmt.Sprintf("https://management.azure.com/subscriptions/%s/providers/%s?api-version=2021-04-01", sub, ns)
+	if err := p.arm(ctx, http.MethodGet, url, nil, &body); err != nil {
+		return "", err
+	}
+	for _, rt := range body.ResourceTypes {
+		if !strings.EqualFold(rt.ResourceType, rtype) {
+			continue
+		}
+		ver := rt.DefaultAPIVersion
+		if ver == "" && len(rt.APIVersions) > 0 {
+			ver = rt.APIVersions[0] // provider lists newest first
+		}
+		if ver == "" {
+			return "", fmt.Errorf("no api-version for %s/%s", ns, rtype)
+		}
+		p.mu.Lock()
+		p.apiVersions[key] = ver
+		p.mu.Unlock()
+		return ver, nil
+	}
+	return "", fmt.Errorf("resource type %s/%s not found in provider metadata", ns, rtype)
+}
+
+// parseResourceID pulls the subscription, provider namespace, and (possibly
+// nested) resource type out of an ARM resource id.
+func parseResourceID(id string) (sub, ns, rtype string, ok bool) {
+	parts := strings.Split(strings.Trim(id, "/"), "/")
+	provIdx := -1
+	for i, seg := range parts {
+		if strings.EqualFold(seg, "subscriptions") && i+1 < len(parts) {
+			sub = parts[i+1]
+		}
+		if strings.EqualFold(seg, "providers") {
+			provIdx = i
+			break
+		}
+	}
+	if provIdx < 0 || provIdx+2 >= len(parts) {
+		return "", "", "", false
+	}
+	ns = parts[provIdx+1]
+	// After the namespace: type, name, [subtype, subname, …] — the types are the
+	// even-indexed segments.
+	rest := parts[provIdx+2:]
+	var types []string
+	for i := 0; i < len(rest); i += 2 {
+		types = append(types, rest[i])
+	}
+	rtype = strings.Join(types, "/")
+	if sub == "" || ns == "" || rtype == "" {
+		return "", "", "", false
+	}
+	return sub, ns, rtype, true
 }
 
 // substituteTokens replaces per-tenant template tokens in a resolved ARM template
