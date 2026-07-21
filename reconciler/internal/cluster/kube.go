@@ -136,11 +136,17 @@ func (k *kube) restMapper() (meta.RESTMapper, error) {
 func (k *kube) reconcileApplications(ctx context.Context, apps []shared.DesiredApplication, o Options) []shared.ApplicationStatus {
 	out := make([]shared.ApplicationStatus, 0, len(apps))
 	desired := map[string]bool{}
+	ociRepos := map[string]string{} // Argo repo-secret name → OCI registry URL
 	ri := k.dyn.Resource(appGVR).Namespace(argoNamespace)
 
 	for _, a := range apps {
 		name := appName(a.ID)
 		desired[name] = true
+		// Any OCI-registry repoURL (no http(s):// scheme) gets an auto-registered
+		// Argo Helm repo so the chart pulls over OCI — public ones with no creds.
+		if url := ociRegistryURL(a.RepoURL); url != "" {
+			ociRepos[ociSecretName(url)] = url
+		}
 		k.ensureWorkloadNamespace(ctx, a.Namespace) // make sure the target namespace exists
 		// Expose the app through the App Gateway (AGIC reads this Ingress).
 		ing := appIngress(name, a.Namespace, a.ID, appHost(name, o.AppsDomain))
@@ -181,6 +187,7 @@ func (k *kube) reconcileApplications(ctx context.Context, apps []shared.DesiredA
 			}
 		}
 	}
+	k.reconcileHelmOCIRepos(ctx, o, ociRepos)
 	return out
 }
 
@@ -194,14 +201,28 @@ func (k *kube) ensureTenantProject(ctx context.Context) {
 	_, _ = k.dyn.Resource(prjGVR).Namespace(argoNamespace).Apply(ctx, projectTenants, argoTenantProject(), ssaOpts)
 }
 
-// ensureHelmOCIRepo registers the OCI-enabled Argo Helm repository when one is
-// configured, so apps whose RepoURL is that registry pull their chart over OCI.
-// No-op when unset (HTTP Helm repos keep working unchanged).
-func (k *kube) ensureHelmOCIRepo(ctx context.Context, o Options) {
-	if strings.TrimSpace(o.HelmOCIRegistry) == "" {
-		return
+// reconcileHelmOCIRepos registers an Argo CD Helm repository (enableOCI) for each
+// distinct OCI registry the tenant's apps reference, so their charts pull over
+// OCI. Public registries need no credentials; creds are attached only to a
+// registry that matches the optionally-configured private one. Auto-registered
+// repos no longer referenced by any app are pruned.
+func (k *kube) reconcileHelmOCIRepos(ctx context.Context, o Options, repos map[string]string) {
+	sec := k.dyn.Resource(secGVR).Namespace(argoNamespace)
+	for name, url := range repos {
+		user, pass := "", ""
+		if reg := strings.TrimSpace(o.HelmOCIRegistry); reg != "" && strings.HasPrefix(url, reg) {
+			user, pass = o.HelmOCIUsername, o.HelmOCIPassword
+		}
+		_, _ = sec.Apply(ctx, name, helmRepoSecret(name, url, user, pass), ssaOpts)
 	}
-	_, _ = k.dyn.Resource(secGVR).Namespace(argoNamespace).Apply(ctx, helmOCISecretName, helmOCIRepoSecret(o), ssaOpts)
+	if list, err := sec.List(ctx, metav1.ListOptions{LabelSelector: labelOCIRepo + "=true"}); err == nil {
+		for i := range list.Items {
+			n := list.Items[i].GetName()
+			if _, ok := repos[n]; !ok {
+				_ = sec.Delete(ctx, n, metav1.DeleteOptions{})
+			}
+		}
+	}
 }
 
 // appGatewayIP returns the public address (IP or hostname) the Azure Application
@@ -232,8 +253,14 @@ func (k *kube) appGatewayIP(ctx context.Context) string {
 }
 
 func buildApplication(a shared.DesiredApplication, name string) *unstructured.Unstructured {
+	// For an OCI registry, use the scheme-stripped URL so it matches the
+	// auto-registered Argo repo secret (Argo keys OCI Helm repos scheme-less).
+	repoURL := a.RepoURL
+	if u := ociRegistryURL(a.RepoURL); u != "" {
+		repoURL = u
+	}
 	source := map[string]any{
-		"repoURL":        a.RepoURL,
+		"repoURL":        repoURL,
 		"chart":          a.Chart,
 		"targetRevision": a.TargetRevision,
 	}

@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"strings"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -83,5 +84,59 @@ func TestAppIngressHostlessWhenNoDomain(t *testing.T) {
 	rule := rules[0].(map[string]any)
 	if _, ok := rule["host"]; ok {
 		t.Fatalf("host-less ingress must omit the host key: %v", rule)
+	}
+}
+
+func TestOCIRegistryURL(t *testing.T) {
+	cases := map[string]string{
+		"ghcr.io/bensincs":           "ghcr.io/bensincs",
+		"oci://ghcr.io/bensincs":     "ghcr.io/bensincs",
+		"  ghcr.io/x  ":              "ghcr.io/x",
+		"https://charts.example.com": "", // classic HTTP Helm repo
+		"http://charts.example.com":  "",
+		"":                           "",
+	}
+	for in, want := range cases {
+		if got := ociRegistryURL(in); got != want {
+			t.Errorf("ociRegistryURL(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestOCISecretNameStable(t *testing.T) {
+	a := ociSecretName("ghcr.io/bensincs")
+	if a != ociSecretName("ghcr.io/bensincs") {
+		t.Fatalf("name not stable for the same registry")
+	}
+	if a == ociSecretName("ghcr.io/other") {
+		t.Fatalf("distinct registries must not collide")
+	}
+	if !strings.HasPrefix(a, "cortex-oci-") {
+		t.Fatalf("unexpected name %q", a)
+	}
+}
+
+// A public OCI repo must register with no credentials; a private one carries them.
+func TestHelmRepoSecretCreds(t *testing.T) {
+	pub := helmRepoSecret("cortex-oci-x", "ghcr.io/bensincs", "", "")
+	sd, _, _ := unstructured.NestedStringMap(pub.Object, "stringData")
+	if sd["enableOCI"] != "true" || sd["type"] != "helm" || sd["url"] != "ghcr.io/bensincs" {
+		t.Fatalf("stringData = %v", sd)
+	}
+	if _, ok := sd["username"]; ok {
+		t.Fatalf("public repo must carry no username: %v", sd)
+	}
+	if _, ok := sd["password"]; ok {
+		t.Fatalf("public repo must carry no password: %v", sd)
+	}
+	labels := pub.GetLabels()
+	if labels["argocd.argoproj.io/secret-type"] != "repository" || labels[labelOCIRepo] != "true" {
+		t.Fatalf("labels = %v", labels)
+	}
+
+	priv := helmRepoSecret("cortex-oci-y", "ghcr.io/private", "user", "pat")
+	sd2, _, _ := unstructured.NestedStringMap(priv.Object, "stringData")
+	if sd2["username"] != "user" || sd2["password"] != "pat" {
+		t.Fatalf("private creds missing: %v", sd2)
 	}
 }

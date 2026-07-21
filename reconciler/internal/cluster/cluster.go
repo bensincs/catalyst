@@ -50,6 +50,7 @@ const (
 	labelManaged = "cortex.io/managed" // "true"
 	labelSystem  = "cortex.io/system"  // "true" for the ingress/system resources
 	labelAppID   = "cortex.io/app-id"  // control-plane application id
+	labelOCIRepo = "cortex.io/oci-repo" // "true" for auto-registered Argo OCI Helm repos
 )
 
 var (
@@ -149,7 +150,6 @@ func (c *Client) Reconcile(ctx context.Context, apps []shared.DesiredApplication
 	// Application + a plain Ingress. AGIC programs the Azure Application Gateway
 	// from those Ingresses; report the gateway address it assigns.
 	k.ensureTenantProject(ctx)
-	k.ensureHelmOCIRepo(ctx, c.o)
 	appStatuses := k.reconcileApplications(ctx, apps, c.o)
 	status.GatewayIP = k.appGatewayIP(ctx)
 	status.IngressInstalled = status.GatewayIP != ""
