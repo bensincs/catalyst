@@ -335,6 +335,10 @@ ALTER TABLE agents ADD COLUMN IF NOT EXISTS auto boolean NOT NULL DEFAULT false;
 -- Typed dependency edges on an application: [{kind,id}] where kind ∈
 -- {infrastructure, application, agent}. Replaces the untyped depends_on text[].
 ALTER TABLE applications ADD COLUMN IF NOT EXISTS dependencies jsonb NOT NULL DEFAULT '[]';
+-- Gateway exposure: the in-cluster Service the app publishes that the ingress
+-- routes to (empty ⇒ cluster-internal, no Ingress), + its port.
+ALTER TABLE applications ADD COLUMN IF NOT EXISTS expose_service text NOT NULL DEFAULT '';
+ALTER TABLE applications ADD COLUMN IF NOT EXISTS expose_port    int  NOT NULL DEFAULT 80;
 
 -- One-time migration: split each application's Bicep half into a first-class
 -- `infrastructure` row, make the application depend on it, and re-point its

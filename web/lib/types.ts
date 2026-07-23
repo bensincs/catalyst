@@ -202,6 +202,8 @@ export interface Application {
   chart: string;
   targetRevision: string;
   values?: string;
+  exposeService: string; // in-cluster Service the gateway routes to ("" = internal)
+  exposePort: number; // Service port (default 80)
   wiring: WireLink[]; // infrastructure output → Helm values path
   dependencies: Dependency[]; // typed dependencies that must converge first
   createdAt: string;

@@ -996,7 +996,7 @@ func (s *Store) SyncDesired(ctx context.Context, tid string) (shared.DesiredStat
 	// must be enabled + 'ready', an application dep enabled + (transitively) ready,
 	// an agent dep 'live'. App→app order is then enforced via Argo sync-waves.
 	arows, err := s.pool.Query(ctx,
-		`SELECT a.id, a.name, a.namespace, a.repo_url, a.chart, a.target_revision, a.values, a.wiring, a.dependencies
+		`SELECT a.id, a.name, a.namespace, a.repo_url, a.chart, a.target_revision, a.values, a.expose_service, a.expose_port, a.wiring, a.dependencies
 		 FROM applications a JOIN tenant_deployments td ON td.app_id = a.id AND td.tenant_slug = $1
 		 ORDER BY td.sort_order`, t.ID)
 	if err != nil {
@@ -1013,7 +1013,7 @@ func (s *Store) SyncDesired(ctx context.Context, tid string) (shared.DesiredStat
 	for arows.Next() {
 		var da shared.DesiredApplication
 		var wraw, draw []byte
-		if err := arows.Scan(&da.ID, &da.Name, &da.Namespace, &da.RepoURL, &da.Chart, &da.TargetRevision, &da.Values, &wraw, &draw); err != nil {
+		if err := arows.Scan(&da.ID, &da.Name, &da.Namespace, &da.RepoURL, &da.Chart, &da.TargetRevision, &da.Values, &da.ExposeService, &da.ExposePort, &wraw, &draw); err != nil {
 			return out, err
 		}
 		apps = append(apps, appInfo{da: da, wiring: wiringFromRaw(wraw), deps: depsFromRaw(draw)})
@@ -1419,13 +1419,13 @@ func (s *Store) ApplyHeartbeat(ctx context.Context, hb shared.Heartbeat) error {
 var ErrDeploymentNotAccessible = errors.New("deployment not accessible to tenant")
 
 const applicationCols = `a.id, a.name, a.description, a.owner_tenant, a.namespace,
-	a.repo_url, a.chart, a.target_revision, a.values, a.wiring, a.dependencies, a.created_by, a.created_at`
+	a.repo_url, a.chart, a.target_revision, a.values, a.expose_service, a.expose_port, a.wiring, a.dependencies, a.created_by, a.created_at`
 
 // appScanDest scans the fixed columns; wiring + dependencies (jsonb) are captured
 // raw and unmarshalled by the caller (wiringFromRaw / depsFromRaw).
 func appScanDest(a *model.Application, wiringRaw, depsRaw *[]byte) []any {
 	return []any{&a.ID, &a.Name, &a.Description, &a.Owner, &a.Namespace,
-		&a.RepoURL, &a.Chart, &a.TargetRevision, &a.Values, wiringRaw, depsRaw, &a.CreatedBy, &a.CreatedAt}
+		&a.RepoURL, &a.Chart, &a.TargetRevision, &a.Values, &a.ExposeService, &a.ExposePort, wiringRaw, depsRaw, &a.CreatedBy, &a.CreatedAt}
 }
 
 func paramsFromRaw(raw []byte) map[string]any {
@@ -1622,10 +1622,11 @@ func (s *Store) ApplicationByID(ctx context.Context, id string) (model.Applicati
 func (s *Store) UpdateApplication(ctx context.Context, a model.Application) error {
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE applications SET name = $2, description = $3, namespace = $4, repo_url = $5,
-		   chart = $6, target_revision = $7, values = $8, wiring = $9, dependencies = $10
+		   chart = $6, target_revision = $7, values = $8, expose_service = $9, expose_port = $10,
+		   wiring = $11, dependencies = $12
 		 WHERE id = $1`,
 		a.ID, a.Name, a.Description, a.Namespace, a.RepoURL, a.Chart, a.TargetRevision, a.Values,
-		wiringJSON(a.Wiring), depsJSON(a.Dependencies))
+		a.ExposeService, a.ExposePort, wiringJSON(a.Wiring), depsJSON(a.Dependencies))
 	if err != nil {
 		return err
 	}

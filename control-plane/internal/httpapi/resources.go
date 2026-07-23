@@ -77,6 +77,8 @@ type appInput struct {
 	Chart          string             `json:"chart"`
 	TargetRevision string             `json:"targetRevision"`
 	Values         string             `json:"values"`
+	ExposeService  string             `json:"exposeService"`
+	ExposePort     int                `json:"exposePort"`
 	Wiring         []shared.WireLink  `json:"wiring"`
 	Dependencies   []model.Dependency `json:"dependencies"`
 }
@@ -96,6 +98,10 @@ func (in appInput) build(id, owner string) model.Application {
 	if ns == "" {
 		ns = "default"
 	}
+	port := in.ExposePort
+	if port == 0 {
+		port = 80
+	}
 	return model.Application{
 		ID:             id,
 		Name:           strings.TrimSpace(in.Name),
@@ -106,6 +112,8 @@ func (in appInput) build(id, owner string) model.Application {
 		Chart:          strings.TrimSpace(in.Chart),
 		TargetRevision: strings.TrimSpace(in.TargetRevision),
 		Values:         in.Values,
+		ExposeService:  strings.TrimSpace(in.ExposeService),
+		ExposePort:     port,
 		Wiring:         in.Wiring,
 		Dependencies:   in.Dependencies,
 	}

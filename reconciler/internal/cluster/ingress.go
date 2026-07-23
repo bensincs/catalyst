@@ -45,14 +45,18 @@ func appHost(name, domain string) string {
 }
 
 // appIngress exposes one app through the Azure Application Gateway (AGIC). It
-// routes the app's host to the Helm release's Service by convention — the release
-// name equals the app name, serving on port 80. Labelled managed (not system) so
-// the reconciler can list + GC it alongside the app's Argo Application.
-func appIngress(name, namespace, appID, host string) *unstructured.Unstructured {
+// routes the app's host to the Service the app declares it publishes (service :
+// port) — chart Service names vary (often <release>-<chart>), so it's passed in
+// explicitly rather than assumed. Labelled managed (not system) so the reconciler
+// can list + GC it alongside the app's Argo Application.
+func appIngress(name, namespace, appID, host, service string, port int) *unstructured.Unstructured {
+	if port <= 0 {
+		port = 80
+	}
 	backend := map[string]any{
 		"service": map[string]any{
-			"name": name,
-			"port": map[string]any{"number": int64(80)},
+			"name": service,
+			"port": map[string]any{"number": int64(port)},
 		},
 	}
 	rule := map[string]any{

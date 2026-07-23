@@ -263,6 +263,8 @@ export async function createApplication(input: {
   chart: string;
   targetRevision: string;
   values: string;
+  exposeService: string;
+  exposePort: number;
   wiring: WireLink[];
   dependencies: Dependency[];
 }): Promise<ActionResult> {
@@ -279,6 +281,8 @@ export async function updateApplication(
     chart: string;
     targetRevision: string;
     values: string;
+    exposeService: string;
+    exposePort: number;
     wiring: WireLink[];
     dependencies: Dependency[];
   },

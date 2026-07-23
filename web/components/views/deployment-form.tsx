@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, Boxes, Cable, GitBranch, Package, Rocket } from "lucide-react";
+import { ArrowLeft, Boxes, Cable, GitBranch, Globe, Package, Rocket } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Field, TextInput, Textarea } from "@/components/ui/form";
 import { StatusBadge } from "@/components/ui/status";
@@ -86,6 +86,8 @@ export function DeploymentForm({
   const [chart, setChart] = useState(app?.chart ?? "");
   const [targetRevision, setTargetRevision] = useState(app?.targetRevision ?? "");
   const [values, setValues] = useState(app?.values ?? "");
+  const [exposeService, setExposeService] = useState(app?.exposeService ?? "");
+  const [exposePort, setExposePort] = useState(app?.exposePort ?? 80);
   const [wiring, setWiring] = useState<WireLink[]>(app?.wiring ?? []);
   const [dependencies, setDependencies] = useState<Dependency[]>(app?.dependencies ?? []);
 
@@ -166,6 +168,8 @@ export function DeploymentForm({
       chart: chart.trim(),
       targetRevision: targetRevision.trim(),
       values,
+      exposeService: exposeService.trim(),
+      exposePort: exposePort || 80,
       wiring: cleanWiring,
       dependencies,
     };
@@ -254,6 +258,27 @@ export function DeploymentForm({
             </Field>
             <Field label="Version" htmlFor="dep-ver" hint="Chart version (blank = latest).">
               <TextInput id="dep-ver" value={targetRevision} onChange={(e) => setTargetRevision(e.target.value)} placeholder="15.14.0" spellCheck={false} />
+            </Field>
+          </div>
+        </Section>
+
+        <Section
+          icon={Globe}
+          title="Exposure"
+          desc="Publish this app through the tenant's gateway. Name the in-cluster Service the chart creates (often <release>-<chart>, e.g. my-app-todo-app) — leave blank to keep the app cluster-internal (no ingress)."
+        >
+          <div className={styles.grid2}>
+            <Field label="Expose service" htmlFor="dep-svc" hint="The chart's Service name to route to. Blank = internal only.">
+              <TextInput id="dep-svc" value={exposeService} onChange={(e) => setExposeService(e.target.value)} placeholder="my-app-todo-app" spellCheck={false} />
+            </Field>
+            <Field label="Port" htmlFor="dep-port" hint="Service port to route to.">
+              <TextInput
+                id="dep-port"
+                type="number"
+                value={String(exposePort)}
+                onChange={(e) => setExposePort(Number(e.target.value) || 80)}
+                placeholder="80"
+              />
             </Field>
           </div>
         </Section>

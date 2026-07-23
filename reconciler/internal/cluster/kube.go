@@ -136,6 +136,7 @@ func (k *kube) restMapper() (meta.RESTMapper, error) {
 func (k *kube) reconcileApplications(ctx context.Context, apps []shared.DesiredApplication, o Options) []shared.ApplicationStatus {
 	out := make([]shared.ApplicationStatus, 0, len(apps))
 	desired := map[string]bool{}
+	exposed := map[string]bool{}     // app names that publish a gateway Ingress
 	ociRepos := map[string]string{} // Argo repo-secret name → OCI registry URL
 	ri := k.dyn.Resource(appGVR).Namespace(argoNamespace)
 
@@ -148,9 +149,13 @@ func (k *kube) reconcileApplications(ctx context.Context, apps []shared.DesiredA
 			ociRepos[ociSecretName(url)] = url
 		}
 		k.ensureWorkloadNamespace(ctx, a.Namespace) // make sure the target namespace exists
-		// Expose the app through the App Gateway (AGIC reads this Ingress).
-		ing := appIngress(name, a.Namespace, a.ID, appHost(name, o.AppsDomain))
-		_, _ = k.dyn.Resource(ingGVR).Namespace(a.Namespace).Apply(ctx, name, ing, ssaOpts)
+		// Expose the app through the App Gateway only when it declares the Service
+		// to route to (charts name it unpredictably); empty ⇒ cluster-internal.
+		if svc := strings.TrimSpace(a.ExposeService); svc != "" {
+			ing := appIngress(name, a.Namespace, a.ID, appHost(name, o.AppsDomain), svc, a.ExposePort)
+			_, _ = k.dyn.Resource(ingGVR).Namespace(a.Namespace).Apply(ctx, name, ing, ssaOpts)
+			exposed[name] = true
+		}
 		st := shared.ApplicationStatus{ID: a.ID, SyncStatus: "pending", HealthStatus: "pending"}
 		if _, err := ri.Apply(ctx, name, buildApplication(a, name), metav1.ApplyOptions{FieldManager: fieldManager, Force: true}); err != nil {
 			st.SyncStatus, st.HealthStatus = "Unknown", "Unknown"
@@ -177,12 +182,12 @@ func (k *kube) reconcileApplications(ctx context.Context, apps []shared.DesiredA
 			}
 		}
 	}
-	// GC orphaned Ingresses cluster-wide (namespaced resource, listed across all
-	// namespaces) so a removed app stops being served.
+	// GC Ingresses cluster-wide (namespaced resource, listed across all namespaces)
+	// for apps that are gone or no longer expose a Service, so they stop serving.
 	if list, err := k.dyn.Resource(ingGVR).List(ctx, managed); err == nil {
 		for i := range list.Items {
 			n := list.Items[i].GetName()
-			if !desired[n] {
+			if !exposed[n] {
 				_ = k.dyn.Resource(ingGVR).Namespace(list.Items[i].GetNamespace()).Delete(ctx, n, metav1.DeleteOptions{})
 			}
 		}
@@ -264,20 +269,9 @@ func buildApplication(a shared.DesiredApplication, name string) *unstructured.Un
 		"chart":          a.Chart,
 		"targetRevision": a.TargetRevision,
 	}
-	// Force the chart's resource names to the release name via fullnameOverride, so
-	// the Service the app publishes matches the name our AGIC Ingress routes to.
-	// Standard charts name their Service {{ .Release.Name }}-{{ .Chart.Name }} (e.g.
-	// example-app-todo-app), which wouldn't match the Ingress backend (example-app);
-	// this aligns them. Charts that don't use fullnameOverride simply ignore it.
-	helm := map[string]any{
-		"parameters": []any{
-			map[string]any{"name": "fullnameOverride", "value": name},
-		},
-	}
 	if strings.TrimSpace(a.Values) != "" {
-		helm["values"] = a.Values
+		source["helm"] = map[string]any{"values": a.Values}
 	}
-	source["helm"] = helm
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "argoproj.io/v1alpha1",
 		"kind":       "Application",

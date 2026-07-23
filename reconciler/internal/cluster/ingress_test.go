@@ -23,8 +23,8 @@ func TestAppHost(t *testing.T) {
 	}
 }
 
-func TestAppIngressRoutesToReleaseService(t *testing.T) {
-	ing := appIngress("shop", "tenant-ns", "app-123", "shop.apps.example.com")
+func TestAppIngressRoutesToDeclaredService(t *testing.T) {
+	ing := appIngress("shop", "tenant-ns", "app-123", "shop.apps.example.com", "shop-storefront", 8080)
 
 	if got := ing.GetAPIVersion(); got != "networking.k8s.io/v1" {
 		t.Fatalf("apiVersion: %q", got)
@@ -70,21 +70,25 @@ func TestAppIngressRoutesToReleaseService(t *testing.T) {
 	paths := rule["http"].(map[string]any)["paths"].([]any)
 	backend := paths[0].(map[string]any)["backend"].(map[string]any)
 	svc := backend["service"].(map[string]any)
-	if svc["name"] != "shop" {
-		t.Fatalf("backend must target the release-name Service, got %v", svc["name"])
+	if svc["name"] != "shop-storefront" {
+		t.Fatalf("backend must target the declared Service, got %v", svc["name"])
 	}
 	port := svc["port"].(map[string]any)
-	if port["number"] != int64(80) {
-		t.Fatalf("backend port should be 80, got %v", port["number"])
+	if port["number"] != int64(8080) {
+		t.Fatalf("backend port should be the declared 8080, got %v", port["number"])
 	}
 }
 
-func TestAppIngressHostlessWhenNoDomain(t *testing.T) {
-	ing := appIngress("shop", "tenant-ns", "app-123", "")
+func TestAppIngressDefaultsPort(t *testing.T) {
+	ing := appIngress("shop", "tenant-ns", "app-123", "", "shop-svc", 0)
 	rules, _, _ := unstructured.NestedSlice(ing.Object, "spec", "rules")
 	rule := rules[0].(map[string]any)
 	if _, ok := rule["host"]; ok {
 		t.Fatalf("host-less ingress must omit the host key: %v", rule)
+	}
+	svc := rule["http"].(map[string]any)["paths"].([]any)[0].(map[string]any)["backend"].(map[string]any)["service"].(map[string]any)
+	if svc["port"].(map[string]any)["number"] != int64(80) {
+		t.Fatalf("port 0 must default to 80, got %v", svc["port"])
 	}
 }
 
@@ -117,38 +121,20 @@ func TestOCISecretNameStable(t *testing.T) {
 	}
 }
 
-// A standard chart names its Service <release>-<chart>, which wouldn't match our
-// Ingress backend (the release name). buildApplication injects fullnameOverride so
-// the chart's resources take the release name and line up with the Ingress.
-func TestBuildApplicationInjectsFullnameOverride(t *testing.T) {
+// buildApplication passes the author's values through untouched and strips the
+// oci:// scheme from the repoURL so it matches the auto-registered repo secret.
+func TestBuildApplicationSource(t *testing.T) {
 	app := shared.DesiredApplication{
 		ID: "example-app", Namespace: "example",
 		RepoURL: "oci://ghcr.io/bensincs/charts", Chart: "todo-app", TargetRevision: "0.1.0",
 		Values: "database:\n  host: h\n",
 	}
-	name := appName(app.ID)
-	u := buildApplication(app, name)
-
-	helm, found, _ := unstructured.NestedMap(u.Object, "spec", "source", "helm")
-	if !found {
-		t.Fatal("expected spec.source.helm")
-	}
-	params, _ := helm["parameters"].([]any)
-	ok := false
-	for _, p := range params {
-		if m, is := p.(map[string]any); is && m["name"] == "fullnameOverride" && m["value"] == name {
-			ok = true
-		}
-	}
-	if !ok {
-		t.Fatalf("expected fullnameOverride=%q parameter, got %v", name, params)
-	}
-	if helm["values"] != app.Values {
-		t.Fatalf("author values must be preserved, got %v", helm["values"])
-	}
-	// OCI repoURL is scheme-stripped to match the auto-registered repo secret.
+	u := buildApplication(app, appName(app.ID))
 	if repo, _, _ := unstructured.NestedString(u.Object, "spec", "source", "repoURL"); repo != "ghcr.io/bensincs/charts" {
 		t.Fatalf("repoURL = %q", repo)
+	}
+	if v, _, _ := unstructured.NestedString(u.Object, "spec", "source", "helm", "values"); v != app.Values {
+		t.Fatalf("author values must be preserved, got %q", v)
 	}
 }
 

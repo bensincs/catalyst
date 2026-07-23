@@ -109,6 +109,13 @@ type DesiredApplication struct {
 	Chart          string `json:"chart"`          // chart name
 	TargetRevision string `json:"targetRevision"` // chart version
 	Values         string `json:"values,omitempty"`
+	// ExposeService, when set, is the in-cluster Service the app publishes that the
+	// gateway Ingress should route to (charts often name it <release>-<chart>, so
+	// it's declared explicitly rather than guessed). Empty ⇒ the app is
+	// cluster-internal and no Ingress is created. ExposePort is the Service port
+	// (default 80).
+	ExposeService string `json:"exposeService,omitempty"`
+	ExposePort    int    `json:"exposePort,omitempty"`
 	// DependsOn are ids of other applications that must converge first; Wave is
 	// the derived Argo sync-wave (0 = no deps) that enforces the order. (Only
 	// app→app edges gate cluster ordering; infra/agent deps are gated earlier,

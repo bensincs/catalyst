@@ -232,6 +232,8 @@ type Application struct {
 	Chart          string            `json:"chart"`
 	TargetRevision string            `json:"targetRevision"`
 	Values         string            `json:"values,omitempty"`
+	ExposeService  string            `json:"exposeService"` // Service the gateway routes to ("" = internal)
+	ExposePort     int               `json:"exposePort"`    // Service port (default 80)
 	Wiring         []shared.WireLink `json:"wiring"`       // infra dependency output → Helm values path
 	Dependencies   []Dependency      `json:"dependencies"` // infrastructure | application | agent
 	CreatedBy      string            `json:"createdBy,omitempty"`

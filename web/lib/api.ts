@@ -273,6 +273,8 @@ function toApplication(a: ApiApplication): Application {
     chart: a.chart,
     targetRevision: a.targetRevision,
     values: a.values,
+    exposeService: a.exposeService ?? "",
+    exposePort: a.exposePort ?? 80,
     wiring: a.wiring ?? [],
     dependencies: a.dependencies ?? [],
     createdAt: a.createdAt,
@@ -470,6 +472,8 @@ interface ApiApplication {
   chart: string;
   targetRevision: string;
   values?: string;
+  exposeService?: string;
+  exposePort?: number;
   wiring?: WireLink[] | null;
   dependencies?: Dependency[] | null;
   createdAt: string;
