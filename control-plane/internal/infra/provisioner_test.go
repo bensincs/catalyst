@@ -46,3 +46,21 @@ func TestParseResourceID(t *testing.T) {
 		}
 	}
 }
+
+func TestIsNestedResource(t *testing.T) {
+	cases := map[string]bool{
+		// Child resources — their type has 2+ segments; must be skippable so an
+		// unresolvable child type never wedges a teardown.
+		"/subscriptions/S/resourceGroups/rg/providers/Microsoft.DBforPostgreSQL/flexibleServers/pg/advancedThreatProtectionSettings/current": true,
+		"/subscriptions/S/resourceGroups/rg/providers/Microsoft.Sql/servers/s/databases/d":                                                   true,
+		// Top-level resources — gate teardown completion.
+		"/subscriptions/S/resourceGroups/rg/providers/Microsoft.DBforPostgreSQL/flexibleServers/pg": false,
+		"/subscriptions/S/resourceGroups/rg/providers/Microsoft.KeyVault/vaults/kv":                 false,
+		"not a resource id": false,
+	}
+	for id, want := range cases {
+		if got := isNestedResource(id); got != want {
+			t.Errorf("isNestedResource(%q) = %v, want %v", id, got, want)
+		}
+	}
+}

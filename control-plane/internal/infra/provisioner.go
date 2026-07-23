@@ -306,6 +306,15 @@ func (p *Provisioner) deprovision(ctx context.Context, td store.InfraTeardown) {
 	allGone := true
 	for _, id := range resources {
 		if err := p.deleteResource(ctx, id); err != nil {
+			// A child resource (e.g. an AVM advancedThreatProtectionSettings) is
+			// removed when its parent is deleted, and some child types aren't even
+			// listed in the provider metadata we resolve the api-version from — so
+			// never let one wedge the teardown. The parent (a top-level resource
+			// that IS resolvable) gates completion; the child goes with it.
+			if isNestedResource(id) {
+				slog.Warn("infra: skipping nested child resource (removed with its parent)", "infra", td.InfraID, "resource", id, "err", trunc(err.Error()))
+				continue
+			}
 			allGone = false
 			slog.Warn("infra: delete resource failed", "infra", td.InfraID, "resource", id, "err", trunc(err.Error()))
 		}
@@ -439,6 +448,15 @@ func (p *Provisioner) resourceAPIVersion(ctx context.Context, resourceID string)
 		return ver, nil
 	}
 	return "", fmt.Errorf("resource type %s/%s not found in provider metadata", ns, rtype)
+}
+
+// isNestedResource reports whether an ARM id addresses a child resource — its
+// type has more than one segment (e.g. flexibleServers/advancedThreatProtectionSettings).
+// Such children are deleted along with their top-level parent, so the teardown
+// must not stall on one whose child type the provider doesn't enumerate.
+func isNestedResource(id string) bool {
+	_, _, rtype, ok := parseResourceID(id)
+	return ok && strings.Contains(rtype, "/")
 }
 
 // parseResourceID pulls the subscription, provider namespace, and (possibly
