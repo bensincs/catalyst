@@ -124,7 +124,11 @@ param pollIntervalSeconds int = 30
 param deployReconcilerApp bool = true
 
 var prefix = 'cortex'
-var tenantId = tenant().tenantId
+// The customer tenant that OWNS this subscription — not tenant(), which under a
+// Lighthouse cross-tenant deployment resolves to the *managing* (platform) tenant
+// and would bind the AKS managed-AAD + reconciler identity to the wrong tenant,
+// leaving the in-tenant reconciler unable to authenticate to its own cluster.
+var tenantId = subscription().tenantId
 var subscriptionId = subscription().subscriptionId
 
 // The reconciler drives this endpoint's Foundry Agents API (/agents). Derived
