@@ -264,9 +264,20 @@ func buildApplication(a shared.DesiredApplication, name string) *unstructured.Un
 		"chart":          a.Chart,
 		"targetRevision": a.TargetRevision,
 	}
-	if strings.TrimSpace(a.Values) != "" {
-		source["helm"] = map[string]any{"values": a.Values}
+	// Force the chart's resource names to the release name via fullnameOverride, so
+	// the Service the app publishes matches the name our AGIC Ingress routes to.
+	// Standard charts name their Service {{ .Release.Name }}-{{ .Chart.Name }} (e.g.
+	// example-app-todo-app), which wouldn't match the Ingress backend (example-app);
+	// this aligns them. Charts that don't use fullnameOverride simply ignore it.
+	helm := map[string]any{
+		"parameters": []any{
+			map[string]any{"name": "fullnameOverride", "value": name},
+		},
 	}
+	if strings.TrimSpace(a.Values) != "" {
+		helm["values"] = a.Values
+	}
+	source["helm"] = helm
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "argoproj.io/v1alpha1",
 		"kind":       "Application",

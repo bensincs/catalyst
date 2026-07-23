@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/inception42/cortex/shared"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -116,7 +117,41 @@ func TestOCISecretNameStable(t *testing.T) {
 	}
 }
 
-// A public OCI repo must register with no credentials; a private one carries them.
+// A standard chart names its Service <release>-<chart>, which wouldn't match our
+// Ingress backend (the release name). buildApplication injects fullnameOverride so
+// the chart's resources take the release name and line up with the Ingress.
+func TestBuildApplicationInjectsFullnameOverride(t *testing.T) {
+	app := shared.DesiredApplication{
+		ID: "example-app", Namespace: "example",
+		RepoURL: "oci://ghcr.io/bensincs/charts", Chart: "todo-app", TargetRevision: "0.1.0",
+		Values: "database:\n  host: h\n",
+	}
+	name := appName(app.ID)
+	u := buildApplication(app, name)
+
+	helm, found, _ := unstructured.NestedMap(u.Object, "spec", "source", "helm")
+	if !found {
+		t.Fatal("expected spec.source.helm")
+	}
+	params, _ := helm["parameters"].([]any)
+	ok := false
+	for _, p := range params {
+		if m, is := p.(map[string]any); is && m["name"] == "fullnameOverride" && m["value"] == name {
+			ok = true
+		}
+	}
+	if !ok {
+		t.Fatalf("expected fullnameOverride=%q parameter, got %v", name, params)
+	}
+	if helm["values"] != app.Values {
+		t.Fatalf("author values must be preserved, got %v", helm["values"])
+	}
+	// OCI repoURL is scheme-stripped to match the auto-registered repo secret.
+	if repo, _, _ := unstructured.NestedString(u.Object, "spec", "source", "repoURL"); repo != "ghcr.io/bensincs/charts" {
+		t.Fatalf("repoURL = %q", repo)
+	}
+}
+
 func TestHelmRepoSecretCreds(t *testing.T) {
 	pub := helmRepoSecret("cortex-oci-x", "ghcr.io/bensincs", "", "")
 	sd, _, _ := unstructured.NestedStringMap(pub.Object, "stringData")
