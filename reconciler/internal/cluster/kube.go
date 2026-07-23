@@ -53,7 +53,7 @@ func (k *kube) ensureNamespace(ctx context.Context, name string) error {
 // namespaces. Kept as an ordered slice so the derived Argo project denies apply
 // without churn.
 var protectedNamespaceList = []string{
-	argoNamespace, ingressNS,
+	argoNamespace, ingressNS, gatewayNS,
 	"kube-system", "kube-public", "kube-node-lease", "default", "gatekeeper-system",
 }
 
@@ -149,11 +149,12 @@ func (k *kube) reconcileApplications(ctx context.Context, apps []shared.DesiredA
 			ociRepos[ociSecretName(url)] = url
 		}
 		k.ensureWorkloadNamespace(ctx, a.Namespace) // make sure the target namespace exists
-		// Expose the app through the App Gateway only when it declares the Service
-		// to route to (charts name it unpredictably); empty ⇒ cluster-internal.
+		// Expose the app through the gateway only when it declares the Service to
+		// route to (charts name it unpredictably); empty ⇒ cluster-internal. AGC
+		// routes via the Service, so this works with CNI Overlay.
 		if svc := strings.TrimSpace(a.ExposeService); svc != "" {
-			ing := appIngress(name, a.Namespace, a.ID, appHost(name, o.AppsDomain), svc, a.ExposePort)
-			_, _ = k.dyn.Resource(ingGVR).Namespace(a.Namespace).Apply(ctx, name, ing, ssaOpts)
+			route := appRoute(name, a.Namespace, a.ID, appHost(name, o.AppsDomain), svc, a.ExposePort)
+			_, _ = k.dyn.Resource(routeGVR).Namespace(a.Namespace).Apply(ctx, name, route, ssaOpts)
 			exposed[name] = true
 		}
 		st := shared.ApplicationStatus{ID: a.ID, SyncStatus: "pending", HealthStatus: "pending"}
@@ -182,14 +183,20 @@ func (k *kube) reconcileApplications(ctx context.Context, apps []shared.DesiredA
 			}
 		}
 	}
-	// GC Ingresses cluster-wide (namespaced resource, listed across all namespaces)
-	// for apps that are gone or no longer expose a Service, so they stop serving.
-	if list, err := k.dyn.Resource(ingGVR).List(ctx, managed); err == nil {
+	// GC HTTPRoutes cluster-wide for apps that are gone or no longer expose a
+	// Service, so they stop serving.
+	if list, err := k.dyn.Resource(routeGVR).List(ctx, managed); err == nil {
 		for i := range list.Items {
 			n := list.Items[i].GetName()
 			if !exposed[n] {
-				_ = k.dyn.Resource(ingGVR).Namespace(list.Items[i].GetNamespace()).Delete(ctx, n, metav1.DeleteOptions{})
+				_ = k.dyn.Resource(routeGVR).Namespace(list.Items[i].GetNamespace()).Delete(ctx, n, metav1.DeleteOptions{})
 			}
+		}
+	}
+	// Remove any leftover AGIC Ingresses from the pre-AGC reconciler.
+	if list, err := k.dyn.Resource(ingGVR).List(ctx, managed); err == nil {
+		for i := range list.Items {
+			_ = k.dyn.Resource(ingGVR).Namespace(list.Items[i].GetNamespace()).Delete(ctx, list.Items[i].GetName(), metav1.DeleteOptions{})
 		}
 	}
 	k.reconcileHelmOCIRepos(ctx, o, ociRepos)
@@ -230,28 +237,40 @@ func (k *kube) reconcileHelmOCIRepos(ctx context.Context, o Options, repos map[s
 	}
 }
 
-// appGatewayIP returns the public address (IP or hostname) the Azure Application
-// Gateway assigned, read from any managed app Ingress' status, or "" until AGIC
-// has programmed the gateway.
-func (k *kube) appGatewayIP(ctx context.Context) string {
-	list, err := k.dyn.Resource(ingGVR).List(ctx, metav1.ListOptions{LabelSelector: labelManaged + "=true," + labelSystem + "!=true"})
+// ensureGateway provisions Application Gateway for Containers: the shared Gateway
+// all app HTTPRoutes attach to, and the ApplicationLoadBalancer that binds it to
+// the add-on's AGC subnet. No-op on the ALB until the subnet is discoverable (the
+// add-on is still provisioning) — the Gateway is still stamped so routes can
+// attach once the ALB is ready.
+func (k *kube) ensureGateway(ctx context.Context, subnetID string) {
+	ns := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "v1",
+		"kind":       "Namespace",
+		"metadata":   map[string]any{"name": gatewayNS, "labels": sysLabels(nil)},
+	}}
+	_, _ = k.dyn.Resource(nsGVR).Apply(ctx, gatewayNS, ns, ssaOpts)
+	if strings.TrimSpace(subnetID) != "" {
+		_, _ = k.dyn.Resource(albGVR).Namespace(gatewayNS).Apply(ctx, albName, applicationLoadBalancer(subnetID), ssaOpts)
+	}
+	_, _ = k.dyn.Resource(gwGVR).Namespace(gatewayNS).Apply(ctx, gatewayName, gateway(), ssaOpts)
+}
+
+// gatewayAddress returns the AGC frontend FQDN the ALB controller assigned to the
+// shared Gateway (status.addresses[0].value), or "" until it's programmed.
+func (k *kube) gatewayAddress(ctx context.Context) string {
+	gw, err := k.dyn.Resource(gwGVR).Namespace(gatewayNS).Get(ctx, gatewayName, metav1.GetOptions{})
 	if err != nil {
 		return ""
 	}
-	for i := range list.Items {
-		ing, found, _ := unstructured.NestedSlice(list.Items[i].Object, "status", "loadBalancer", "ingress")
-		if !found || len(ing) == 0 {
-			continue
-		}
-		m, ok := ing[0].(map[string]any)
-		if !ok {
-			continue
-		}
-		if ip, ok := m["ip"].(string); ok && ip != "" {
-			return ip
-		}
-		if host, ok := m["hostname"].(string); ok && host != "" {
-			return host
+	addrs, found, _ := unstructured.NestedSlice(gw.Object, "status", "addresses")
+	if !found {
+		return ""
+	}
+	for _, a := range addrs {
+		if m, ok := a.(map[string]any); ok {
+			if v, ok := m["value"].(string); ok && v != "" {
+				return v
+			}
 		}
 	}
 	return ""

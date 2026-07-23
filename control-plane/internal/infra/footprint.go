@@ -23,6 +23,7 @@ const (
 	subsAPIVersion      = "2022-12-01" // Microsoft.Resources subscriptions
 	rgAPIVersion        = "2021-04-01" // Microsoft.Resources/resourceGroups
 	providersAPIVersion = "2021-04-01" // Microsoft.Resources/providers
+	featuresAPIVersion  = "2021-07-01" // Microsoft.Features
 	footprintName       = "cortex-footprint"
 )
 
@@ -42,6 +43,8 @@ var footprintProviders = []string{
 	"Microsoft.Compute",             // AKS node VMSS
 	"Microsoft.Network",             // AKS networking
 	"Microsoft.Storage",             // AKS/agent storage
+	"Microsoft.ServiceNetworking",   // Application Gateway for Containers (trafficControllers)
+	"Microsoft.NetworkFunction",     // AGC dependency
 }
 
 // registerProviders registers the given resource providers in the subscription
@@ -53,6 +56,29 @@ func (p *Provisioner) registerProviders(ctx context.Context, sub string, namespa
 		url := fmt.Sprintf("https://management.azure.com/subscriptions/%s/providers/%s/register?api-version=%s", sub, ns, providersAPIVersion)
 		if err := p.arm(ctx, http.MethodPost, url, nil, nil); err != nil {
 			slog.Warn("provision: register provider failed", "sub", sub, "provider", ns, "err", trunc(err.Error()))
+		}
+	}
+}
+
+// footprintFeatures are the preview feature flags the footprint's AKS add-ons
+// need (Application Gateway for Containers + its managed Gateway API). They must
+// be registered before Microsoft.ContainerService is (re)registered to take
+// effect, so registerFeatures runs first in the footprint sweep.
+var footprintFeatures = []struct{ ns, name string }{
+	{"Microsoft.ContainerService", "ManagedGatewayAPIPreview"},
+	{"Microsoft.ContainerService", "ApplicationLoadBalancerPreview"},
+}
+
+// registerFeatures registers the preview features (idempotent, best-effort).
+// Registration is asynchronous and only takes effect after the owning provider is
+// re-registered — both of which the footprint sweep retries until the deploy
+// succeeds.
+func (p *Provisioner) registerFeatures(ctx context.Context, sub string) {
+	for _, f := range footprintFeatures {
+		url := fmt.Sprintf("https://management.azure.com/subscriptions/%s/providers/Microsoft.Features/providers/%s/features/%s/register?api-version=%s",
+			sub, f.ns, f.name, featuresAPIVersion)
+		if err := p.arm(ctx, http.MethodPost, url, nil, nil); err != nil {
+			slog.Warn("provision: register feature failed", "sub", sub, "feature", f.name, "err", trunc(err.Error()))
 		}
 	}
 }
@@ -154,6 +180,7 @@ func (p *Provisioner) ensureFootprint(ctx context.Context, t store.FootprintTarg
 	}
 	// A freshly delegated subscription usually hasn't registered the resource
 	// providers the footprint uses — register them (idempotent) before deploying.
+	p.registerFeatures(ctx, t.SubscriptionID)
 	p.registerProviders(ctx, t.SubscriptionID, footprintProviders)
 	if err := p.createResourceGroup(ctx, t.SubscriptionID, p.footprintRG); err != nil {
 		slog.Warn("provision: create footprint RG failed", "tenant", t.Slug, "err", trunc(err.Error()))

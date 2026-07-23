@@ -38,6 +38,7 @@ const (
 	aksAADResource  = "6dae42f8-4368-4678-94ff-3960e28e3630"
 	armScope        = "https://management.azure.com/.default"
 	armAPIVersion   = "2024-09-01"
+	vnetAPIVersion  = "2023-11-01" // Microsoft.Network/virtualNetworks (AGC subnet lookup)
 	argoNamespace   = "argocd"
 	fieldManager    = "cortex-reconciler"
 	argoManifestFmt = "https://raw.githubusercontent.com/argoproj/argo-cd/%s/manifests/install.yaml"
@@ -54,12 +55,15 @@ const (
 )
 
 var (
-	appGVR = schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"}
-	prjGVR = schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "appprojects"}
-	nsGVR  = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "namespaces"}
-	depGVR = schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
-	ingGVR = schema.GroupVersionResource{Group: "networking.k8s.io", Version: "v1", Resource: "ingresses"}
-	secGVR = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "secrets"}
+	appGVR   = schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"}
+	prjGVR   = schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "appprojects"}
+	nsGVR    = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "namespaces"}
+	depGVR   = schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
+	secGVR   = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "secrets"}
+	ingGVR   = schema.GroupVersionResource{Group: "networking.k8s.io", Version: "v1", Resource: "ingresses"} // legacy AGIC cleanup
+	albGVR   = schema.GroupVersionResource{Group: "alb.networking.azure.io", Version: "v1", Resource: "applicationloadbalancers"}
+	gwGVR    = schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "gateways"}
+	routeGVR = schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "httproutes"}
 )
 
 // Options is the full address + policy for one tenant's cluster. Grouping them
@@ -147,11 +151,12 @@ func (c *Client) Reconcile(ctx context.Context, apps []shared.DesiredApplication
 	status.Phase = shared.ClusterReady
 
 	// Bound tenant apps to their Argo project, then stamp each app's Argo
-	// Application + a plain Ingress. AGIC programs the Azure Application Gateway
-	// from those Ingresses; report the gateway address it assigns.
+	// Application + an HTTPRoute. The AKS ALB add-on programs Application Gateway
+	// for Containers from a shared Gateway + those routes; report its FQDN.
 	k.ensureTenantProject(ctx)
+	k.ensureGateway(ctx, c.agcSubnetID(ctx, m.nodeResourceGroup))
 	appStatuses := k.reconcileApplications(ctx, apps, c.o)
-	status.GatewayIP = k.appGatewayIP(ctx)
+	status.GatewayIP = k.gatewayAddress(ctx)
 	status.IngressInstalled = status.GatewayIP != ""
 
 	// Each app's Azure infra is provisioned by the control plane (via Lighthouse)
@@ -166,6 +171,7 @@ type clusterMeta struct {
 	provisioningState string
 	k8sVersion        string
 	nodeCount         int
+	nodeResourceGroup string // MC_ RG where the AGC subnet lives
 }
 
 func (c *Client) getCluster(ctx context.Context) (clusterMeta, error) {
@@ -174,6 +180,7 @@ func (c *Client) getCluster(ctx context.Context) (clusterMeta, error) {
 		Properties struct {
 			ProvisioningState string `json:"provisioningState"`
 			KubernetesVersion string `json:"currentKubernetesVersion"`
+			NodeResourceGroup string `json:"nodeResourceGroup"`
 			AgentPoolProfiles []struct {
 				Count int `json:"count"`
 			} `json:"agentPoolProfiles"`
@@ -190,7 +197,48 @@ func (c *Client) getCluster(ctx context.Context) (clusterMeta, error) {
 		provisioningState: body.Properties.ProvisioningState,
 		k8sVersion:        body.Properties.KubernetesVersion,
 		nodeCount:         n,
+		nodeResourceGroup: body.Properties.NodeResourceGroup,
 	}, nil
+}
+
+// agcSubnetID finds the AGC association subnet the AKS add-on created in the node
+// resource group (delegated to Microsoft.ServiceNetworking/trafficControllers).
+// Returns "" when it isn't present yet (add-on still provisioning).
+func (c *Client) agcSubnetID(ctx context.Context, nodeRG string) string {
+	if nodeRG == "" {
+		return ""
+	}
+	u := fmt.Sprintf("https://management.azure.com/subscriptions/%s/resourceGroups/%s/providers/Microsoft.Network/virtualNetworks?api-version=%s",
+		c.o.SubscriptionID, nodeRG, vnetAPIVersion)
+	var body struct {
+		Value []struct {
+			Properties struct {
+				Subnets []struct {
+					ID         string `json:"id"`
+					Properties struct {
+						Delegations []struct {
+							Properties struct {
+								ServiceName string `json:"serviceName"`
+							} `json:"properties"`
+						} `json:"delegations"`
+					} `json:"properties"`
+				} `json:"subnets"`
+			} `json:"properties"`
+		} `json:"value"`
+	}
+	if err := c.arm(ctx, http.MethodGet, u, &body); err != nil {
+		return ""
+	}
+	for _, v := range body.Value {
+		for _, s := range v.Properties.Subnets {
+			for _, d := range s.Properties.Delegations {
+				if strings.EqualFold(d.Properties.ServiceName, "Microsoft.ServiceNetworking/trafficControllers") {
+					return s.ID
+				}
+			}
+		}
+	}
+	return ""
 }
 
 // kubeClient lists the AAD (user) kubeconfig via ARM, then builds a kube client

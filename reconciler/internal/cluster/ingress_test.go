@@ -23,72 +23,75 @@ func TestAppHost(t *testing.T) {
 	}
 }
 
-func TestAppIngressRoutesToDeclaredService(t *testing.T) {
-	ing := appIngress("shop", "tenant-ns", "app-123", "shop.apps.example.com", "shop-storefront", 8080)
+func TestAppRouteToDeclaredService(t *testing.T) {
+	r := appRoute("shop", "tenant-ns", "app-123", "shop.apps.example.com", "shop-storefront", 8080)
 
-	if got := ing.GetAPIVersion(); got != "networking.k8s.io/v1" {
+	if got := r.GetAPIVersion(); got != "gateway.networking.k8s.io/v1" {
 		t.Fatalf("apiVersion: %q", got)
 	}
-	if got := ing.GetKind(); got != "Ingress" {
+	if got := r.GetKind(); got != "HTTPRoute" {
 		t.Fatalf("kind: %q", got)
 	}
-	if got := ing.GetName(); got != "shop" {
-		t.Fatalf("name: %q", got)
-	}
-	if got := ing.GetNamespace(); got != "tenant-ns" {
-		t.Fatalf("namespace: %q", got)
+	if got := r.GetName(); got != "shop" || r.GetNamespace() != "tenant-ns" {
+		t.Fatalf("name/ns: %q/%q", r.GetName(), r.GetNamespace())
 	}
 
-	// Managed (so GC finds it) but NOT system (system resources are excluded
-	// from the app GC selector).
-	labels := ing.GetLabels()
-	if labels[labelManaged] != "true" {
-		t.Fatalf("expected managed label, got %v", labels)
+	// Managed (so GC finds it) but NOT system.
+	labels := r.GetLabels()
+	if labels[labelManaged] != "true" || labels[labelAppID] != "app-123" {
+		t.Fatalf("labels = %v", labels)
 	}
 	if _, ok := labels[labelSystem]; ok {
-		t.Fatalf("app ingress must not carry the system label: %v", labels)
-	}
-	if labels[labelAppID] != "app-123" {
-		t.Fatalf("expected app-id label, got %v", labels)
+		t.Fatalf("app route must not carry the system label: %v", labels)
 	}
 
-	// AGIC class annotation routes it through the Azure Application Gateway.
-	ann := ing.GetAnnotations()
-	if ann["kubernetes.io/ingress.class"] != appGatewayIngressClass {
-		t.Fatalf("expected AGIC ingress class, got %v", ann)
+	// Attaches to the shared Gateway.
+	parents, _, _ := unstructured.NestedSlice(r.Object, "spec", "parentRefs")
+	p := parents[0].(map[string]any)
+	if p["name"] != gatewayName || p["namespace"] != gatewayNS {
+		t.Fatalf("parentRef = %v", p)
 	}
 
-	rules, found, err := unstructured.NestedSlice(ing.Object, "spec", "rules")
-	if err != nil || !found || len(rules) != 1 {
-		t.Fatalf("expected one rule, got %v (found=%v err=%v)", rules, found, err)
-	}
-	rule := rules[0].(map[string]any)
-	if rule["host"] != "shop.apps.example.com" {
-		t.Fatalf("expected host on rule, got %v", rule["host"])
+	hosts, found, _ := unstructured.NestedStringSlice(r.Object, "spec", "hostnames")
+	if !found || len(hosts) != 1 || hosts[0] != "shop.apps.example.com" {
+		t.Fatalf("hostnames = %v", hosts)
 	}
 
-	paths := rule["http"].(map[string]any)["paths"].([]any)
-	backend := paths[0].(map[string]any)["backend"].(map[string]any)
-	svc := backend["service"].(map[string]any)
-	if svc["name"] != "shop-storefront" {
-		t.Fatalf("backend must target the declared Service, got %v", svc["name"])
+	rules, _, _ := unstructured.NestedSlice(r.Object, "spec", "rules")
+	be := rules[0].(map[string]any)["backendRefs"].([]any)[0].(map[string]any)
+	if be["name"] != "shop-storefront" {
+		t.Fatalf("backend must target the declared Service, got %v", be["name"])
 	}
-	port := svc["port"].(map[string]any)
-	if port["number"] != int64(8080) {
-		t.Fatalf("backend port should be the declared 8080, got %v", port["number"])
+	if be["port"] != int64(8080) {
+		t.Fatalf("backend port should be 8080, got %v", be["port"])
 	}
 }
 
-func TestAppIngressDefaultsPort(t *testing.T) {
-	ing := appIngress("shop", "tenant-ns", "app-123", "", "shop-svc", 0)
-	rules, _, _ := unstructured.NestedSlice(ing.Object, "spec", "rules")
-	rule := rules[0].(map[string]any)
-	if _, ok := rule["host"]; ok {
-		t.Fatalf("host-less ingress must omit the host key: %v", rule)
+func TestAppRouteDefaultsPortAndHostless(t *testing.T) {
+	r := appRoute("shop", "tenant-ns", "app-123", "", "shop-svc", 0)
+	if _, found, _ := unstructured.NestedStringSlice(r.Object, "spec", "hostnames"); found {
+		t.Fatalf("host-less route must omit hostnames")
 	}
-	svc := rule["http"].(map[string]any)["paths"].([]any)[0].(map[string]any)["backend"].(map[string]any)["service"].(map[string]any)
-	if svc["port"].(map[string]any)["number"] != int64(80) {
-		t.Fatalf("port 0 must default to 80, got %v", svc["port"])
+	rules, _, _ := unstructured.NestedSlice(r.Object, "spec", "rules")
+	be := rules[0].(map[string]any)["backendRefs"].([]any)[0].(map[string]any)
+	if be["port"] != int64(80) {
+		t.Fatalf("port 0 must default to 80, got %v", be["port"])
+	}
+}
+
+func TestGatewayBindsToALB(t *testing.T) {
+	gw := gateway()
+	if got, _, _ := unstructured.NestedString(gw.Object, "spec", "gatewayClassName"); got != gatewayClass {
+		t.Fatalf("gatewayClassName = %q", got)
+	}
+	ann := gw.GetAnnotations()
+	if ann["alb.networking.azure.io/alb-name"] != albName || ann["alb.networking.azure.io/alb-namespace"] != gatewayNS {
+		t.Fatalf("alb annotations = %v", ann)
+	}
+	alb := applicationLoadBalancer("/subscriptions/s/…/subnets/aks-appgateway")
+	assoc, _, _ := unstructured.NestedSlice(alb.Object, "spec", "associations")
+	if len(assoc) != 1 || assoc[0] != "/subscriptions/s/…/subnets/aks-appgateway" {
+		t.Fatalf("associations = %v", assoc)
 	}
 }
 

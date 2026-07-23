@@ -263,7 +263,7 @@ resource projectFoundryRoleAssignment 'Microsoft.Authorization/roleAssignments@2
 // AAD-integrated + Azure RBAC, local accounts disabled: the reconciler's own
 // managed identity authenticates with an Entra token and is authorized by the
 // two role assignments below — no cluster admin kubeconfig secret anywhere.
-resource aks 'Microsoft.ContainerService/managedClusters@2024-09-01' = if (deployCluster) {
+resource aks 'Microsoft.ContainerService/managedClusters@2025-09-02-preview' = if (deployCluster) {
   name: clusterName
   location: location
   identity: { type: 'SystemAssigned' }
@@ -272,6 +272,13 @@ resource aks 'Microsoft.ContainerService/managedClusters@2024-09-01' = if (deplo
     kubernetesVersion: empty(kubernetesVersion) ? null : kubernetesVersion
     enableRBAC: true
     disableLocalAccounts: true
+    // OIDC issuer + workload identity: required by the Application Gateway for
+    // Containers (AGC) ALB controller, which authenticates via a federated
+    // credential on its add-on-managed identity.
+    oidcIssuerProfile: { enabled: true }
+    securityProfile: {
+      workloadIdentity: { enabled: true }
+    }
     aadProfile: {
       managed: true
       enableAzureRBAC: true
@@ -288,18 +295,14 @@ resource aks 'Microsoft.ContainerService/managedClusters@2024-09-01' = if (deplo
         type: 'VirtualMachineScaleSets'
       }
     ]
-    // AGIC (greenfield): the addon provisions and manages an Azure Application
-    // Gateway (+ its own identity and RBAC) in a new subnet, and programs it from
-    // the plain Ingress objects the reconciler stamps per app. This replaces the
-    // in-cluster Envoy ingress; edge identity is no longer enforced.
-    addonProfiles: {
-      ingressApplicationGateway: {
-        enabled: true
-        config: {
-          applicationGatewayName: '${clusterName}-agw'
-          subnetCIDR: '10.225.0.0/16'
-        }
-      }
+    // Application Gateway for Containers (AGC) via the AKS add-on: installs the
+    // Gateway API + ALB controller, which auto-provisions the AGC identity, roles,
+    // federated credential, and delegated subnet. The reconciler then programs it
+    // from a Gateway + per-app HTTPRoutes. AGC routes via the Service, so it works
+    // with this cluster's Azure CNI Overlay network (unlike AGIC).
+    ingressProfile: {
+      gatewayAPI: { installation: 'Standard' }
+      applicationLoadBalancer: { enabled: true }
     }
   }
 }

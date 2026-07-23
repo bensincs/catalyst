@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.40.2.10011",
-      "templateHash": "2580174523832502735"
+      "templateHash": "12231465373342628523"
     }
   },
   "parameters": {
@@ -358,7 +358,7 @@
     {
       "condition": "[parameters('deployCluster')]",
       "type": "Microsoft.ContainerService/managedClusters",
-      "apiVersion": "2024-09-01",
+      "apiVersion": "2025-09-02-preview",
       "name": "[parameters('clusterName')]",
       "location": "[parameters('location')]",
       "identity": {
@@ -369,6 +369,14 @@
         "kubernetesVersion": "[if(empty(parameters('kubernetesVersion')), null(), parameters('kubernetesVersion'))]",
         "enableRBAC": true,
         "disableLocalAccounts": true,
+        "oidcIssuerProfile": {
+          "enabled": true
+        },
+        "securityProfile": {
+          "workloadIdentity": {
+            "enabled": true
+          }
+        },
         "aadProfile": {
           "managed": true,
           "enableAzureRBAC": true,
@@ -385,13 +393,12 @@
             "type": "VirtualMachineScaleSets"
           }
         ],
-        "addonProfiles": {
-          "ingressApplicationGateway": {
-            "enabled": true,
-            "config": {
-              "applicationGatewayName": "[format('{0}-agw', parameters('clusterName'))]",
-              "subnetCIDR": "10.225.0.0/16"
-            }
+        "ingressProfile": {
+          "gatewayAPI": {
+            "installation": "Standard"
+          },
+          "applicationLoadBalancer": {
+            "enabled": true
           }
         }
       }
