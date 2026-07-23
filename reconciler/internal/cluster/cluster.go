@@ -196,7 +196,10 @@ func (c *Client) getCluster(ctx context.Context) (clusterMeta, error) {
 // kubeClient lists the AAD (user) kubeconfig via ARM, then builds a kube client
 // that authenticates as this managed identity with an AKS AAD token.
 func (c *Client) kubeClient(ctx context.Context) (*kube, error) {
-	u := c.armURL("/listClusterUserCredentials")
+	// The ARM action is singular: listClusterUserCredential (the built-in AKS
+	// Cluster User Role grants exactly that). The plural form is a 404 that a
+	// scoped identity sees as a 403, so the cluster looks permanently unreachable.
+	u := c.armURL("/listClusterUserCredential")
 	var resp struct {
 		Kubeconfigs []struct {
 			Value []byte `json:"value"` // base64 → decoded YAML by encoding/json
