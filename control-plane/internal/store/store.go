@@ -1219,15 +1219,18 @@ type FootprintTarget struct {
 	SubscriptionID string
 	Name           string
 	State          string // current footprint_state
+	Reprovision    bool   // platform admin asked to re-submit over a ready footprint
 }
 
-// FootprintTargets returns enabled tenants that have a subscription but no ready
-// footprint yet.
+// FootprintTargets returns enabled, delegated tenants whose footprint the control
+// plane should (re)provision: those without a ready footprint yet, plus any a
+// platform admin flagged for re-provisioning.
 func (s *Store) FootprintTargets(ctx context.Context) ([]FootprintTarget, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT id, coalesce(tenant_id,''), coalesce(subscription_id,''), name, coalesce(footprint_state,'')
+		`SELECT id, coalesce(tenant_id,''), coalesce(subscription_id,''), name, coalesce(footprint_state,''), coalesce(footprint_reprovision,false)
 		 FROM tenants
-		 WHERE enabled = true AND coalesce(subscription_id,'') <> '' AND coalesce(footprint_state,'') <> 'ready'`)
+		 WHERE enabled = true AND coalesce(subscription_id,'') <> ''
+		   AND (coalesce(footprint_state,'') <> 'ready' OR footprint_reprovision = true)`)
 	if err != nil {
 		return nil, err
 	}
@@ -1235,7 +1238,7 @@ func (s *Store) FootprintTargets(ctx context.Context) ([]FootprintTarget, error)
 	var out []FootprintTarget
 	for rows.Next() {
 		var t FootprintTarget
-		if err := rows.Scan(&t.Slug, &t.TenantID, &t.SubscriptionID, &t.Name, &t.State); err != nil {
+		if err := rows.Scan(&t.Slug, &t.TenantID, &t.SubscriptionID, &t.Name, &t.State, &t.Reprovision); err != nil {
 			return nil, err
 		}
 		out = append(out, t)
@@ -1247,6 +1250,30 @@ func (s *Store) FootprintTargets(ctx context.Context) ([]FootprintTarget, error)
 func (s *Store) SetFootprintState(ctx context.Context, slug, state, detail string) error {
 	_, err := s.pool.Exec(ctx,
 		`UPDATE tenants SET footprint_state = $2, footprint_detail = $3 WHERE id = $1`, slug, state, detail)
+	return err
+}
+
+// RequestFootprintReprovision flags a delegated tenant for a one-shot footprint
+// re-submit, so footprint template changes reach an already-provisioned tenant.
+// The next provisioner sweep re-PUTs the (idempotent) template and clears the
+// flag. Errors ErrNotFound when the tenant is missing or not delegated (no sub).
+func (s *Store) RequestFootprintReprovision(ctx context.Context, slug string) error {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE tenants SET footprint_reprovision = true, footprint_state = 'provisioning', footprint_detail = 'Re-provision requested.'
+		 WHERE id = $1 AND coalesce(subscription_id,'') <> ''`, slug)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// ClearFootprintReprovision consumes the one-shot reprovision flag (called by the
+// provisioner once it has re-submitted, so it fires exactly once per request).
+func (s *Store) ClearFootprintReprovision(ctx context.Context, slug string) error {
+	_, err := s.pool.Exec(ctx, `UPDATE tenants SET footprint_reprovision = false WHERE id = $1`, slug)
 	return err
 }
 

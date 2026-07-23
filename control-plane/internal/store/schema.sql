@@ -191,6 +191,10 @@ ALTER TABLE tenants ADD COLUMN IF NOT EXISTS infra_detail    text    NOT NULL DE
 -- Per-tenant footprint (reconciler + Foundry + AKS) provisioned by the control plane via Lighthouse.
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS footprint_state  text NOT NULL DEFAULT ''; -- '' | provisioning | ready | failed
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS footprint_detail text NOT NULL DEFAULT '';
+-- One-shot request (platform admin) to re-submit the footprint template over an
+-- already-provisioned tenant, so footprint changes (config fixes, new features)
+-- reach existing tenants. Consumed + cleared by the provisioner's next sweep.
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS footprint_reprovision boolean NOT NULL DEFAULT false;
 
 -- A Helm deployment a tenant runs in its cluster. The reconciler stamps each as
 -- an Argo CD Application (Helm source); Argo CD installs the chart and keeps it

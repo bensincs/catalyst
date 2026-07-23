@@ -116,6 +116,7 @@ func (s *Server) Router() http.Handler {
 			r.Get("/tenants", s.handleTenantsRegistry)
 			r.Patch("/tenants/{slug}/all-entitlements", s.handleSetAllEntitlements)
 			r.Patch("/tenants/{slug}/enabled", s.handleSetTenantEnabled)
+			r.Post("/tenants/{slug}/reprovision", s.handleReprovisionFootprint)
 
 			// Agent ↔ memory-store connection (a relation, not a CRUD verb).
 			r.Post("/tenant/agents/{agentId}/store", s.handleConnectAgentStore)
@@ -227,6 +228,26 @@ func (s *Server) handleSetTenantEnabled(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
+// handleReprovisionFootprint flags a delegated tenant for a one-shot footprint
+// re-submit (platform only), so footprint template changes — config fixes, new
+// features — reach an already-provisioned tenant. The provisioner's next sweep
+// re-PUTs the idempotent template into the tenant's subscription.
+func (s *Server) handleReprovisionFootprint(w http.ResponseWriter, r *http.Request) {
+	id, _ := auth.IdentityFrom(r.Context())
+	if !s.requirePlatform(w, id) {
+		return
+	}
+	if err := s.store.RequestFootprintReprovision(r.Context(), chi.URLParam(r, "slug")); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "tenant not found or not delegated")
+			return
+		}
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "reprovisioning"})
 }
 
 func (s *Server) handleFleet(w http.ResponseWriter, r *http.Request) {

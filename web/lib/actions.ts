@@ -171,6 +171,16 @@ export async function setTenantEnabled(slug: string, enabled: boolean): Promise<
   );
 }
 
+// Re-provision a tenant's footprint: re-submit the (idempotent) footprint template
+// so config fixes + new platform features reach an already-provisioned tenant.
+// Platform admins only.
+export async function reprovisionFootprint(slug: string): Promise<ActionResult> {
+  return run(
+    () => apiSend("POST", `/api/tenants/${encodeURIComponent(slug)}/reprovision`),
+    [`/tenants/${slug}`, "/"],
+  );
+}
+
 /* ── Agents ───────────────────────────────────────────────────────────────── */
 
 export async function createCatalogAgent(input: {

@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { ApiError, getApplications, getCatalog, getInfrastructure, getMe, getMemoryStores, getTenantContext, getTenantsRegistry } from "@/lib/api";
 import { TenantOverview } from "@/components/views/tenant-overview";
 import { TenantAccessPanel } from "@/components/views/tenant-access-panel";
+import { FootprintReprovisionPanel } from "@/components/views/footprint-reprovision-panel";
 import { EntitlementsPanel } from "@/components/views/entitlements-panel";
 
 export default async function TenantDrillInPage({
@@ -28,6 +29,13 @@ export default async function TenantDrillInPage({
       entitlements = (
         <>
           <TenantAccessPanel slug={slug} name={ctx.tenant.name} enabled={ctx.tenant.enabled} />
+          {ctx.tenant.cluster.infraDelegated ? (
+            <FootprintReprovisionPanel
+              slug={slug}
+              name={ctx.tenant.name}
+              footprintState={ctx.tenant.cluster.footprintState}
+            />
+          ) : null}
           <EntitlementsPanel
             slug={slug}
             name={ctx.tenant.name}

@@ -135,7 +135,13 @@ func (p *Provisioner) provisionFootprints(ctx context.Context) {
 // RG + submits it (provisioning); a failed deployment is recorded failed.
 func (p *Provisioner) ensureFootprint(ctx context.Context, t store.FootprintTarget) {
 	url := p.footprintDeploymentURL(t.SubscriptionID)
-	if _, state, found := p.deploymentState(ctx, url); found {
+	if t.Reprovision {
+		// Platform admin requested a re-submit over an existing footprint. Consume
+		// the one-shot flag now so it fires exactly once, then fall through to a
+		// fresh (idempotent, Incremental) submit instead of the short-circuit below.
+		_ = p.store.ClearFootprintReprovision(ctx, t.Slug)
+		slog.Info("provision: re-provisioning footprint", "tenant", t.Slug)
+	} else if _, state, found := p.deploymentState(ctx, url); found {
 		switch {
 		case strings.EqualFold(state, "Succeeded"):
 			_ = p.store.SetFootprintState(ctx, t.Slug, "ready", "Reconciler + Foundry provisioned.")
