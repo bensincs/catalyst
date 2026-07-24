@@ -10,6 +10,7 @@
 package cluster
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -42,6 +43,12 @@ const (
 	argoNamespace   = "argocd"
 	fieldManager    = "cortex-reconciler"
 	argoManifestFmt = "https://raw.githubusercontent.com/argoproj/argo-cd/%s/manifests/install.yaml"
+	// agcNSGRule opens the AGC subnet's NSG for inbound client traffic to the
+	// frontend. The AKS add-on's subnet NSG only has the default rules (ending in
+	// DenyAllInBound), which drops client SYNs to the AGC data-path proxies that
+	// hold the frontend IP — so the public FQDN times out at TCP connect without it.
+	agcNSGRuleName     = "AllowAGCFrontendInbound"
+	agcNSGRulePriority = 100
 )
 
 // Labels Cortex stamps on every Argo Application it manages, so it only ever
@@ -58,10 +65,12 @@ var (
 	appGVR   = schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"}
 	prjGVR   = schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "appprojects"}
 	nsGVR    = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "namespaces"}
+	podGVR   = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"}
+	crdGVR   = schema.GroupVersionResource{Group: "apiextensions.k8s.io", Version: "v1", Resource: "customresourcedefinitions"}
 	depGVR   = schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
 	secGVR   = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "secrets"}
 	ingGVR   = schema.GroupVersionResource{Group: "networking.k8s.io", Version: "v1", Resource: "ingresses"} // legacy AGIC cleanup
-	albGVR   = schema.GroupVersionResource{Group: "alb.networking.azure.io", Version: "v1", Resource: "applicationloadbalancers"}
+	albGVR   = schema.GroupVersionResource{Group: "alb.networking.azure.io", Version: "v1", Resource: "applicationloadbalancer"} // CRD plural is non-standard (no trailing s)
 	gwGVR    = schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "gateways"}
 	routeGVR = schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "httproutes"}
 )
@@ -155,11 +164,15 @@ func (c *Client) Reconcile(ctx context.Context, apps []shared.DesiredApplication
 	// for Containers from a shared Gateway + those routes; report its FQDN.
 	k.ensureTenantProject(ctx)
 	subnet := c.agcSubnetID(ctx, m.nodeResourceGroup)
+	c.ensureAGCSubnetNSG(ctx, subnet)
 	k.ensureGateway(ctx, subnet)
 	appStatuses := k.reconcileApplications(ctx, apps, c.o)
 	status.GatewayIP = k.gatewayAddress(ctx)
 	status.IngressInstalled = status.GatewayIP != ""
 	slog.Info("cluster: gateway reconcile", "nodeRG", m.nodeResourceGroup, "subnetFound", subnet != "", "address", status.GatewayIP)
+	if status.GatewayIP == "" {
+		k.diagnoseGateway(ctx)
+	}
 
 	// Each app's Azure infra is provisioned by the control plane (via Lighthouse)
 	// and its outputs are already merged into the Helm values by the time an app
@@ -244,6 +257,58 @@ func (c *Client) agcSubnetID(ctx context.Context, nodeRG string) string {
 	return ""
 }
 
+// ensureAGCSubnetNSG opens the AGC association subnet's NSG so clients can reach
+// the Application Gateway for Containers frontend. The AKS add-on gives that
+// subnet a dedicated NSG with only the default rules — whose DenyAllInBound drops
+// inbound Internet SYNs to the AGC data-path proxies (which hold the frontend IP),
+// so the public FQDN times out at TCP connect. Idempotent: skips the write once
+// the rule is present, so it never churns ARM.
+func (c *Client) ensureAGCSubnetNSG(ctx context.Context, subnetID string) {
+	if subnetID == "" {
+		return
+	}
+	var sub struct {
+		Properties struct {
+			NetworkSecurityGroup struct {
+				ID string `json:"id"`
+			} `json:"networkSecurityGroup"`
+		} `json:"properties"`
+	}
+	if err := c.arm(ctx, http.MethodGet, "https://management.azure.com"+subnetID+"?api-version="+vnetAPIVersion, &sub); err != nil {
+		slog.Warn("cluster: get AGC subnet for NSG failed", "err", trunc(err.Error()))
+		return
+	}
+	nsgID := sub.Properties.NetworkSecurityGroup.ID
+	if nsgID == "" {
+		return // no NSG on the subnet ⇒ nothing blocking inbound
+	}
+	ruleURL := fmt.Sprintf("https://management.azure.com%s/securityRules/%s?api-version=%s", nsgID, agcNSGRuleName, vnetAPIVersion)
+	var existing struct {
+		Properties struct {
+			ProvisioningState string `json:"provisioningState"`
+		} `json:"properties"`
+	}
+	if err := c.arm(ctx, http.MethodGet, ruleURL, &existing); err == nil && existing.Properties.ProvisioningState != "" {
+		return // already present
+	}
+	rule := map[string]any{"properties": map[string]any{
+		"priority":                 agcNSGRulePriority,
+		"direction":                "Inbound",
+		"access":                   "Allow",
+		"protocol":                 "Tcp",
+		"sourceAddressPrefix":      "Internet",
+		"sourcePortRange":          "*",
+		"destinationAddressPrefix": "*",
+		"destinationPortRanges":    []string{"80", "443"},
+		"description":              "Allow inbound client traffic to the Application Gateway for Containers frontend.",
+	}}
+	if err := c.armPut(ctx, ruleURL, rule); err != nil {
+		slog.Warn("cluster: open AGC subnet NSG failed", "err", trunc(err.Error()))
+		return
+	}
+	slog.Info("cluster: opened AGC subnet NSG for inbound frontend traffic", "nsg", nsgID)
+}
+
 // kubeClient lists the AAD (user) kubeconfig via ARM, then builds a kube client
 // that authenticates as this managed identity with an AKS AAD token.
 func (c *Client) kubeClient(ctx context.Context) (*kube, error) {
@@ -313,6 +378,36 @@ func (c *Client) arm(ctx context.Context, method, url string, out any) error {
 		return fmt.Errorf("arm %s: %d %s", method, resp.StatusCode, strings.TrimSpace(string(b)))
 	}
 	return decodeJSON(resp.Body, out)
+}
+
+// armPut sends a JSON body to ARM (for resource writes like NSG security rules)
+// as this managed identity. It discards the response body — callers that need it
+// should read the resource back with arm.
+func (c *Client) armPut(ctx context.Context, url string, body any) error {
+	tok, err := c.cred.GetToken(ctx, policy.TokenRequestOptions{Scopes: []string{armScope}})
+	if err != nil {
+		return fmt.Errorf("acquire ARM token: %w", err)
+	}
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, bytes.NewReader(buf))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+tok.Token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return fmt.Errorf("arm PUT: %d %s", resp.StatusCode, strings.TrimSpace(string(b)))
+	}
+	return nil
 }
 
 // --- Argo CD bootstrap ------------------------------------------------------

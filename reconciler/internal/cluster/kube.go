@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/restmapper"
@@ -255,10 +256,157 @@ func (k *kube) ensureGateway(ctx context.Context, subnetID string) {
 	if strings.TrimSpace(subnetID) != "" {
 		if _, err := k.dyn.Resource(albGVR).Namespace(gatewayNS).Apply(ctx, albName, applicationLoadBalancer(subnetID), ssaOpts); err != nil {
 			slog.Warn("cluster: apply ApplicationLoadBalancer failed", "err", trunc(err.Error()))
+			k.diagnoseALB(ctx) // surface why the AGC ALB controller CRDs are missing
 		}
 	}
 	if _, err := k.dyn.Resource(gwGVR).Namespace(gatewayNS).Apply(ctx, gatewayName, gateway(), ssaOpts); err != nil {
 		slog.Warn("cluster: apply Gateway failed", "err", trunc(err.Error()))
+	}
+}
+
+// diagnoseALB logs the state of the AKS-managed ALB controller (kube-system) so we
+// can see, from outside the cluster, why its alb.networking.azure.io CRDs aren't
+// registered — most tellingly whether its pods are crash-looping or absent.
+func (k *kube) diagnoseALB(ctx context.Context) {
+	pods, err := k.dyn.Resource(podGVR).Namespace("kube-system").List(ctx, metav1.ListOptions{})
+	if err != nil {
+		slog.Warn("cluster: ALB diag: list kube-system pods failed", "err", trunc(err.Error()))
+		return
+	}
+	found := 0
+	for i := range pods.Items {
+		name := pods.Items[i].GetName()
+		if !strings.Contains(name, "alb") {
+			continue
+		}
+		found++
+		phase, _, _ := unstructured.NestedString(pods.Items[i].Object, "status", "phase")
+		cs, _, _ := unstructured.NestedSlice(pods.Items[i].Object, "status", "containerStatuses")
+		detail := ""
+		for _, c := range cs {
+			m, ok := c.(map[string]any)
+			if !ok {
+				continue
+			}
+			reason := ""
+			if state, ok := m["state"].(map[string]any); ok {
+				for _, phaseKey := range []string{"waiting", "terminated"} {
+					if w, ok := state[phaseKey].(map[string]any); ok {
+						if r, ok := w["reason"].(string); ok {
+							reason = phaseKey + ":" + r
+						}
+					}
+				}
+			}
+			detail += fmt.Sprintf(" [ready=%v restarts=%v %s]", m["ready"], m["restartCount"], reason)
+		}
+		slog.Warn("cluster: ALB diag: pod", "name", name, "phase", phase, "containers", detail)
+	}
+	if found == 0 {
+		slog.Warn("cluster: ALB diag: NO alb-controller pods in kube-system (add-on controller not deployed)")
+	}
+	// List the alb.networking.azure.io CRDs to reveal the actual group/version/
+	// resource the controller serves — the apply uses alb.networking.azure.io/v1.
+	if crds, err := k.dyn.Resource(crdGVR).List(ctx, metav1.ListOptions{}); err == nil {
+		albCRDs := 0
+		for i := range crds.Items {
+			name := crds.Items[i].GetName()
+			if !strings.Contains(name, "alb.networking.azure.io") {
+				continue
+			}
+			albCRDs++
+			group, _, _ := unstructured.NestedString(crds.Items[i].Object, "spec", "group")
+			plural, _, _ := unstructured.NestedString(crds.Items[i].Object, "spec", "names", "plural")
+			vers, _, _ := unstructured.NestedSlice(crds.Items[i].Object, "spec", "versions")
+			names := make([]string, 0, len(vers))
+			for _, v := range vers {
+				if m, ok := v.(map[string]any); ok {
+					names = append(names, fmt.Sprintf("%v", m["name"]))
+				}
+			}
+			slog.Warn("cluster: ALB diag: CRD", "name", name, "group", group, "plural", plural, "versions", strings.Join(names, ","))
+		}
+		if albCRDs == 0 {
+			slog.Warn("cluster: ALB diag: NO alb.networking.azure.io CRDs registered")
+		}
+	}
+}
+
+// diagnoseGateway logs the status conditions of the ApplicationLoadBalancer and
+// Gateway so we can see why the ALB controller hasn't assigned a frontend address
+// (e.g. an invalid ref, unaccepted listener, or still-programming).
+func (k *kube) diagnoseGateway(ctx context.Context) {
+	logConds := func(gvr schema.GroupVersionResource, name, kind string) {
+		obj, err := k.dyn.Resource(gvr).Namespace(gatewayNS).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			slog.Warn("cluster: GW diag: get failed", "kind", kind, "err", trunc(err.Error()))
+			return
+		}
+		conds, found, _ := unstructured.NestedSlice(obj.Object, "status", "conditions")
+		if !found || len(conds) == 0 {
+			slog.Warn("cluster: GW diag: no status conditions yet", "kind", kind)
+			return
+		}
+		for _, c := range conds {
+			m, ok := c.(map[string]any)
+			if !ok {
+				continue
+			}
+			slog.Warn("cluster: GW diag", "kind", kind, "type", m["type"], "status", m["status"], "reason", m["reason"], "message", fmt.Sprintf("%v", m["message"]))
+		}
+	}
+	logConds(albGVR, albName, "ApplicationLoadBalancer")
+	logConds(gwGVR, gatewayName, "Gateway")
+	// Gateway listener status: whether the ALB controller Programmed the listener
+	// and how many routes attached (a listener that never programs ⇒ no data path).
+	if gw, err := k.dyn.Resource(gwGVR).Namespace(gatewayNS).Get(ctx, gatewayName, metav1.GetOptions{}); err == nil {
+		lis, _, _ := unstructured.NestedSlice(gw.Object, "status", "listeners")
+		if len(lis) == 0 {
+			slog.Warn("cluster: GW diag: gateway has no status.listeners yet")
+		}
+		for _, l := range lis {
+			m, ok := l.(map[string]any)
+			if !ok {
+				continue
+			}
+			conds, _, _ := unstructured.NestedSlice(m, "conditions")
+			cs := ""
+			for _, c := range conds {
+				if cm, ok := c.(map[string]any); ok {
+					cs += fmt.Sprintf(" %v=%v(%v)", cm["type"], cm["status"], cm["reason"])
+				}
+			}
+			slog.Warn("cluster: GW diag: listener", "name", m["name"], "attachedRoutes", m["attachedRoutes"], "conds", cs)
+		}
+	}
+	// HTTPRoute status per parent: Accepted + ResolvedRefs reveal whether the route
+	// attached to the Gateway and whether its backend Service actually resolved.
+	if routes, err := k.dyn.Resource(routeGVR).List(ctx, metav1.ListOptions{}); err == nil {
+		if len(routes.Items) == 0 {
+			slog.Warn("cluster: GW diag: NO HTTPRoutes found in cluster")
+		}
+		for i := range routes.Items {
+			r := &routes.Items[i]
+			parents, found, _ := unstructured.NestedSlice(r.Object, "status", "parents")
+			if !found || len(parents) == 0 {
+				slog.Warn("cluster: GW diag: HTTPRoute has no status yet", "name", r.GetName(), "ns", r.GetNamespace())
+				continue
+			}
+			for _, p := range parents {
+				pm, ok := p.(map[string]any)
+				if !ok {
+					continue
+				}
+				conds, _, _ := unstructured.NestedSlice(pm, "conditions")
+				cs := ""
+				for _, c := range conds {
+					if cm, ok := c.(map[string]any); ok {
+						cs += fmt.Sprintf(" %v=%v(%v:%v)", cm["type"], cm["status"], cm["reason"], cm["message"])
+					}
+				}
+				slog.Warn("cluster: GW diag: HTTPRoute", "name", r.GetName(), "ns", r.GetNamespace(), "conds", cs)
+			}
+		}
 	}
 }
 

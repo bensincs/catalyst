@@ -263,12 +263,17 @@ resource projectFoundryRoleAssignment 'Microsoft.Authorization/roleAssignments@2
 // AAD-integrated + Azure RBAC, local accounts disabled: the reconciler's own
 // managed identity authenticates with an Entra token and is authorized by the
 // two role assignments below — no cluster admin kubeconfig secret anywhere.
+// The node resource group is named explicitly (matching AKS's default format) so
+// the node-RG-scoped role-assignment module below has a deploy-time-known scope.
+var nodeResourceGroupName = 'MC_${resourceGroup().name}_${clusterName}_${location}'
+
 resource aks 'Microsoft.ContainerService/managedClusters@2025-09-02-preview' = if (deployCluster) {
   name: clusterName
   location: location
   identity: { type: 'SystemAssigned' }
   properties: {
     dnsPrefix: clusterName
+    nodeResourceGroup: nodeResourceGroupName
     kubernetesVersion: empty(kubernetesVersion) ? null : kubernetesVersion
     enableRBAC: true
     disableLocalAccounts: true
@@ -333,6 +338,19 @@ resource aksUserAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' 
     principalId: reconIdentity.properties.principalId
     principalType: 'ServicePrincipal'
     delegatedManagedIdentityResourceId: reconIdentity.id
+  }
+}
+
+// Network Contributor on the AKS node (MC_) resource group so the reconciler can
+// open the AGC association subnet's NSG for inbound frontend traffic (the add-on
+// leaves it denied). Scoped via a module because the node RG is AKS-created.
+module nodeResourceGroupRoles 'footprint-noderg.bicep' = if (deployCluster) {
+  name: 'cortex-noderg-roles'
+  scope: resourceGroup(nodeResourceGroupName)
+  params: {
+    reconcilerPrincipalId: reconIdentity.properties.principalId
+    reconcilerIdentityId: reconIdentity.id
+    clusterName: clusterName
   }
 }
 
