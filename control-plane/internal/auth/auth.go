@@ -32,8 +32,12 @@ type Authenticator struct {
 	platformTID   string
 	issuerHost    string
 	// platformAdmins, when non-empty, restricts platform-admin status to these
-	// emails (platform-hosted tenants put ordinary users in the platform
-	// directory). Empty ⇒ any platform-directory user is an admin (back-compat).
+	// principals — each entry is an email or an Entra object id (oid). Matching
+	// either lets it work for both console tokens (which carry an email) and
+	// service/CLI tokens (which may only carry an oid). Platform-hosted tenants put
+	// ordinary users in the platform directory, so a platform-directory sign-in is
+	// no longer sufficient to be an admin. Empty ⇒ any platform-directory user is
+	// an admin (back-compat).
 	platformAdmins map[string]bool
 }
 
@@ -131,10 +135,12 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 			Role:  model.RoleTenant,
 		}
 		// Platform admin: in the platform directory AND (no allowlist configured,
-		// or explicitly allowlisted). The allowlist lets platform-hosted tenants
-		// put ordinary users in the platform directory without making them admins.
+		// or the caller's email or object id is allowlisted). The allowlist lets
+		// platform-hosted tenants put ordinary users in the platform directory
+		// without making them admins; matching oid (not just email) keeps it robust
+		// for tokens that omit the email claim.
 		if a.platformTID != "" && tid == a.platformTID {
-			if len(a.platformAdmins) == 0 || a.platformAdmins[strings.ToLower(email)] {
+			if len(a.platformAdmins) == 0 || a.platformAdmins[strings.ToLower(email)] || a.platformAdmins[strings.ToLower(oid)] {
 				id.Role = model.RolePlatform
 			}
 		}

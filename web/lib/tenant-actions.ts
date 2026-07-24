@@ -2,27 +2,11 @@
 
 import { revalidatePath } from "next/cache";
 import { unstable_update } from "@/auth";
-import { discoverTenants as discover, type DiscoveryResult } from "@/lib/tenant-discovery";
 
-/** Switch the active tenant to one the user has already connected (its token is
- *  already in the encrypted JWT, so this is instant — no re-auth). */
-export async function switchTenant(tid: string): Promise<void> {
-  await unstable_update({ activeTid: tid } as never);
-  revalidatePath("/", "layout");
-}
-
-/** Select the active Cortex tenant by slug (platform-hosted tenants share one
- *  directory, so the tenant is a slug sent as X-Cortex-Tenant, not a token).
- *  Empty slug ⇒ the active directory's own delegated tenant. */
+/** Select the active Cortex tenant by slug — sent as X-Cortex-Tenant on every API
+ *  call. A user is assigned to tenants (memberships) and switches between them
+ *  here; empty slug ⇒ their primary tenant. */
 export async function setActiveTenantSlug(slug: string): Promise<void> {
   await unstable_update({ activeTenantSlug: slug } as never);
   revalidatePath("/", "layout");
-}
-
-/** Enumerate the directories this human can reach (ARM `/tenants`), so the
- *  Settings switcher can offer them for connection. Best-effort: returns an
- *  `error` code the UI degrades on rather than throwing. Connecting a directory
- *  itself is a plain navigation to `/api/tenants/{tid}/connect`. */
-export async function discoverTenants(): Promise<DiscoveryResult> {
-  return discover();
 }

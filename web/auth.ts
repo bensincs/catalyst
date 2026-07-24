@@ -10,57 +10,41 @@ const CLIENT_ID = process.env.AUTH_MICROSOFT_ENTRA_ID_ID ?? "";
 const API_SCOPE = CLIENT_ID ? `api://${CLIENT_ID}/access_as_user` : "";
 const SCOPES = ["openid", "profile", "email", "offline_access", API_SCOPE].filter(Boolean).join(" ");
 
-// One per-directory token bundle. A single human may be a guest in several Entra
-// directories (each a Cortex tenant); we hold one bundle per directory they've
-// signed into and forward the *active* one to the API. Entra tokens are
-// per-tenant, so this is the only correct way to operate several tenants: the
-// token itself proves access to its tenant. Tokens live only in the encrypted
-// JWT cookie, never in the browser or the session payload.
-export type TenantToken = {
-  tid: string;
-  oid: string;
-  name: string; // best-effort label (directory domain); the active tenant shows its real name via the API
-  accessToken?: string;
-  refreshToken?: string;
-  expiresAt?: number; // epoch seconds
-  error?: string;
-};
+// A session carries ONE Entra token — the directory the user signed in from. The
+// tenant they operate is a Cortex tenant SLUG (X-Cortex-Tenant), selected via the
+// switcher: a user is assigned to tenants (memberships), not juggling per-directory
+// tokens. Tokens live only in the encrypted JWT cookie, never in the browser.
 
-function labelFor(profile: Record<string, unknown> | undefined): string {
-  const email = (profile?.email as string) ?? (profile?.preferred_username as string) ?? "";
-  const domain = email.split("@")[1] ?? "";
-  return domain || "";
-}
-
-async function refreshTenant(t: TenantToken): Promise<TenantToken> {
-  if (!t.refreshToken) return { ...t, error: "RequiresReauth" };
+// refreshAccess renews the access token from the sign-in directory's token
+// endpoint as it nears expiry, keeping the same refresh token when a new one
+// isn't returned.
+async function refreshAccess(token: JWT): Promise<JWT> {
+  if (!token.refreshToken || !token.tid) return { ...token, error: "RequiresReauth" };
   try {
-    const res = await fetch(`https://login.microsoftonline.com/${t.tid}/oauth2/v2.0/token`, {
+    const res = await fetch(`https://login.microsoftonline.com/${token.tid}/oauth2/v2.0/token`, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
         client_id: CLIENT_ID,
         client_secret: process.env.AUTH_MICROSOFT_ENTRA_ID_SECRET ?? "",
         grant_type: "refresh_token",
-        refresh_token: t.refreshToken,
+        refresh_token: token.refreshToken,
         scope: SCOPES,
       }),
     });
     const data = (await res.json()) as { access_token?: string; expires_in?: number; refresh_token?: string };
     if (!res.ok || !data.access_token) throw new Error("refresh failed");
     return {
-      ...t,
+      ...token,
       accessToken: data.access_token,
       expiresAt: Math.floor(Date.now() / 1000) + Number(data.expires_in ?? 3600),
-      refreshToken: data.refresh_token ?? t.refreshToken,
+      refreshToken: data.refresh_token ?? token.refreshToken,
       error: undefined,
     };
   } catch {
-    return { ...t, error: "RefreshFailed" };
+    return { ...token, error: "RefreshFailed" };
   }
 }
-
-const tenantsOf = (token: JWT): Record<string, TenantToken> => (token.tenants as Record<string, TenantToken>) ?? {};
 
 export const { handlers, auth, signIn, signOut, unstable_update } = NextAuth({
   trustHost: true,
@@ -84,80 +68,45 @@ export const { handlers, auth, signIn, signOut, unstable_update } = NextAuth({
   ],
   callbacks: {
     async jwt({ token, account, profile, trigger, session }) {
-      // Session updates: switch the active tenant, or merge a tenant connected
-      // via the targeted OAuth callback (/api/tenants/[tid]/connect).
+      // Select the active Cortex tenant (a slug sent as X-Cortex-Tenant). Empty
+      // slug ⇒ the caller's primary tenant.
       if (trigger === "update" && session && typeof session === "object") {
-        const s = session as { activeTid?: string; activeTenantSlug?: string; connectTenant?: TenantToken };
-        if (s.connectTenant?.tid) {
-          const b = s.connectTenant;
-          token.tenants = { ...tenantsOf(token), [b.tid]: b };
-          token.activeTid = b.tid;
-          token.activeTenantSlug = "";
-          return token;
-        }
-        // Select a Cortex tenant explicitly (platform-hosted tenants share one
-        // directory, so the tenant is a slug, not a directory token).
-        if (typeof s.activeTenantSlug === "string") {
-          token.activeTenantSlug = s.activeTenantSlug;
-          return token;
-        }
-        const tid = String(s.activeTid ?? "").toLowerCase();
-        if (tid && tenantsOf(token)[tid]) {
-          token.activeTid = tid;
-          token.activeTenantSlug = ""; // switching directory clears any explicit slug
-        }
+        const s = session as { activeTenantSlug?: string };
+        if (typeof s.activeTenantSlug === "string") token.activeTenantSlug = s.activeTenantSlug;
         return token;
       }
 
-      // New sign-in: capture the directory's tokens and MERGE it into the set
-      // (rather than replace), so signing into a second tenant keeps the first.
+      // New sign-in: capture the directory's token + identity.
       if (account) {
-        const tid = ((profile?.tid as string) ?? "").toLowerCase();
-        const bundle: TenantToken = {
-          tid,
-          oid: (profile?.oid as string) ?? (profile?.sub as string) ?? "",
-          name: labelFor(profile),
-          accessToken: account.access_token,
-          refreshToken: account.refresh_token,
-          expiresAt: account.expires_at,
-        };
-        token.tenants = { ...tenantsOf(token), [tid]: bundle };
-        token.activeTid = tid;
-        token.activeTenantSlug = ""; // default to the directory's own tenant
-        // Home identity anchor (first sign-in).
-        token.name = (token.name as string) ?? (profile?.name as string) ?? token.name;
+        token.accessToken = account.access_token;
+        token.refreshToken = account.refresh_token;
+        token.expiresAt = account.expires_at;
+        token.tid = ((profile?.tid as string) ?? "").toLowerCase();
+        token.oid = (profile?.oid as string) ?? (profile?.sub as string) ?? "";
+        token.name = (profile?.name as string) ?? token.name;
         token.email =
-          (token.email as string) ?? (profile?.email as string) ?? (profile?.preferred_username as string) ?? token.email;
+          (profile?.email as string) ?? (profile?.preferred_username as string) ?? token.email;
+        token.activeTenantSlug = "";
+        token.error = undefined;
         return token;
       }
 
-      // Refresh the ACTIVE tenant's token as it nears expiry.
-      const tenants = tenantsOf(token);
-      const active = tenants[token.activeTid as string];
-      if (active && (typeof active.expiresAt !== "number" || Date.now() >= active.expiresAt * 1000 - 60_000)) {
-        token.tenants = { ...tenants, [active.tid]: await refreshTenant(active) };
+      // Refresh the access token as it nears expiry.
+      if (typeof token.expiresAt !== "number" || Date.now() >= token.expiresAt * 1000 - 60_000) {
+        return refreshAccess(token);
       }
       return token;
     },
 
     async session({ session, token }) {
-      const tenants = tenantsOf(token);
-      const activeTid = (token.activeTid as string) ?? "";
-      const active = tenants[activeTid];
-      session.user.tid = activeTid;
-      session.user.oid = active?.oid ?? "";
-      session.user.role = PLATFORM_TENANT_ID && activeTid === PLATFORM_TENANT_ID ? "platform" : "tenant";
+      session.user.tid = (token.tid as string) ?? "";
+      session.user.oid = (token.oid as string) ?? "";
+      session.user.role =
+        PLATFORM_TENANT_ID && session.user.tid === PLATFORM_TENANT_ID ? "platform" : "tenant";
       if (token.name) session.user.name = token.name as string;
       if (token.email) session.user.email = token.email as string;
-      // The directories this human can operate — for the switcher. No tokens exposed.
-      session.tenants = Object.values(tenants).map((t) => ({
-        tid: t.tid,
-        name: t.name,
-        needsReauth: Boolean(t.error) || !t.accessToken,
-      }));
-      session.activeTid = activeTid;
       session.activeTenantSlug = (token.activeTenantSlug as string) ?? "";
-      session.error = active?.error;
+      session.error = token.error as string | undefined;
       return session;
     },
   },

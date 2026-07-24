@@ -19,10 +19,11 @@ type Config struct {
 	PlatformTenantID string
 	CORSOrigin       string
 
-	// PlatformAdminEmails, when set, is the allowlist of platform-admin emails.
-	// Platform-hosted tenants put ordinary users in the platform directory, so a
-	// platform-directory sign-in is no longer sufficient to be an admin. When
-	// empty, any platform-directory user is a platform admin (back-compat).
+	// PlatformAdminEmails, when set, is the allowlist of platform admins — each
+	// entry an email or an Entra object id (oid). Platform-hosted tenants put
+	// ordinary users in the platform directory, so a platform-directory sign-in is
+	// no longer sufficient to be an admin. When empty, any platform-directory user
+	// is a platform admin (back-compat).
 	PlatformAdminEmails []string
 	// PlatformSubscriptionID is the platform's OWN subscription, where
 	// platform-hosted tenants' footprints are provisioned (each in its own RG).

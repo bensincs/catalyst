@@ -15,7 +15,6 @@ import type {
   TenantContextInfo,
   TenantSummary,
 } from "@/lib/types";
-import type { SessionTenant } from "@/types/next-auth";
 
 type Theme = "light" | "dark";
 
@@ -32,8 +31,6 @@ export interface ConsoleData {
   env: Environment;
   tenants: TenantSummary[]; // platform: the fleet; tenant: empty
   activeTenant: TenantContextInfo | null; // tenant: own; platform: null
-  myTenants: SessionTenant[]; // every directory this human has connected (the switcher)
-  activeTid: string;
   cortexTenants: TenantSummary[]; // every Cortex tenant the caller can operate (delegated + memberships)
   activeTenantSlug: string; // the explicitly-selected tenant slug ('' ⇒ primary)
 }

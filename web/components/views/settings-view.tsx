@@ -3,10 +3,8 @@
 import {
   ArrowUpRight,
   Bot,
-  Building2,
   Fingerprint,
   KeyRound,
-  Landmark,
   Monitor,
   Moon,
   ShieldCheck,
@@ -15,7 +13,6 @@ import {
 } from "lucide-react";
 import { PageHeader } from "@/components/ui/page-header";
 import { useConsole } from "@/components/providers/console-provider";
-import { TenantsPanel } from "./tenants-panel";
 import type { Role, TenantContextInfo } from "@/lib/types";
 import styles from "./settings-view.module.css";
 
@@ -34,11 +31,9 @@ const PORTAL_URL = "https://portal.azure.com/";
 export function SettingsView({
   identity,
   tenant,
-  connectNotice,
 }: {
   identity: SettingsIdentity;
   tenant: TenantContextInfo | null;
-  connectNotice?: string;
 }) {
   const platform = identity.role === "platform";
 
@@ -67,11 +62,6 @@ export function SettingsView({
           Signed in with Microsoft Entra. Cortex verifies your token on every request and never
           stores a password.
         </p>
-      </Panel>
-
-      {/* Directories — the tenants this human can operate in (multi-tenant switcher) */}
-      <Panel title="Directories" icon={Building2}>
-        <TenantsPanel notice={connectNotice} />
       </Panel>
 
       {/* Appearance — a real, functional preference */}

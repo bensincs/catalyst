@@ -1,9 +1,4 @@
 import type { Role } from "@/lib/types";
-import type { TenantToken } from "@/auth";
-
-/** A directory the signed-in human can operate, surfaced to the switcher (no
- *  tokens — those stay in the encrypted JWT). */
-export type SessionTenant = { tid: string; name: string; needsReauth: boolean };
 
 declare module "next-auth" {
   interface Session {
@@ -11,16 +6,12 @@ declare module "next-auth" {
       name?: string | null;
       email?: string | null;
       image?: string | null;
-      tid: string; // the ACTIVE tenant's Entra directory id
-      oid: string; // the caller's object id in the active tenant
+      tid: string; // the directory the user signed in from
+      oid: string; // the caller's object id
       role: Role;
     };
-    /** Every directory this human has connected — the tenant switcher's list. */
-    tenants: SessionTenant[];
-    activeTid: string;
-    /** The explicitly-selected Cortex tenant slug (platform-hosted tenants share
-     *  one directory, so the tenant is a slug, not a directory token). Empty ⇒
-     *  the active directory's own (delegated) tenant. */
+    /** The explicitly-selected Cortex tenant slug (X-Cortex-Tenant header). Empty
+     *  ⇒ the caller's primary tenant. */
     activeTenantSlug?: string;
     error?: string;
   }
@@ -30,10 +21,13 @@ declare module "next-auth/jwt" {
   interface JWT {
     name?: string | null;
     email?: string | null;
-    /** Per-directory token bundles (server-side only, in the encrypted JWT). */
-    tenants?: Record<string, TenantToken>;
-    /** Which directory's token is currently forwarded to the API. */
-    activeTid?: string;
+    tid?: string;
+    oid?: string;
+    /** The single Entra access token (for the API) + its refresh token, server-side
+     *  only, in the encrypted JWT. */
+    accessToken?: string;
+    refreshToken?: string;
+    expiresAt?: number; // epoch seconds
     /** The explicitly-selected Cortex tenant slug (X-Cortex-Tenant header). */
     activeTenantSlug?: string;
     error?: string;

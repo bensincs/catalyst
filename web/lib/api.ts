@@ -135,15 +135,12 @@ async function getAccessToken(): Promise<{ token: string; tenantSlug: string }> 
       salt: base,
     });
     if (!decoded) continue;
-    // Forward the ACTIVE tenant's access token (the user may hold several).
-    const tenants = decoded.tenants as Record<string, { accessToken?: string; error?: string }> | undefined;
-    const activeTid = decoded.activeTid as string | undefined;
-    const active = tenants && activeTid ? tenants[activeTid] : undefined;
-    // The explicitly-selected Cortex tenant (platform-hosted tenants share one
-    // directory, so the tenant is a slug sent as X-Cortex-Tenant, not a token).
+    // One access token per session (the sign-in directory). The active Cortex
+    // TENANT is a slug sent as X-Cortex-Tenant, not a per-directory token.
+    if (decoded.error) throw new ApiError(401, `token ${decoded.error}`);
+    const accessToken = decoded.accessToken as string | undefined;
     const tenantSlug = (decoded.activeTenantSlug as string | undefined) ?? "";
-    if (active?.error) throw new ApiError(401, `token ${active.error}`);
-    if (active?.accessToken) return { token: active.accessToken, tenantSlug };
+    if (accessToken) return { token: accessToken, tenantSlug };
   }
   throw new ApiError(401, "no access token in session");
 }

@@ -77,7 +77,7 @@ param infraResourceGroup string = 'cortex-infra'
 @description('The platform\'s OWN subscription id, where platform-hosted tenants (same subscription, a dedicated RG per tenant) are provisioned. Empty ⇒ platform-hosted tenants disabled. When set, the control-plane identity is granted Contributor + User Access Administrator on it.')
 param platformSubscriptionId string = ''
 
-@description('Comma-separated allowlist of platform-admin emails. When set, only these platform-directory users are Platform Admins (so ordinary users can live in the platform directory, assigned to tenants). Empty ⇒ any platform-directory user is an admin (back-compat).')
+@description('Comma-separated allowlist of platform admins — each entry an email or an Entra object id (oid). When set, only these platform-directory principals are Platform Admins (so ordinary users can live in the platform directory, assigned to tenants). Empty ⇒ any platform-directory user is an admin (back-compat).')
 param platformAdminEmails string = ''
 
 @description('PostgreSQL administrator login.')

@@ -98,6 +98,16 @@ func TestPlatformAdminAllowlist(t *testing.T) {
 		}
 	})
 
+	t.Run("allowlisted by object id (token without an email claim)", func(t *testing.T) {
+		a := New(keys, testClientID, "", testScope, testPlatform, issuerHost, []string{"oid-123"})
+		c := validClaims(testPlatform)
+		delete(c, "preferred_username") // no email/upn at all — only the oid identifies them
+		_, id := serve(a, signToken(t, key, testKid, c))
+		if id == nil || id.Role != model.RolePlatform {
+			t.Fatalf("expected platform role via oid match, got %+v", id)
+		}
+	})
+
 	t.Run("empty allowlist keeps back-compat (any platform user is admin)", func(t *testing.T) {
 		a := New(keys, testClientID, "", testScope, testPlatform, issuerHost, nil)
 		_, id := serve(a, signToken(t, key, testKid, claimsFor("anyone@corp.com")))
