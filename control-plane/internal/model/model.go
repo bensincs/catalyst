@@ -111,10 +111,12 @@ type MeResponse struct {
 }
 
 // Membership is an explicit user → tenant assignment (platform-hosted tenants).
-// oid is bound on first sign-in; until then the row is matched by email.
+// A member is assigned by a principal — an email (oid bound on first sign-in) or
+// an Entra object id directly.
 type Membership struct {
 	TenantSlug string    `json:"tenantSlug"`
-	Email      string    `json:"email"`
+	Principal  string    `json:"principal"` // the assigned identifier: an email or an oid
+	Email      string    `json:"email,omitempty"`
 	OID        string    `json:"oid,omitempty"`
 	Role       string    `json:"role"`
 	CreatedAt  time.Time `json:"createdAt"`

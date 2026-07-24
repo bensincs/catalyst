@@ -98,6 +98,24 @@ func TestPlatformTenantAndMemberships(t *testing.T) {
 		t.Fatalf("membership should be revoked")
 	}
 
+	// Assign by Entra object id directly (no email).
+	const oidMember = "11111111-2222-3333-4444-555555555555"
+	if err := st.AddMembership(ctx, tn.ID, oidMember, "admin"); err != nil {
+		t.Fatalf("add oid membership: %v", err)
+	}
+	if ok, _ := st.IsMember(ctx, tn.ID, oidMember, ""); !ok {
+		t.Fatalf("oid membership should grant access by oid")
+	}
+	if tenants, _ := st.MembershipTenants(ctx, oidMember, ""); len(tenants) != 1 || tenants[0].ID != tn.ID {
+		t.Fatalf("oid membership tenants: %+v", tenants)
+	}
+	if err := st.RemoveMembership(ctx, tn.ID, oidMember); err != nil {
+		t.Fatalf("remove oid membership: %v", err)
+	}
+	if ok, _ := st.IsMember(ctx, tn.ID, oidMember, ""); ok {
+		t.Fatalf("oid membership should be revoked")
+	}
+
 	// A platform-hosted tenant shows in the footprint targets (it has a sub).
 	targets, err := st.FootprintTargets(ctx)
 	if err != nil {

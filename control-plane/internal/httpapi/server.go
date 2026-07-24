@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -130,7 +131,7 @@ func (s *Server) Router() http.Handler {
 			// Membership (platform-hosted tenants): assign/list/remove users.
 			r.Get("/tenants/{slug}/members", s.handleListMembers)
 			r.Post("/tenants/{slug}/members", s.handleAddMember)
-			r.Delete("/tenants/{slug}/members/{email}", s.handleRemoveMember)
+			r.Delete("/tenants/{slug}/members/{principal}", s.handleRemoveMember)
 
 			// Agent ↔ memory-store connection (a relation, not a CRUD verb).
 			r.Post("/tenant/agents/{agentId}/store", s.handleConnectAgentStore)
@@ -663,7 +664,8 @@ func (s *Server) handleListMembers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"members": members})
 }
 
-// handleAddMember assigns a user (by email) to a tenant (platform only).
+// handleAddMember assigns a user to a tenant (platform only), by email or by
+// Entra object id.
 func (s *Server) handleAddMember(w http.ResponseWriter, r *http.Request) {
 	id, _ := auth.IdentityFrom(r.Context())
 	if !s.requirePlatform(w, id) {
@@ -679,30 +681,36 @@ func (s *Server) handleAddMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Email string `json:"email"`
-		Role  string `json:"role"`
+		Member string `json:"member"`
+		Email  string `json:"email"` // accepted as an alias for member (an email)
+		Role   string `json:"role"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
 	}
-	if !strings.Contains(body.Email, "@") {
-		writeErr(w, http.StatusBadRequest, "a valid email is required")
+	member := strings.TrimSpace(body.Member)
+	if member == "" {
+		member = strings.TrimSpace(body.Email)
+	}
+	if !strings.Contains(member, "@") && !isGUID(member) {
+		writeErr(w, http.StatusBadRequest, "provide an email address or an Entra object id")
 		return
 	}
-	if err := s.store.AddMembership(r.Context(), slug, body.Email, body.Role); err != nil {
+	if err := s.store.AddMembership(r.Context(), slug, member, body.Role); err != nil {
 		s.fail(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "assigned"})
 }
 
-// handleRemoveMember revokes a user's assignment to a tenant (platform only).
+// handleRemoveMember revokes a user's assignment to a tenant (platform only), by
+// its principal (email or oid).
 func (s *Server) handleRemoveMember(w http.ResponseWriter, r *http.Request) {
 	id, _ := auth.IdentityFrom(r.Context())
 	if !s.requirePlatform(w, id) {
 		return
 	}
-	if err := s.store.RemoveMembership(r.Context(), chi.URLParam(r, "slug"), chi.URLParam(r, "email")); err != nil {
+	if err := s.store.RemoveMembership(r.Context(), chi.URLParam(r, "slug"), chi.URLParam(r, "principal")); err != nil {
 		s.fail(w, r, err)
 		return
 	}
@@ -1026,3 +1034,11 @@ func orgNameFromEmail(email string) string {
 	}
 	return ""
 }
+
+// isGUID reports whether s is an Entra object id (a GUID) — the alternative to an
+// email when assigning a tenant member.
+func isGUID(s string) bool {
+	return guidPattern.MatchString(strings.TrimSpace(s))
+}
+
+var guidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)

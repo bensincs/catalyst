@@ -426,18 +426,40 @@ CREATE UNIQUE INDEX IF NOT EXISTS tenants_tenant_id_uidx
 
 -- Explicit user → tenant assignment. Delegated tenants still derive access from
 -- the token's directory id; platform-hosted tenants (whose users all share the
--- platform directory) are accessed only through a membership. A membership is
--- created by email; the user's Entra oid is bound on first sign-in. role is
--- 'admin' for now (membership == full tenant access; room to grow).
+-- platform directory) are accessed only through a membership. A member is
+-- assigned by a principal — an email (oid bound on first sign-in) OR an Entra
+-- object id directly (for users whose email isn't known, or service principals).
+-- role is 'admin' for now (membership == full tenant access; room to grow).
 CREATE TABLE IF NOT EXISTS memberships (
   tenant_slug text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-  email       text NOT NULL,
-  oid         text,
+  principal   text NOT NULL,            -- the identifier assigned: a lowercased email or Entra oid
+  email       text,                     -- set when principal is an email; oid bound on first sign-in
+  oid         text,                     -- set when principal is an oid, or bound from an email on sign-in
   role        text NOT NULL DEFAULT 'admin',
   created_at  timestamptz NOT NULL DEFAULT now(),
-  PRIMARY KEY (tenant_slug, email)
+  PRIMARY KEY (tenant_slug, principal)
 );
 CREATE INDEX IF NOT EXISTS memberships_oid_idx   ON memberships(oid);
 CREATE INDEX IF NOT EXISTS memberships_email_idx ON memberships(lower(email));
+
+-- Migrate memberships from the original email-only shape (PK on email) to a
+-- generic principal key, so a user can be assigned by object id too. Idempotent:
+-- only runs while the principal column is absent.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                 WHERE table_name = 'memberships' AND column_name = 'principal') THEN
+    ALTER TABLE memberships ADD COLUMN principal text;
+    UPDATE memberships SET principal = lower(email) WHERE principal IS NULL;
+    -- Drop the old (tenant_slug, email) PK before email can become nullable.
+    BEGIN
+      ALTER TABLE memberships DROP CONSTRAINT memberships_pkey;
+    EXCEPTION WHEN undefined_object THEN NULL;
+    END;
+    ALTER TABLE memberships ALTER COLUMN email DROP NOT NULL;
+    ALTER TABLE memberships ALTER COLUMN principal SET NOT NULL;
+    ALTER TABLE memberships ADD PRIMARY KEY (tenant_slug, principal);
+  END IF;
+END $$;
 
 

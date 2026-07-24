@@ -472,6 +472,7 @@ export const getTenantsRegistry = cache(async (): Promise<TenantRegistryRow[]> =
 /* ── Memberships (platform-hosted tenant assignments) ─────────────────────── */
 
 export interface TenantMember {
+  principal: string; // the assigned identifier: an email or an Entra object id
   email: string;
   oid: string;
   role: string;

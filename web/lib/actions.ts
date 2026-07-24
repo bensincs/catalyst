@@ -195,18 +195,19 @@ export async function createPlatformTenant(input: {
   );
 }
 
-// Assign a user (by email) to a tenant. Platform admins only.
-export async function addTenantMember(slug: string, email: string): Promise<ActionResult> {
+// Assign a user to a tenant by email OR Entra object id. Platform admins only.
+export async function addTenantMember(slug: string, member: string): Promise<ActionResult> {
   return run(
-    () => apiSend("POST", `/api/tenants/${encodeURIComponent(slug)}/members`, { email }),
+    () => apiSend("POST", `/api/tenants/${encodeURIComponent(slug)}/members`, { member }),
     [`/tenants/${slug}`],
   );
 }
 
-// Revoke a user's assignment to a tenant. Platform admins only.
-export async function removeTenantMember(slug: string, email: string): Promise<ActionResult> {
+// Revoke a user's assignment to a tenant by its principal (email or oid).
+// Platform admins only.
+export async function removeTenantMember(slug: string, principal: string): Promise<ActionResult> {
   return run(
-    () => apiSend("DELETE", `/api/tenants/${encodeURIComponent(slug)}/members/${encodeURIComponent(email)}`),
+    () => apiSend("DELETE", `/api/tenants/${encodeURIComponent(slug)}/members/${encodeURIComponent(principal)}`),
     [`/tenants/${slug}`],
   );
 }
