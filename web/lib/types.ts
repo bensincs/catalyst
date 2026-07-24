@@ -351,6 +351,30 @@ export const LIFECYCLE_META: Record<Lifecycle, HealthMeta> = {
   suspended: { label: "Suspended", tone: "neutral" },
 };
 
+// Azure regions offered when creating a tenant (its cluster + Foundry deploy here).
+export const AZURE_REGIONS: { id: string; label: string }[] = [
+  { id: "uksouth", label: "UK South" },
+  { id: "ukwest", label: "UK West" },
+  { id: "westeurope", label: "West Europe" },
+  { id: "northeurope", label: "North Europe" },
+  { id: "swedencentral", label: "Sweden Central" },
+  { id: "francecentral", label: "France Central" },
+  { id: "germanywestcentral", label: "Germany West Central" },
+  { id: "eastus", label: "East US" },
+  { id: "eastus2", label: "East US 2" },
+  { id: "westus2", label: "West US 2" },
+  { id: "westus3", label: "West US 3" },
+  { id: "centralus", label: "Central US" },
+  { id: "southcentralus", label: "South Central US" },
+  { id: "canadacentral", label: "Canada Central" },
+  { id: "uaenorth", label: "UAE North" },
+  { id: "qatarcentral", label: "Qatar Central" },
+  { id: "australiaeast", label: "Australia East" },
+  { id: "southeastasia", label: "Southeast Asia" },
+  { id: "japaneast", label: "Japan East" },
+  { id: "centralindia", label: "Central India" },
+];
+
 export const ENV_META: Record<
   Environment,
   { label: string; short: string; tone: "neutral" | "info" | "warning" | "danger" }

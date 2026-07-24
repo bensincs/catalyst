@@ -39,7 +39,6 @@ export function FootprintPanel({
   const [pending, start] = useTransition();
 
   const [mode, setMode] = useState<"aks" | "byo">(clusterMode);
-  const [region, setRegion] = useState(String(config.region ?? ""));
   const [nodeCount, setNodeCount] = useState(String(config.nodeCount ?? ""));
   const [nodeVmSize, setNodeVmSize] = useState(String(config.nodeVmSize ?? ""));
   const [byoNote, setByoNote] = useState(String(config.note ?? ""));
@@ -55,7 +54,6 @@ export function FootprintPanel({
       const cfg: Cfg =
         mode === "aks"
           ? {
-              ...(region.trim() ? { region: region.trim() } : {}),
               ...(nodeVmSize.trim() ? { nodeVmSize: nodeVmSize.trim() } : {}),
               ...(nodeCount.trim() ? { nodeCount: Number(nodeCount) } : {}),
             }
@@ -107,7 +105,6 @@ export function FootprintPanel({
 
           {mode === "aks" ? (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 8 }}>
-              <Field label="Region" value={region} onChange={setRegion} placeholder="e.g. uksouth" />
               <Field label="Node VM size" value={nodeVmSize} onChange={setNodeVmSize} placeholder="e.g. Standard_D2s_v5" />
               <Field label="Node count" value={nodeCount} onChange={setNodeCount} placeholder="e.g. 2" type="number" />
             </div>

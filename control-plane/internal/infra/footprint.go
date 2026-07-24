@@ -168,7 +168,7 @@ func (p *Provisioner) provisionFootprints(ctx context.Context) {
 // platform-hosted ones (the platform's own subscription, a dedicated RG).
 func (p *Provisioner) ensureFootprint(ctx context.Context, t store.FootprintTarget) {
 	rg := firstNonEmpty(t.ResourceGroup, p.footprintRG)
-	region := firstNonEmpty(t.Region, p.region)
+	region := firstNonEmpty(cleanRegion(t.Region), p.region)
 	url := p.footprintDeploymentURL(t.SubscriptionID, rg)
 	if t.Reprovision {
 		// Platform admin requested a re-submit over an existing footprint. Consume
@@ -213,7 +213,7 @@ func (p *Provisioner) ensureFootprint(ctx context.Context, t store.FootprintTarg
 			_ = p.store.SetReconcilerPrincipal(ctx, t.Slug, id.principalID)
 		}
 	}
-	if err := p.submitFootprint(ctx, t.SubscriptionID, rg, t, reconIdentityResourceID, isDelegated); err != nil {
+	if err := p.submitFootprint(ctx, t.SubscriptionID, rg, t, region, reconIdentityResourceID, isDelegated); err != nil {
 		slog.Warn("provision: submit footprint failed", "tenant", t.Slug, "err", err.Error())
 		_ = p.store.SetFootprintState(ctx, t.Slug, "failed", trunc(err.Error()))
 		return
@@ -279,9 +279,10 @@ func (p *Provisioner) createResourceGroup(ctx context.Context, sub, rg, region s
 // For platform-hosted tenants it passes the pre-created reconciler identity and
 // flags the deployment same-tenant (isDelegated=false). cluster_mode drives
 // whether an AKS cluster is provisioned ('aks') or skipped ('byo' — bring your
-// own; the footprint deploys only the reconciler + Foundry). footprint_config
-// supplies optional AKS sizing (region, nodeCount, nodeVmSize).
-func (p *Provisioner) submitFootprint(ctx context.Context, sub, rg string, t store.FootprintTarget, reconcilerIdentityResourceID string, isDelegated bool) error {
+// own; the footprint deploys only the reconciler + Foundry). The cluster + Foundry
+// deploy in the tenant's region; footprint_config supplies only optional AKS node
+// sizing (nodeCount, nodeVmSize).
+func (p *Provisioner) submitFootprint(ctx context.Context, sub, rg string, t store.FootprintTarget, region, reconcilerIdentityResourceID string, isDelegated bool) error {
 	var template map[string]any
 	if err := json.Unmarshal(footprintTemplate, &template); err != nil {
 		return fmt.Errorf("footprint template invalid: %w", err)
@@ -296,14 +297,16 @@ func (p *Provisioner) submitFootprint(ctx context.Context, sub, rg string, t sto
 		"tenantSlug":      map[string]any{"value": t.Slug},
 		"deployCluster":   map[string]any{"value": deployCluster},
 	}
+	// The cluster + Foundry follow the tenant's region.
+	if region != "" {
+		params["location"] = map[string]any{"value": region}
+	}
 	if reconcilerIdentityResourceID != "" {
 		params["reconcilerIdentityResourceId"] = map[string]any{"value": reconcilerIdentityResourceID}
 	}
-	// Optional AKS sizing from the admin-set footprint config.
+	// Optional AKS node sizing from the admin-set footprint config (region is NOT
+	// a footprint field — it follows the tenant).
 	if deployCluster {
-		if v := configString(t.Config, "region"); v != "" {
-			params["location"] = map[string]any{"value": v}
-		}
 		if v := configString(t.Config, "nodeVmSize"); v != "" {
 			params["nodeVmSize"] = map[string]any{"value": v}
 		}
@@ -318,6 +321,16 @@ func (p *Provisioner) submitFootprint(ctx context.Context, sub, rg string, t sto
 		return err
 	}
 	return p.arm(ctx, http.MethodPut, p.footprintDeploymentURL(sub, rg), payload, nil)
+}
+
+// cleanRegion normalises a tenant region, treating the '—' placeholder (an
+// unknown/unset region) as empty so callers fall back to the configured default.
+func cleanRegion(r string) string {
+	r = strings.TrimSpace(r)
+	if r == "—" || r == "-" {
+		return ""
+	}
+	return r
 }
 
 // configString reads a string field from a footprint config map (tolerant of

@@ -6,6 +6,7 @@ import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/providers/toast-provider";
 import { createPlatformTenant } from "@/lib/actions";
+import { AZURE_REGIONS } from "@/lib/types";
 import styles from "./create-tenant-button.module.css";
 
 /** Platform control to create a platform-hosted tenant — one that lives in the
@@ -16,7 +17,7 @@ export function CreateTenantButton() {
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
-  const [region, setRegion] = useState("");
+  const [region, setRegion] = useState("uksouth");
   const [pending, start] = useTransition();
 
   const create = () =>
@@ -57,13 +58,18 @@ export function CreateTenantButton() {
         placeholder="Tenant name"
         className={styles.input}
       />
-      <input
+      <select
         value={region}
         onChange={(e) => setRegion(e.target.value)}
-        onKeyDown={(e) => e.key === "Enter" && create()}
-        placeholder="Region (e.g. uksouth)"
         className={styles.input}
-      />
+        aria-label="Region"
+      >
+        {AZURE_REGIONS.map((r) => (
+          <option key={r.id} value={r.id}>
+            {r.label}
+          </option>
+        ))}
+      </select>
       <Button icon={Plus} loading={pending} onClick={create}>
         Create
       </Button>
