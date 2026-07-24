@@ -398,4 +398,46 @@ BEGIN
   END IF;
 END $$;
 
+-- ── Platform-hosted tenants (same platform subscription, per-tenant RG) ─────
+-- A tenant can be hosted in the platform's OWN subscription (hosting_mode =
+-- 'platform') instead of a customer's Lighthouse-delegated one ('delegated', the
+-- default). Platform-hosted tenants have no distinct Entra directory
+-- (tenant_id NULL) — users are assigned to them explicitly (memberships) and
+-- their reconciler is identified by its pre-created managed-identity principal
+-- (reconciler_principal_id) rather than the token's directory id. resource_group
+-- + region are the per-tenant deploy target the control plane provisions into.
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS hosting_mode            text NOT NULL DEFAULT 'delegated';
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS resource_group          text NOT NULL DEFAULT '';
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS reconciler_principal_id text NOT NULL DEFAULT '';
+
+-- tenant_id is the Entra directory id for delegated tenants (one tenant per
+-- directory) but NULL for platform-hosted ones (which share the platform
+-- directory). Replace the plain UNIQUE with a partial unique index so only
+-- delegated tenants are constrained to one-per-directory.
+ALTER TABLE tenants ALTER COLUMN tenant_id DROP NOT NULL;
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'tenants_tenant_id_key') THEN
+    ALTER TABLE tenants DROP CONSTRAINT tenants_tenant_id_key;
+  END IF;
+END $$;
+CREATE UNIQUE INDEX IF NOT EXISTS tenants_tenant_id_uidx
+  ON tenants (tenant_id) WHERE tenant_id IS NOT NULL AND hosting_mode = 'delegated';
+
+-- Explicit user → tenant assignment. Delegated tenants still derive access from
+-- the token's directory id; platform-hosted tenants (whose users all share the
+-- platform directory) are accessed only through a membership. A membership is
+-- created by email; the user's Entra oid is bound on first sign-in. role is
+-- 'admin' for now (membership == full tenant access; room to grow).
+CREATE TABLE IF NOT EXISTS memberships (
+  tenant_slug text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  email       text NOT NULL,
+  oid         text,
+  role        text NOT NULL DEFAULT 'admin',
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (tenant_slug, email)
+);
+CREATE INDEX IF NOT EXISTS memberships_oid_idx   ON memberships(oid);
+CREATE INDEX IF NOT EXISTS memberships_email_idx ON memberships(lower(email));
+
 

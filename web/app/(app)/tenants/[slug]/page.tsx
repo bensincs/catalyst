@@ -1,8 +1,9 @@
 import { notFound } from "next/navigation";
-import { ApiError, getApplications, getCatalog, getInfrastructure, getMe, getMemoryStores, getTenantContext, getTenantsRegistry } from "@/lib/api";
+import { ApiError, getApplications, getCatalog, getInfrastructure, getMe, getMemoryStores, getTenantContext, getTenantMembers, getTenantsRegistry } from "@/lib/api";
 import { TenantOverview } from "@/components/views/tenant-overview";
 import { TenantAccessPanel } from "@/components/views/tenant-access-panel";
 import { FootprintReprovisionPanel } from "@/components/views/footprint-reprovision-panel";
+import { TenantMembersPanel } from "@/components/views/tenant-members-panel";
 import { EntitlementsPanel } from "@/components/views/entitlements-panel";
 
 export default async function TenantDrillInPage({
@@ -26,9 +27,14 @@ export default async function TenantDrillInPage({
         getInfrastructure(),
       ]);
       const row = registry.find((r) => r.id === slug);
+      const platformHosted = ctx.summary.hostingMode === "platform";
+      const members = platformHosted ? await getTenantMembers(slug) : [];
       entitlements = (
         <>
           <TenantAccessPanel slug={slug} name={ctx.tenant.name} enabled={ctx.tenant.enabled} />
+          {platformHosted ? (
+            <TenantMembersPanel slug={slug} name={ctx.tenant.name} members={members} />
+          ) : null}
           {ctx.tenant.cluster.infraDelegated ? (
             <FootprintReprovisionPanel
               slug={slug}

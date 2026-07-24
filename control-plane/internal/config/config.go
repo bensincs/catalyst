@@ -19,6 +19,15 @@ type Config struct {
 	PlatformTenantID string
 	CORSOrigin       string
 
+	// PlatformAdminEmails, when set, is the allowlist of platform-admin emails.
+	// Platform-hosted tenants put ordinary users in the platform directory, so a
+	// platform-directory sign-in is no longer sufficient to be an admin. When
+	// empty, any platform-directory user is a platform admin (back-compat).
+	PlatformAdminEmails []string
+	// PlatformSubscriptionID is the platform's OWN subscription, where
+	// platform-hosted tenants' footprints are provisioned (each in its own RG).
+	PlatformSubscriptionID string
+
 	// Cross-tenant provisioning (Azure Lighthouse). The control plane authenticates
 	// with its own managed identity (DefaultAzureCredential) — no secret held here.
 	// Off unless CROSS_TENANT_PROVISIONING=true.
@@ -50,6 +59,9 @@ func Load() Config {
 		PlatformTenantID: strings.ToLower(env("PLATFORM_TENANT_ID", "")),
 		CORSOrigin:       env("CORS_ORIGIN", "http://localhost:4200"),
 
+		PlatformAdminEmails:    splitList(env("PLATFORM_ADMIN_EMAILS", "")),
+		PlatformSubscriptionID: strings.TrimSpace(env("PLATFORM_SUBSCRIPTION_ID", "")),
+
 		CrossTenantProvisioning: strings.EqualFold(strings.TrimSpace(env("CROSS_TENANT_PROVISIONING", "")), "true"),
 		InfraResourceGroup:      env("INFRA_RESOURCE_GROUP", "cortex-infra"),
 		FootprintRG:             env("FOOTPRINT_RESOURCE_GROUP", "cortex"),
@@ -69,6 +81,18 @@ func envInt(key string, def int) int {
 		}
 	}
 	return def
+}
+
+// splitList parses a comma-separated env value into a trimmed, lower-cased,
+// non-empty list (e.g. PLATFORM_ADMIN_EMAILS="a@x.com, b@y.com").
+func splitList(v string) []string {
+	var out []string
+	for _, p := range strings.Split(v, ",") {
+		if p = strings.ToLower(strings.TrimSpace(p)); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func env(key, def string) string {

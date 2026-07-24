@@ -87,15 +87,25 @@ export const { handlers, auth, signIn, signOut, unstable_update } = NextAuth({
       // Session updates: switch the active tenant, or merge a tenant connected
       // via the targeted OAuth callback (/api/tenants/[tid]/connect).
       if (trigger === "update" && session && typeof session === "object") {
-        const s = session as { activeTid?: string; connectTenant?: TenantToken };
+        const s = session as { activeTid?: string; activeTenantSlug?: string; connectTenant?: TenantToken };
         if (s.connectTenant?.tid) {
           const b = s.connectTenant;
           token.tenants = { ...tenantsOf(token), [b.tid]: b };
           token.activeTid = b.tid;
+          token.activeTenantSlug = "";
+          return token;
+        }
+        // Select a Cortex tenant explicitly (platform-hosted tenants share one
+        // directory, so the tenant is a slug, not a directory token).
+        if (typeof s.activeTenantSlug === "string") {
+          token.activeTenantSlug = s.activeTenantSlug;
           return token;
         }
         const tid = String(s.activeTid ?? "").toLowerCase();
-        if (tid && tenantsOf(token)[tid]) token.activeTid = tid;
+        if (tid && tenantsOf(token)[tid]) {
+          token.activeTid = tid;
+          token.activeTenantSlug = ""; // switching directory clears any explicit slug
+        }
         return token;
       }
 
@@ -113,6 +123,7 @@ export const { handlers, auth, signIn, signOut, unstable_update } = NextAuth({
         };
         token.tenants = { ...tenantsOf(token), [tid]: bundle };
         token.activeTid = tid;
+        token.activeTenantSlug = ""; // default to the directory's own tenant
         // Home identity anchor (first sign-in).
         token.name = (token.name as string) ?? (profile?.name as string) ?? token.name;
         token.email =
@@ -145,6 +156,7 @@ export const { handlers, auth, signIn, signOut, unstable_update } = NextAuth({
         needsReauth: Boolean(t.error) || !t.accessToken,
       }));
       session.activeTid = activeTid;
+      session.activeTenantSlug = (token.activeTenantSlug as string) ?? "";
       session.error = active?.error;
       return session;
     },

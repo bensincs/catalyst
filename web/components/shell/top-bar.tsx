@@ -5,6 +5,7 @@ import { useConsole } from "@/components/providers/console-provider";
 import { EnvBadge } from "./env-badge";
 import { ThemeToggle } from "./theme-toggle";
 import { CommandTrigger } from "./command-trigger";
+import { TenantSwitcher } from "./tenant-switcher";
 import styles from "./top-bar.module.css";
 
 export function TopBar() {
@@ -21,6 +22,7 @@ export function TopBar() {
         >
           <MenuIcon size={19} strokeWidth={2} />
         </button>
+        <TenantSwitcher />
       </div>
 
       <div className={styles.right}>

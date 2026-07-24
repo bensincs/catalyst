@@ -8,6 +8,8 @@ type InfraTeardown struct {
 	TenantSlug     string
 	SubscriptionID string
 	InfraID        string
+	HostingMode    string
+	ResourceGroup  string
 }
 
 // InfraTeardownTargets returns every instance marked for teardown that has a
@@ -16,7 +18,8 @@ type InfraTeardown struct {
 // work.
 func (s *Store) InfraTeardownTargets(ctx context.Context) ([]InfraTeardown, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT ti.tenant_slug, coalesce(t.subscription_id, ''), ti.infra_id
+		`SELECT ti.tenant_slug, coalesce(t.subscription_id, ''), ti.infra_id,
+		        coalesce(t.hosting_mode,'delegated'), coalesce(t.resource_group,'')
 		 FROM tenant_infrastructure ti JOIN tenants t ON t.id = ti.tenant_slug
 		 WHERE ti.pending_delete = true
 		 ORDER BY ti.tenant_slug, ti.infra_id`)
@@ -27,7 +30,7 @@ func (s *Store) InfraTeardownTargets(ctx context.Context) ([]InfraTeardown, erro
 	var out []InfraTeardown
 	for rows.Next() {
 		var td InfraTeardown
-		if err := rows.Scan(&td.TenantSlug, &td.SubscriptionID, &td.InfraID); err != nil {
+		if err := rows.Scan(&td.TenantSlug, &td.SubscriptionID, &td.InfraID, &td.HostingMode, &td.ResourceGroup); err != nil {
 			return nil, err
 		}
 		out = append(out, td)

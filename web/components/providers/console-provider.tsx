@@ -34,6 +34,8 @@ export interface ConsoleData {
   activeTenant: TenantContextInfo | null; // tenant: own; platform: null
   myTenants: SessionTenant[]; // every directory this human has connected (the switcher)
   activeTid: string;
+  cortexTenants: TenantSummary[]; // every Cortex tenant the caller can operate (delegated + memberships)
+  activeTenantSlug: string; // the explicitly-selected tenant slug ('' ⇒ primary)
 }
 
 interface ConsoleState extends ConsoleData {

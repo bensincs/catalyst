@@ -123,6 +123,15 @@ param pollIntervalSeconds int = 30
 @description('Deploy the in-Azure reconciler container app. Set false to deploy only the Foundry backing (account/project/model + identity + RBAC) and run the reconciler elsewhere — e.g. locally.')
 param deployReconcilerApp bool = true
 
+@description('Resource id of a pre-created reconciler managed identity to use (platform-hosted tenants). Empty ⇒ the footprint creates its own (delegated tenants).')
+param reconcilerIdentityResourceId string = ''
+
+@description('Whether this footprint is deployed cross-tenant via Azure Lighthouse. false for platform-hosted tenants (same tenant), which omit the Lighthouse-only delegatedManagedIdentityResourceId on their role assignments.')
+param isDelegated bool = true
+
+@description('The Cortex tenant slug (platform-hosted tenants), surfaced to the reconciler for observability.')
+param tenantSlug string = ''
+
 var prefix = 'cortex'
 // The customer tenant that OWNS this subscription — not tenant(), which under a
 // Lighthouse cross-tenant deployment resolves to the *managing* (platform) tenant
@@ -154,10 +163,23 @@ resource logs 'Microsoft.OperationalInsights/workspaces@2023-09-01' = if (deploy
   }
 }
 
-resource reconIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+// The reconciler's managed identity: created here for delegated tenants, or
+// referenced (pre-created by the control plane, so it knows the identity's
+// principal before deploying) for platform-hosted ones.
+var createReconIdentity = empty(reconcilerIdentityResourceId)
+var reconIdentityName = createReconIdentity ? '${prefix}-recon' : last(split(reconcilerIdentityResourceId, '/'))
+
+resource reconIdentityOwned 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = if (createReconIdentity) {
   name: '${prefix}-recon'
   location: location
 }
+resource reconIdentityExternal 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = if (!createReconIdentity) {
+  name: reconIdentityName
+}
+
+var reconIdentityId = createReconIdentity ? reconIdentityOwned.id : reconIdentityExternal.id
+var reconIdentityPrincipalId = createReconIdentity ? reconIdentityOwned.properties.principalId : reconIdentityExternal.properties.principalId
+var reconIdentityClientId = createReconIdentity ? reconIdentityOwned.properties.clientId : reconIdentityExternal.properties.clientId
 
 // --- Microsoft Foundry: account + project + model -----------------------------
 
@@ -230,16 +252,17 @@ resource embeddingDeployment 'Microsoft.CognitiveServices/accounts/deployments@2
 
 // Grant the reconciler identity the agents data plane on the Foundry account.
 resource foundryRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(foundryAccount.id, reconIdentity.id, foundryUserRoleId)
+  name: guid(foundryAccount.id, reconIdentityId, foundryUserRoleId)
   scope: foundryAccount
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', foundryUserRoleId)
-    principalId: reconIdentity.properties.principalId
+    principalId: reconIdentityPrincipalId
     principalType: 'ServicePrincipal'
     // Cross-tenant (Lighthouse) role assignment of a DELEGATED role to a managed
     // identity requires this — the resource id of the identity being granted the
-    // role — or ARM rejects it with "Authorization failed".
-    delegatedManagedIdentityResourceId: reconIdentity.id
+    // role — or ARM rejects it with "Authorization failed". Same-tenant
+    // (platform-hosted) assignments must NOT set it.
+    delegatedManagedIdentityResourceId: isDelegated ? reconIdentityId : null
   }
 }
 
@@ -255,7 +278,7 @@ resource projectFoundryRoleAssignment 'Microsoft.Authorization/roleAssignments@2
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', foundryUserRoleId)
     principalId: foundryProject.identity.principalId
     principalType: 'ServicePrincipal'
-    delegatedManagedIdentityResourceId: foundryProject.id
+    delegatedManagedIdentityResourceId: isDelegated ? foundryProject.id : null
   }
 }
 
@@ -320,24 +343,24 @@ var aksRbacClusterAdminRoleId = 'b1ff04bb-8a4e-4dc4-8eb5-8693973ce19b'
 var aksClusterUserRoleId = '4abbcc35-e782-43d8-92c5-2d3f1bd2253f'
 
 resource aksAdminAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (deployCluster) {
-  name: guid(clusterName, reconIdentity.id, aksRbacClusterAdminRoleId)
+  name: guid(clusterName, reconIdentityId, aksRbacClusterAdminRoleId)
   scope: aks
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', aksRbacClusterAdminRoleId)
-    principalId: reconIdentity.properties.principalId
+    principalId: reconIdentityPrincipalId
     principalType: 'ServicePrincipal'
-    delegatedManagedIdentityResourceId: reconIdentity.id
+    delegatedManagedIdentityResourceId: isDelegated ? reconIdentityId : null
   }
 }
 
 resource aksUserAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (deployCluster) {
-  name: guid(clusterName, reconIdentity.id, aksClusterUserRoleId)
+  name: guid(clusterName, reconIdentityId, aksClusterUserRoleId)
   scope: aks
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', aksClusterUserRoleId)
-    principalId: reconIdentity.properties.principalId
+    principalId: reconIdentityPrincipalId
     principalType: 'ServicePrincipal'
-    delegatedManagedIdentityResourceId: reconIdentity.id
+    delegatedManagedIdentityResourceId: isDelegated ? reconIdentityId : null
   }
 }
 
@@ -348,9 +371,10 @@ module nodeResourceGroupRoles 'footprint-noderg.bicep' = if (deployCluster) {
   name: 'cortex-noderg-roles'
   scope: resourceGroup(nodeResourceGroupName)
   params: {
-    reconcilerPrincipalId: reconIdentity.properties.principalId
-    reconcilerIdentityId: reconIdentity.id
+    reconcilerPrincipalId: reconIdentityPrincipalId
+    reconcilerIdentityId: reconIdentityId
     clusterName: clusterName
+    isDelegated: isDelegated
   }
 }
 
@@ -376,7 +400,7 @@ resource reconciler 'Microsoft.App/containerApps@2024-03-01' = if (deployReconci
   identity: {
     type: 'UserAssigned'
     userAssignedIdentities: {
-      '${reconIdentity.id}': {}
+      '${reconIdentityId}': {}
     }
   }
   properties: {
@@ -390,7 +414,7 @@ resource reconciler 'Microsoft.App/containerApps@2024-03-01' = if (deployReconci
       registries: empty(registryServer) ? [] : [
         {
           server: registryServer
-          identity: reconIdentity.id
+          identity: reconIdentityId
         }
       ]
     }
@@ -407,14 +431,15 @@ resource reconciler 'Microsoft.App/containerApps@2024-03-01' = if (deployReconci
             { name: 'CONTROL_PLANE_URL', value: controlPlaneUrl }
             { name: 'CORTEX_API_SCOPE', value: cortexApiScope }
             // Selects this user-assigned identity when requesting a token.
-            { name: 'AZURE_CLIENT_ID', value: reconIdentity.properties.clientId }
+            { name: 'AZURE_CLIENT_ID', value: reconIdentityClientId }
             { name: 'TENANT_ID', value: tenantId }
             { name: 'TENANT_NAME', value: tenantName }
             { name: 'AZURE_REGION', value: location }
             { name: 'AZURE_SUBSCRIPTION_ID', value: subscriptionId }
             { name: 'FOUNDRY_PROJECT', value: foundryProjectDisplay }
             { name: 'FOUNDRY_PROJECT_ENDPOINT', value: foundryProjectEndpoint }
-            { name: 'RECONCILER_IDENTITY', value: reconIdentity.name }
+            { name: 'RECONCILER_IDENTITY', value: reconIdentityName }
+            { name: 'TENANT_SLUG', value: tenantSlug }
             { name: 'RECONCILER_VERSION', value: reconcilerVersion }
             { name: 'PLAN', value: plan }
             { name: 'POLL_INTERVAL_SECONDS', value: string(pollIntervalSeconds) }
@@ -440,9 +465,9 @@ resource reconciler 'Microsoft.App/containerApps@2024-03-01' = if (deployReconci
   dependsOn: [ foundryRoleAssignment, modelDeployment, embeddingDeployment ]
 }
 
-output reconcilerPrincipalId string = reconIdentity.properties.principalId
-output reconcilerClientId string = reconIdentity.properties.clientId
-output reconcilerIdentity string = reconIdentity.name
+output reconcilerPrincipalId string = reconIdentityPrincipalId
+output reconcilerClientId string = reconIdentityClientId
+output reconcilerIdentity string = reconIdentityName
 output tenantId string = tenantId
 output subscriptionId string = subscriptionId
 output foundryAccountName string = foundryAccountName

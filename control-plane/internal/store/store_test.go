@@ -27,6 +27,96 @@ func testStore(t *testing.T) (*Store, context.Context) {
 	return st, ctx
 }
 
+// mustTenantByTID resolves a tenant by directory id for tests that drive the
+// reconciler sync/heartbeat (which now take a resolved tenant, not a tid).
+func mustTenantByTID(t *testing.T, ctx context.Context, st *Store, tid string) model.Tenant {
+	t.Helper()
+	tn, err := st.TenantByTID(ctx, tid)
+	if err != nil {
+		t.Fatalf("resolve tenant %s: %v", tid, err)
+	}
+	return tn
+}
+
+// TestPlatformTenantAndMemberships: a platform-hosted tenant has no directory id,
+// is reachable by its reconciler principal, and access is by explicit membership
+// (bound to an oid on first sign-in).
+func TestPlatformTenantAndMemberships(t *testing.T) {
+	st, ctx := testStore(t)
+	defer st.Close()
+
+	const sub = "zz-plat-sub-0001"
+	tn, err := st.CreatePlatformTenant(ctx, "ZZ Platform Tenant", "uksouth", "team", sub)
+	if err != nil {
+		t.Fatalf("create platform tenant: %v", err)
+	}
+	defer st.pool.Exec(ctx, `DELETE FROM tenants WHERE id = $1`, tn.ID)
+
+	if tn.HostingMode != "platform" || tn.TenantID != "" || !tn.Enabled || tn.SubscriptionID != sub {
+		t.Fatalf("unexpected platform tenant: %+v", tn)
+	}
+	if tn.ResourceGroup == "" {
+		t.Fatalf("platform tenant should have a dedicated resource group")
+	}
+
+	// Reconciler-oid resolution.
+	if _, err := st.TenantByReconcilerOID(ctx, "oid-recon-xyz"); err != ErrNotFound {
+		t.Fatalf("expected ErrNotFound before principal set, got %v", err)
+	}
+	if err := st.SetReconcilerPrincipal(ctx, tn.ID, "oid-recon-xyz"); err != nil {
+		t.Fatalf("set principal: %v", err)
+	}
+	if got, err := st.TenantByReconcilerOID(ctx, "oid-recon-xyz"); err != nil || got.ID != tn.ID {
+		t.Fatalf("resolve by reconciler oid: %+v (err %v)", got, err)
+	}
+
+	// Membership by email → bound to oid on first sign-in.
+	if err := st.AddMembership(ctx, tn.ID, "USER@corp.com", "admin"); err != nil {
+		t.Fatalf("add membership: %v", err)
+	}
+	if ok, _ := st.IsMember(ctx, tn.ID, "oid-user-1", "user@corp.com"); !ok {
+		t.Fatalf("email match should grant membership before binding")
+	}
+	if err := st.BindMemberships(ctx, "oid-user-1", "user@corp.com"); err != nil {
+		t.Fatalf("bind: %v", err)
+	}
+	members, err := st.MembershipsForTenant(ctx, tn.ID)
+	if err != nil || len(members) != 1 || members[0].OID != "oid-user-1" {
+		t.Fatalf("members after bind: %+v (err %v)", members, err)
+	}
+	tenants, err := st.MembershipTenants(ctx, "oid-user-1", "unused@corp.com")
+	if err != nil || len(tenants) != 1 || tenants[0].ID != tn.ID {
+		t.Fatalf("membership tenants: %+v (err %v)", tenants, err)
+	}
+	if ok, _ := st.HasEnabledMembership(ctx, "oid-user-1", ""); !ok {
+		t.Fatalf("expected enabled membership")
+	}
+	if err := st.RemoveMembership(ctx, tn.ID, "user@corp.com"); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if ok, _ := st.IsMember(ctx, tn.ID, "oid-user-1", "user@corp.com"); ok {
+		t.Fatalf("membership should be revoked")
+	}
+
+	// A platform-hosted tenant shows in the footprint targets (it has a sub).
+	targets, err := st.FootprintTargets(ctx)
+	if err != nil {
+		t.Fatalf("footprint targets: %v", err)
+	}
+	found := false
+	for _, tg := range targets {
+		if tg.Slug == tn.ID {
+			found = true
+			if tg.HostingMode != "platform" || tg.ResourceGroup == "" {
+				t.Fatalf("footprint target missing hosting fields: %+v", tg)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("platform tenant not in footprint targets")
+	}
+}
+
 func TestCatalogEntitleEnableLoop(t *testing.T) {
 	st, ctx := testStore(t)
 	defer st.Close()
@@ -171,7 +261,7 @@ func TestMemoryStoreLifecycle(t *testing.T) {
 	if err := st.EnableAgent(ctx, slug, agentID, nil); err != nil {
 		t.Fatalf("enable: %v", err)
 	}
-	ds, err := st.SyncDesired(ctx, tid)
+	ds, err := st.SyncDesired(ctx, mustTenantByTID(t, ctx, st, tid))
 	if err != nil || len(ds.Agents) != 1 {
 		t.Fatalf("sync: %d agents (err %v)", len(ds.Agents), err)
 	}
@@ -196,7 +286,7 @@ func TestMemoryStoreLifecycle(t *testing.T) {
 	if err != nil || len(agents) != 1 || agents[0].MemoryStore != tenantStore {
 		t.Fatalf("effective store after connect wrong: %+v (err %v)", agents, err)
 	}
-	if ds2, _ := st.SyncDesired(ctx, tid); len(ds2.Agents) != 1 || ds2.Agents[0].Definition.MemoryStore != tenantStore {
+	if ds2, _ := st.SyncDesired(ctx, mustTenantByTID(t, ctx, st, tid)); len(ds2.Agents) != 1 || ds2.Agents[0].Definition.MemoryStore != tenantStore {
 		t.Fatalf("sync override store wrong: %+v", ds2.Agents)
 	}
 
@@ -236,7 +326,7 @@ func TestStoreEnablementLifecycle(t *testing.T) {
 	}
 
 	// Not enabled yet → not desired.
-	if ds, _ := st.SyncDesired(ctx, tid); len(ds.MemoryStores) != 0 {
+	if ds, _ := st.SyncDesired(ctx, mustTenantByTID(t, ctx, st, tid)); len(ds.MemoryStores) != 0 {
 		t.Fatalf("store should not be desired before enable: %+v", ds.MemoryStores)
 	}
 
@@ -244,7 +334,7 @@ func TestStoreEnablementLifecycle(t *testing.T) {
 	if err := st.EnableStore(ctx, slug, storeID); err != nil {
 		t.Fatalf("enable store: %v", err)
 	}
-	if ds, _ := st.SyncDesired(ctx, tid); len(ds.MemoryStores) != 1 || ds.MemoryStores[0].ID != storeID {
+	if ds, _ := st.SyncDesired(ctx, mustTenantByTID(t, ctx, st, tid)); len(ds.MemoryStores) != 1 || ds.MemoryStores[0].ID != storeID {
 		t.Fatalf("enabled store not desired: %+v", ds.MemoryStores)
 	}
 	stores, _ := st.MemoryStoresForTenant(ctx, slug)
@@ -253,7 +343,7 @@ func TestStoreEnablementLifecycle(t *testing.T) {
 	}
 
 	// Heartbeat reports it live → tenant view reflects it.
-	if err := st.ApplyHeartbeat(ctx, shared.Heartbeat{TenantID: tid, TenantName: "EN Tenant",
+	if err := st.ApplyHeartbeat(ctx, mustTenantByTID(t, ctx, st, tid), shared.Heartbeat{TenantID: tid, TenantName: "EN Tenant",
 		MemoryStores: []shared.MemoryStoreStatus{{StoreID: storeID, Health: "live"}}}); err != nil {
 		t.Fatalf("heartbeat: %v", err)
 	}
@@ -270,7 +360,7 @@ func TestStoreEnablementLifecycle(t *testing.T) {
 	if err := st.DisableStore(ctx, slug, storeID); err != nil {
 		t.Fatalf("disable store: %v", err)
 	}
-	if ds, _ := st.SyncDesired(ctx, tid); len(ds.MemoryStores) != 0 {
+	if ds, _ := st.SyncDesired(ctx, mustTenantByTID(t, ctx, st, tid)); len(ds.MemoryStores) != 0 {
 		t.Fatalf("disabled store still desired: %+v", ds.MemoryStores)
 	}
 }
@@ -417,7 +507,7 @@ func TestDeploymentLifecycle(t *testing.T) {
 	}
 
 	// Entitled but not enabled → not desired; tenant view shows entitled+disabled.
-	if ds, _ := st.SyncDesired(ctx, tid); len(ds.Applications) != 0 {
+	if ds, _ := st.SyncDesired(ctx, mustTenantByTID(t, ctx, st, tid)); len(ds.Applications) != 0 {
 		t.Fatalf("deployment should not be desired before enable: %+v", ds.Applications)
 	}
 	apps, _ := st.ApplicationsForTenant(ctx, slug)
@@ -429,7 +519,7 @@ func TestDeploymentLifecycle(t *testing.T) {
 	if err := st.EnableDeployment(ctx, slug, appID); err != nil {
 		t.Fatalf("enable deployment: %v", err)
 	}
-	ds, _ := st.SyncDesired(ctx, tid)
+	ds, _ := st.SyncDesired(ctx, mustTenantByTID(t, ctx, st, tid))
 	if len(ds.Applications) != 1 || ds.Applications[0].ID != appID ||
 		ds.Applications[0].Chart != "nginx" || ds.Applications[0].Namespace != "web" {
 		t.Fatalf("enabled deployment not desired correctly: %+v", ds.Applications)
@@ -439,7 +529,7 @@ func TestDeploymentLifecycle(t *testing.T) {
 	}
 
 	// A Synced/Healthy heartbeat derives the live lifecycle.
-	if err := st.ApplyHeartbeat(ctx, shared.Heartbeat{TenantID: tid, TenantName: "ZZ Dep Tenant",
+	if err := st.ApplyHeartbeat(ctx, mustTenantByTID(t, ctx, st, tid), shared.Heartbeat{TenantID: tid, TenantName: "ZZ Dep Tenant",
 		Applications: []shared.ApplicationStatus{{ID: appID, SyncStatus: "Synced", HealthStatus: "Healthy"}}}); err != nil {
 		t.Fatalf("heartbeat: %v", err)
 	}
@@ -456,7 +546,7 @@ func TestDeploymentLifecycle(t *testing.T) {
 	if err := st.DisableDeployment(ctx, slug, appID); err != nil {
 		t.Fatalf("disable deployment: %v", err)
 	}
-	if ds, _ := st.SyncDesired(ctx, tid); len(ds.Applications) != 0 {
+	if ds, _ := st.SyncDesired(ctx, mustTenantByTID(t, ctx, st, tid)); len(ds.Applications) != 0 {
 		t.Fatalf("disabled deployment still desired: %+v", ds.Applications)
 	}
 }
@@ -539,7 +629,7 @@ func TestDeploymentDependencyCascade(t *testing.T) {
 	if err := st.EnableDeployment(ctx, slug, appB); err != nil {
 		t.Fatalf("enable B: %v", err)
 	}
-	ds, _ := st.SyncDesired(ctx, tid)
+	ds, _ := st.SyncDesired(ctx, mustTenantByTID(t, ctx, st, tid))
 	if len(ds.Applications) != 2 {
 		t.Fatalf("both should deploy after cascade: %+v", ds.Applications)
 	}
@@ -559,7 +649,7 @@ func TestDeploymentDependencyCascade(t *testing.T) {
 	if err := st.DisableDeployment(ctx, slug, appB); err != nil {
 		t.Fatalf("disable B: %v", err)
 	}
-	if ds, _ := st.SyncDesired(ctx, tid); len(ds.Applications) != 0 {
+	if ds, _ := st.SyncDesired(ctx, mustTenantByTID(t, ctx, st, tid)); len(ds.Applications) != 0 {
 		t.Fatalf("both should be gone after disabling B: %+v", ds.Applications)
 	}
 }

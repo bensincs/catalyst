@@ -31,9 +31,13 @@ type Authenticator struct {
 	requiredScope string
 	platformTID   string
 	issuerHost    string
+	// platformAdmins, when non-empty, restricts platform-admin status to these
+	// emails (platform-hosted tenants put ordinary users in the platform
+	// directory). Empty ⇒ any platform-directory user is an admin (back-compat).
+	platformAdmins map[string]bool
 }
 
-func New(keys KeySet, clientID, extraAudience, requiredScope, platformTID, issuerHost string) *Authenticator {
+func New(keys KeySet, clientID, extraAudience, requiredScope, platformTID, issuerHost string, platformAdmins []string) *Authenticator {
 	if issuerHost == "" {
 		issuerHost = defaultIssuerHost
 	}
@@ -46,12 +50,19 @@ func New(keys KeySet, clientID, extraAudience, requiredScope, platformTID, issue
 	if extraAudience != "" {
 		auds = append(auds, extraAudience)
 	}
+	admins := map[string]bool{}
+	for _, e := range platformAdmins {
+		if e = strings.ToLower(strings.TrimSpace(e)); e != "" {
+			admins[e] = true
+		}
+	}
 	return &Authenticator{
-		keys:          keys,
-		audiences:     auds,
-		requiredScope: requiredScope,
-		platformTID:   strings.ToLower(platformTID),
-		issuerHost:    issuerHost,
+		keys:           keys,
+		audiences:      auds,
+		requiredScope:  requiredScope,
+		platformTID:    strings.ToLower(platformTID),
+		issuerHost:     issuerHost,
+		platformAdmins: admins,
 	}
 }
 
@@ -119,8 +130,13 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 			Email: email,
 			Role:  model.RoleTenant,
 		}
+		// Platform admin: in the platform directory AND (no allowlist configured,
+		// or explicitly allowlisted). The allowlist lets platform-hosted tenants
+		// put ordinary users in the platform directory without making them admins.
 		if a.platformTID != "" && tid == a.platformTID {
-			id.Role = model.RolePlatform
+			if len(a.platformAdmins) == 0 || a.platformAdmins[strings.ToLower(email)] {
+				id.Role = model.RolePlatform
+			}
 		}
 
 		ctx := context.WithValue(r.Context(), identityKey, id)

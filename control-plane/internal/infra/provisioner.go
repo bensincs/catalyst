@@ -52,6 +52,7 @@ type Provisioner struct {
 	controlPlaneURL  string // reconciler → control plane
 	apiScope         string // Entra scope for the control-plane API
 	reconcilerImage  string // reconciler container image
+	platformSub      string // the platform's own subscription (platform-hosted tenants)
 
 	mu          sync.Mutex        // guards apiVersions
 	apiVersions map[string]string // provider/type → api-version, resolved on demand for teardown
@@ -61,14 +62,15 @@ type Provisioner struct {
 // The control plane authenticates with its own managed identity (or AZURE_* env /
 // az login locally) — no secret is held here.
 type Config struct {
-	Enabled            bool
-	ManagingTenantID   string // the Cortex platform tenant (filters delegated subs)
-	InfraResourceGroup string
-	FootprintRG        string
-	Region             string
-	ControlPlaneURL    string
-	APIScope           string
-	ReconcilerImage    string
+	Enabled                bool
+	ManagingTenantID       string // the Cortex platform tenant (filters delegated subs)
+	InfraResourceGroup     string
+	FootprintRG            string
+	Region                 string
+	ControlPlaneURL        string
+	APIScope               string
+	ReconcilerImage        string
+	PlatformSubscriptionID string // platform's own subscription (platform-hosted tenants)
 }
 
 // New builds a Provisioner, or (nil, nil) when cross-tenant provisioning is off.
@@ -93,6 +95,7 @@ func New(st *store.Store, cfg Config) (*Provisioner, error) {
 		controlPlaneURL:  cfg.ControlPlaneURL,
 		apiScope:         cfg.APIScope,
 		reconcilerImage:  cfg.ReconcilerImage,
+		platformSub:      cfg.PlatformSubscriptionID,
 		apiVersions:      map[string]string{},
 	}, nil
 }
@@ -135,7 +138,8 @@ func (p *Provisioner) reconcile(ctx context.Context) {
 // deployment is recorded failed. A submit error is left to retry next sweep.
 func (p *Provisioner) ensure(ctx context.Context, tgt store.InfraTarget) {
 	name := deploymentName(tgt.InfraID)
-	if outs, pstate, found := p.deploymentState(ctx, p.deploymentURL(tgt.SubscriptionID, name)); found {
+	rg := p.appInfraRGFor(tgt.HostingMode, tgt.ResourceGroup)
+	if outs, pstate, found := p.deploymentState(ctx, p.deploymentURL(tgt.SubscriptionID, rg, name)); found {
 		switch {
 		case strings.EqualFold(pstate, "Succeeded"):
 			_ = p.store.SetInfraState(ctx, tgt.TenantSlug, tgt.InfraID, stateReady, outs)
@@ -156,17 +160,16 @@ func (p *Provisioner) ensure(ctx context.Context, tgt store.InfraTarget) {
 		_ = p.store.SetInfraState(ctx, tgt.TenantSlug, tgt.InfraID, stateFailed, nil)
 		return
 	}
-	// The customer sub only has the footprint RG from onboarding, and a fresh sub
-	// won't have the app-infra's resource providers registered either. Create the
-	// app-infra RG and register the template's providers (both idempotent) before
-	// deploying into them — otherwise the deployment 404s (ResourceGroupNotFound)
-	// or is rejected for an unregistered provider.
+	// The subscription may not have the app-infra RG or the template's resource
+	// providers yet — create the RG and register the providers (both idempotent)
+	// before deploying, otherwise the deployment 404s (ResourceGroupNotFound) or is
+	// rejected for an unregistered provider.
 	p.registerProviders(ctx, tgt.SubscriptionID, templateProviders(template))
-	if err := p.createResourceGroup(ctx, tgt.SubscriptionID, p.infraRG); err != nil {
+	if err := p.createResourceGroup(ctx, tgt.SubscriptionID, rg, ""); err != nil {
 		slog.Warn("infra: create resource group failed", "tenant", tgt.TenantSlug, "err", trunc(err.Error()))
 		return
 	}
-	if err := p.submit(ctx, tgt.SubscriptionID, name, template); err != nil {
+	if err := p.submit(ctx, tgt.SubscriptionID, rg, name, template); err != nil {
 		slog.Warn("infra: submit deployment failed", "infra", tgt.InfraID, "tenant", tgt.TenantSlug, "err", trunc(err.Error()))
 		return
 	}
@@ -209,20 +212,35 @@ func collectProviders(template map[string]any, seen map[string]bool) {
 	}
 }
 
-func (p *Provisioner) deploymentURL(sub, name string) string {
+func (p *Provisioner) deploymentURL(sub, rg, name string) string {
 	return fmt.Sprintf(
 		"https://management.azure.com/subscriptions/%s/resourceGroups/%s/providers/Microsoft.Resources/deployments/%s?api-version=%s",
-		sub, p.infraRG, name, infraAPIVersion)
+		sub, rg, name, infraAPIVersion)
 }
 
-func (p *Provisioner) submit(ctx context.Context, sub, name string, template map[string]any) error {
+// appInfraRGFor returns the resource group a tenant's application infra deploys
+// into: the shared cortex-infra RG for delegated tenants (isolated by their own
+// subscription), or a dedicated per-tenant RG for platform-hosted ones (which
+// share the platform subscription, so their infra must not be co-mingled).
+func (p *Provisioner) appInfraRGFor(hostingMode, tenantRG string) string {
+	if hostingMode == hostingPlatform {
+		base := tenantRG
+		if base == "" {
+			base = p.footprintRG
+		}
+		return base + "-infra"
+	}
+	return p.infraRG
+}
+
+func (p *Provisioner) submit(ctx context.Context, sub, rg, name string, template map[string]any) error {
 	payload, err := json.Marshal(map[string]any{
 		"properties": map[string]any{"mode": "Incremental", "template": template},
 	})
 	if err != nil {
 		return err
 	}
-	return p.arm(ctx, http.MethodPut, p.deploymentURL(sub, name), payload, nil)
+	return p.arm(ctx, http.MethodPut, p.deploymentURL(sub, rg, name), payload, nil)
 }
 
 // arm makes a Bearer-authenticated ARM call, decoding JSON into out when non-nil.
@@ -293,7 +311,8 @@ func (p *Provisioner) deprovision(ctx context.Context, td store.InfraTeardown) {
 		return
 	}
 	name := deploymentName(td.InfraID)
-	resources, found, err := p.deploymentResources(ctx, td.SubscriptionID, name)
+	rg := p.appInfraRGFor(td.HostingMode, td.ResourceGroup)
+	resources, found, err := p.deploymentResources(ctx, td.SubscriptionID, rg, name)
 	if err != nil {
 		slog.Warn("infra: read deployment for teardown failed", "infra", td.InfraID, "err", trunc(err.Error()))
 		return // transient — retry next sweep, never clear on uncertainty
@@ -323,20 +342,20 @@ func (p *Provisioner) deprovision(ctx context.Context, td store.InfraTeardown) {
 		return // retry the stragglers next sweep
 	}
 	// Resources deleted → drop the deployment records (metadata) + clear the queue.
-	_ = p.armDelete(ctx, p.deploymentURL(td.SubscriptionID, name))
-	_ = p.armDelete(ctx, p.deploymentURL(td.SubscriptionID, name+"-m"))
+	_ = p.armDelete(ctx, p.deploymentURL(td.SubscriptionID, rg, name))
+	_ = p.armDelete(ctx, p.deploymentURL(td.SubscriptionID, rg, name+"-m"))
 	_ = p.store.FinalizeInfraTeardown(ctx, td.TenantSlug, td.InfraID)
 	slog.Info("infra: deprovisioned", "infra", td.InfraID, "tenant", td.TenantSlug, "resources", len(resources))
 }
 
 // deploymentResources returns the resource ids a deployment created. found is
 // false only on a real 404 (so a transient error is never mistaken for "gone").
-func (p *Provisioner) deploymentResources(ctx context.Context, sub, name string) ([]string, bool, error) {
+func (p *Provisioner) deploymentResources(ctx context.Context, sub, rg, name string) ([]string, bool, error) {
 	tok, err := p.cred.GetToken(ctx, policy.TokenRequestOptions{Scopes: []string{armScope}})
 	if err != nil {
 		return nil, false, fmt.Errorf("acquire ARM token: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.deploymentURL(sub, name), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.deploymentURL(sub, rg, name), nil)
 	if err != nil {
 		return nil, false, err
 	}

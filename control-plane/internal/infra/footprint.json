@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.40.2.10011",
-      "templateHash": "12231465373342628523"
+      "templateHash": "13996163765152497508"
     }
   },
   "parameters": {
@@ -225,6 +225,27 @@
       "metadata": {
         "description": "Deploy the in-Azure reconciler container app. Set false to deploy only the Foundry backing (account/project/model + identity + RBAC) and run the reconciler elsewhere — e.g. locally."
       }
+    },
+    "reconcilerIdentityResourceId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Resource id of a pre-created reconciler managed identity to use (platform-hosted tenants). Empty ⇒ the footprint creates its own (delegated tenants)."
+      }
+    },
+    "isDelegated": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Whether this footprint is deployed cross-tenant via Azure Lighthouse. false for platform-hosted tenants (same tenant), which omit the Lighthouse-only delegatedManagedIdentityResourceId on their role assignments."
+      }
+    },
+    "tenantSlug": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "The Cortex tenant slug (platform-hosted tenants), surfaced to the reconciler for observability."
+      }
     }
   },
   "variables": {
@@ -234,6 +255,10 @@
     "foundryProjectEndpoint": "[format('https://{0}.services.ai.azure.com/api/projects/{1}', parameters('foundryAccountName'), parameters('foundryProjectName'))]",
     "foundryProjectDisplay": "[format('{0}/{1}', parameters('foundryAccountName'), parameters('foundryProjectName'))]",
     "foundryUserRoleId": "53ca6127-db72-4b80-b1b0-d745d6d5456d",
+    "createReconIdentity": "[empty(parameters('reconcilerIdentityResourceId'))]",
+    "reconIdentityName": "[if(variables('createReconIdentity'), format('{0}-recon', variables('prefix')), last(split(parameters('reconcilerIdentityResourceId'), '/')))]",
+    "reconIdentityId": "[if(variables('createReconIdentity'), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix'))), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('reconIdentityName')))]",
+    "nodeResourceGroupName": "[format('MC_{0}_{1}_{2}', resourceGroup().name, parameters('clusterName'), parameters('location'))]",
     "aksRbacClusterAdminRoleId": "b1ff04bb-8a4e-4dc4-8eb5-8693973ce19b",
     "aksClusterUserRoleId": "4abbcc35-e782-43d8-92c5-2d3f1bd2253f"
   },
@@ -252,6 +277,7 @@
       }
     },
     {
+      "condition": "[variables('createReconIdentity')]",
       "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
       "apiVersion": "2023-01-31",
       "name": "[format('{0}-recon', variables('prefix'))]",
@@ -328,12 +354,12 @@
       "type": "Microsoft.Authorization/roleAssignments",
       "apiVersion": "2022-04-01",
       "scope": "[resourceId('Microsoft.CognitiveServices/accounts', parameters('foundryAccountName'))]",
-      "name": "[guid(resourceId('Microsoft.CognitiveServices/accounts', parameters('foundryAccountName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix'))), variables('foundryUserRoleId'))]",
+      "name": "[guid(resourceId('Microsoft.CognitiveServices/accounts', parameters('foundryAccountName')), variables('reconIdentityId'), variables('foundryUserRoleId'))]",
       "properties": {
         "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('foundryUserRoleId'))]",
-        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix'))), '2023-01-31').principalId]",
+        "principalId": "[if(variables('createReconIdentity'), reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix'))), '2023-01-31').principalId, reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('reconIdentityName')), '2023-01-31').principalId)]",
         "principalType": "ServicePrincipal",
-        "delegatedManagedIdentityResourceId": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix')))]"
+        "delegatedManagedIdentityResourceId": "[if(parameters('isDelegated'), variables('reconIdentityId'), null())]"
       },
       "dependsOn": [
         "[resourceId('Microsoft.CognitiveServices/accounts', parameters('foundryAccountName'))]",
@@ -349,7 +375,7 @@
         "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('foundryUserRoleId'))]",
         "principalId": "[reference(resourceId('Microsoft.CognitiveServices/accounts/projects', parameters('foundryAccountName'), parameters('foundryProjectName')), '2026-05-01', 'full').identity.principalId]",
         "principalType": "ServicePrincipal",
-        "delegatedManagedIdentityResourceId": "[resourceId('Microsoft.CognitiveServices/accounts/projects', parameters('foundryAccountName'), parameters('foundryProjectName'))]"
+        "delegatedManagedIdentityResourceId": "[if(parameters('isDelegated'), resourceId('Microsoft.CognitiveServices/accounts/projects', parameters('foundryAccountName'), parameters('foundryProjectName')), null())]"
       },
       "dependsOn": [
         "[resourceId('Microsoft.CognitiveServices/accounts/projects', parameters('foundryAccountName'), parameters('foundryProjectName'))]"
@@ -366,6 +392,7 @@
       },
       "properties": {
         "dnsPrefix": "[parameters('clusterName')]",
+        "nodeResourceGroup": "[variables('nodeResourceGroupName')]",
         "kubernetesVersion": "[if(empty(parameters('kubernetesVersion')), null(), parameters('kubernetesVersion'))]",
         "enableRBAC": true,
         "disableLocalAccounts": true,
@@ -408,12 +435,12 @@
       "type": "Microsoft.Authorization/roleAssignments",
       "apiVersion": "2022-04-01",
       "scope": "[resourceId('Microsoft.ContainerService/managedClusters', parameters('clusterName'))]",
-      "name": "[guid(parameters('clusterName'), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix'))), variables('aksRbacClusterAdminRoleId'))]",
+      "name": "[guid(parameters('clusterName'), variables('reconIdentityId'), variables('aksRbacClusterAdminRoleId'))]",
       "properties": {
         "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('aksRbacClusterAdminRoleId'))]",
-        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix'))), '2023-01-31').principalId]",
+        "principalId": "[if(variables('createReconIdentity'), reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix'))), '2023-01-31').principalId, reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('reconIdentityName')), '2023-01-31').principalId)]",
         "principalType": "ServicePrincipal",
-        "delegatedManagedIdentityResourceId": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix')))]"
+        "delegatedManagedIdentityResourceId": "[if(parameters('isDelegated'), variables('reconIdentityId'), null())]"
       },
       "dependsOn": [
         "[resourceId('Microsoft.ContainerService/managedClusters', parameters('clusterName'))]",
@@ -425,12 +452,12 @@
       "type": "Microsoft.Authorization/roleAssignments",
       "apiVersion": "2022-04-01",
       "scope": "[resourceId('Microsoft.ContainerService/managedClusters', parameters('clusterName'))]",
-      "name": "[guid(parameters('clusterName'), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix'))), variables('aksClusterUserRoleId'))]",
+      "name": "[guid(parameters('clusterName'), variables('reconIdentityId'), variables('aksClusterUserRoleId'))]",
       "properties": {
         "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('aksClusterUserRoleId'))]",
-        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix'))), '2023-01-31').principalId]",
+        "principalId": "[if(variables('createReconIdentity'), reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix'))), '2023-01-31').principalId, reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('reconIdentityName')), '2023-01-31').principalId)]",
         "principalType": "ServicePrincipal",
-        "delegatedManagedIdentityResourceId": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix')))]"
+        "delegatedManagedIdentityResourceId": "[if(parameters('isDelegated'), variables('reconIdentityId'), null())]"
       },
       "dependsOn": [
         "[resourceId('Microsoft.ContainerService/managedClusters', parameters('clusterName'))]",
@@ -465,14 +492,14 @@
       "identity": {
         "type": "UserAssigned",
         "userAssignedIdentities": {
-          "[format('{0}', resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix'))))]": {}
+          "[format('{0}', variables('reconIdentityId'))]": {}
         }
       },
       "properties": {
         "managedEnvironmentId": "[resourceId('Microsoft.App/managedEnvironments', format('{0}-recon-env', variables('prefix')))]",
         "configuration": {
           "activeRevisionsMode": "Single",
-          "registries": "[if(empty(parameters('registryServer')), createArray(), createArray(createObject('server', parameters('registryServer'), 'identity', resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix'))))))]"
+          "registries": "[if(empty(parameters('registryServer')), createArray(), createArray(createObject('server', parameters('registryServer'), 'identity', variables('reconIdentityId'))))]"
         },
         "template": {
           "containers": [
@@ -494,7 +521,7 @@
                 },
                 {
                   "name": "AZURE_CLIENT_ID",
-                  "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix'))), '2023-01-31').clientId]"
+                  "value": "[if(variables('createReconIdentity'), reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix'))), '2023-01-31').clientId, reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('reconIdentityName')), '2023-01-31').clientId)]"
                 },
                 {
                   "name": "TENANT_ID",
@@ -522,7 +549,11 @@
                 },
                 {
                   "name": "RECONCILER_IDENTITY",
-                  "value": "[format('{0}-recon', variables('prefix'))]"
+                  "value": "[variables('reconIdentityName')]"
+                },
+                {
+                  "name": "TENANT_SLUG",
+                  "value": "[parameters('tenantSlug')]"
                 },
                 {
                   "name": "RECONCILER_VERSION",
@@ -572,8 +603,90 @@
       "dependsOn": [
         "[resourceId('Microsoft.CognitiveServices/accounts/deployments', parameters('foundryAccountName'), parameters('embeddingDeploymentName'))]",
         "[resourceId('Microsoft.App/managedEnvironments', format('{0}-recon-env', variables('prefix')))]",
-        "[extensionResourceId(resourceId('Microsoft.CognitiveServices/accounts', parameters('foundryAccountName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.CognitiveServices/accounts', parameters('foundryAccountName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix'))), variables('foundryUserRoleId')))]",
+        "[extensionResourceId(resourceId('Microsoft.CognitiveServices/accounts', parameters('foundryAccountName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.CognitiveServices/accounts', parameters('foundryAccountName')), variables('reconIdentityId'), variables('foundryUserRoleId')))]",
         "[resourceId('Microsoft.CognitiveServices/accounts/deployments', parameters('foundryAccountName'), parameters('modelDeploymentName'))]",
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix')))]"
+      ]
+    },
+    {
+      "condition": "[parameters('deployCluster')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "cortex-noderg-roles",
+      "resourceGroup": "[variables('nodeResourceGroupName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "reconcilerPrincipalId": "[if(variables('createReconIdentity'), createObject('value', reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix'))), '2023-01-31').principalId), createObject('value', reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('reconIdentityName')), '2023-01-31').principalId))]",
+          "reconcilerIdentityId": {
+            "value": "[variables('reconIdentityId')]"
+          },
+          "clusterName": {
+            "value": "[parameters('clusterName')]"
+          },
+          "isDelegated": {
+            "value": "[parameters('isDelegated')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.40.2.10011",
+              "templateHash": "5193966799936375496"
+            }
+          },
+          "parameters": {
+            "reconcilerPrincipalId": {
+              "type": "string",
+              "metadata": {
+                "description": "Reconciler managed identity principalId (the grantee)."
+              }
+            },
+            "reconcilerIdentityId": {
+              "type": "string",
+              "metadata": {
+                "description": "Reconciler managed identity resourceId, for delegatedManagedIdentityResourceId."
+              }
+            },
+            "clusterName": {
+              "type": "string",
+              "metadata": {
+                "description": "Cluster name, for a stable role-assignment name."
+              }
+            },
+            "isDelegated": {
+              "type": "bool",
+              "defaultValue": true,
+              "metadata": {
+                "description": "Whether the parent footprint is a cross-tenant (Lighthouse) deployment. Cross-tenant assignments of a delegated role to a managed identity must set delegatedManagedIdentityResourceId; same-tenant (platform-hosted) ones must not."
+              }
+            }
+          },
+          "variables": {
+            "networkContributorRoleId": "4d97b98b-1d4f-4787-a291-c67834d212e7"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "name": "[guid(parameters('clusterName'), parameters('reconcilerIdentityId'), variables('networkContributorRoleId'))]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('networkContributorRoleId'))]",
+                "principalId": "[parameters('reconcilerPrincipalId')]",
+                "principalType": "ServicePrincipal",
+                "delegatedManagedIdentityResourceId": "[if(parameters('isDelegated'), parameters('reconcilerIdentityId'), null())]"
+              }
+            }
+          ]
+        }
+      },
+      "dependsOn": [
         "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix')))]"
       ]
     }
@@ -581,15 +694,15 @@
   "outputs": {
     "reconcilerPrincipalId": {
       "type": "string",
-      "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix'))), '2023-01-31').principalId]"
+      "value": "[if(variables('createReconIdentity'), reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix'))), '2023-01-31').principalId, reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('reconIdentityName')), '2023-01-31').principalId)]"
     },
     "reconcilerClientId": {
       "type": "string",
-      "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix'))), '2023-01-31').clientId]"
+      "value": "[if(variables('createReconIdentity'), reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix'))), '2023-01-31').clientId, reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('reconIdentityName')), '2023-01-31').clientId)]"
     },
     "reconcilerIdentity": {
       "type": "string",
-      "value": "[format('{0}-recon', variables('prefix'))]"
+      "value": "[variables('reconIdentityName')]"
     },
     "tenantId": {
       "type": "string",

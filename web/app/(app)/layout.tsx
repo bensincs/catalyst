@@ -30,12 +30,14 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   let activeTenant: TenantContextInfo | null = null;
   let myTenants: SessionTenant[] = [];
   let activeTid = "";
+  let activeTenantSlug = "";
 
   try {
     me = await getMe();
     const session = await auth();
     myTenants = session?.tenants ?? [];
     activeTid = session?.activeTid ?? me.tid;
+    activeTenantSlug = session?.activeTenantSlug ?? "";
     if (me.role === "tenant" && me.tenant && !me.tenant.enabled) {
       // Signed in, but the organization isn't enabled yet — show a pending
       // screen instead of the app (all other API routes are gated anyway).
@@ -75,6 +77,8 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
     activeTenant,
     myTenants,
     activeTid,
+    cortexTenants: me.tenants ?? [],
+    activeTenantSlug,
   };
 
   return (

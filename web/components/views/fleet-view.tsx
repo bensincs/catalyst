@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { PageHeader } from "@/components/ui/page-header";
 import { Button } from "@/components/ui/button";
+import { CreateTenantButton } from "@/components/views/create-tenant-button";
 import { StatusBadge } from "@/components/ui/status";
 import { EmptyState } from "@/components/ui/empty-state";
 import { formatCount, formatInt, formatRelative } from "@/lib/format";
@@ -112,6 +113,7 @@ export function FleetView({
       <PageHeader
         title="Fleet"
         description="Every enrolled tenant and its live state — health and usage from reconciler heartbeats."
+        actions={<CreateTenantButton />}
       />
 
       <section className={styles.summary} aria-label="Fleet summary">

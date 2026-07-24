@@ -181,6 +181,36 @@ export async function reprovisionFootprint(slug: string): Promise<ActionResult> 
   );
 }
 
+// Create a platform-hosted tenant (platform's own subscription, a dedicated RG
+// per tenant). Platform admins only. The provisioner deploys its footprint next
+// sweep; users are then assigned via memberships.
+export async function createPlatformTenant(input: {
+  name: string;
+  region?: string;
+  plan?: string;
+}): Promise<ActionResult> {
+  return run(
+    () => apiSend("POST", "/api/tenants", { name: input.name, region: input.region ?? "", plan: input.plan ?? "" }),
+    ["/tenants", "/"],
+  );
+}
+
+// Assign a user (by email) to a tenant. Platform admins only.
+export async function addTenantMember(slug: string, email: string): Promise<ActionResult> {
+  return run(
+    () => apiSend("POST", `/api/tenants/${encodeURIComponent(slug)}/members`, { email }),
+    [`/tenants/${slug}`],
+  );
+}
+
+// Revoke a user's assignment to a tenant. Platform admins only.
+export async function removeTenantMember(slug: string, email: string): Promise<ActionResult> {
+  return run(
+    () => apiSend("DELETE", `/api/tenants/${encodeURIComponent(slug)}/members/${encodeURIComponent(email)}`),
+    [`/tenants/${slug}`],
+  );
+}
+
 /* ── Agents ───────────────────────────────────────────────────────────────── */
 
 export async function createCatalogAgent(input: {

@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"crypto/rand"
 	_ "embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -75,7 +77,8 @@ const tenantCols = `id, name, coalesce(tenant_id,''), region, plan, enrollment, 
 	agent_count, reconciling_count, monthly_calls, drift, last_heartbeat,
 	subscription_id, reconciler_identity, foundry_project, reconciler_version, installed_at, enabled,
 	cluster_name, cluster_phase, cluster_k8s_version, cluster_argo_installed, cluster_node_count, cluster_detail,
-	cluster_ingress_installed, cluster_gateway_ip, cluster_ingress_issuer, infra_delegated, infra_detail, footprint_state, footprint_detail`
+	cluster_ingress_installed, cluster_gateway_ip, cluster_ingress_issuer, infra_delegated, infra_detail, footprint_state, footprint_detail,
+	coalesce(hosting_mode,'delegated'), coalesce(resource_group,''), coalesce(reconciler_principal_id,'')`
 
 func scanTenant(row pgx.Row) (model.Tenant, error) {
 	var t model.Tenant
@@ -84,7 +87,8 @@ func scanTenant(row pgx.Row) (model.Tenant, error) {
 		&t.Version, &t.AgentCount, &t.ReconcilingCount, &t.MonthlyCalls, &t.Drift, &t.LastHeartbeat,
 		&t.SubscriptionID, &t.ReconcilerIdentity, &t.FoundryProject, &t.ReconcilerVersion, &installedAt, &t.Enabled,
 		&t.Cluster.Name, &t.Cluster.Phase, &t.Cluster.K8sVersion, &t.Cluster.ArgoInstalled, &t.Cluster.NodeCount, &t.Cluster.Detail,
-		&t.Cluster.IngressInstalled, &t.Cluster.GatewayIP, &t.Cluster.IngressIssuer, &t.Cluster.InfraDelegated, &t.Cluster.InfraDetail, &t.Cluster.FootprintState, &t.Cluster.FootprintDetail)
+		&t.Cluster.IngressInstalled, &t.Cluster.GatewayIP, &t.Cluster.IngressIssuer, &t.Cluster.InfraDelegated, &t.Cluster.InfraDetail, &t.Cluster.FootprintState, &t.Cluster.FootprintDetail,
+		&t.HostingMode, &t.ResourceGroup, &t.ReconcilerPrincipalID)
 	if installedAt != "" {
 		t.InstalledAt = &installedAt
 	}
@@ -244,14 +248,75 @@ func (s *Store) EnsureTenantForTID(ctx context.Context, tid, name string) (model
 	// New directories are created DISABLED — a platform admin must enable a
 	// tenant before its users can sign in or its reconciler can sync.
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO tenants (id, name, tenant_id, region, plan, enrollment, version, enabled)
-		 VALUES ($1,$2,$3,'—','team','pending','',false)
-		 ON CONFLICT (tenant_id) DO NOTHING`,
+		`INSERT INTO tenants (id, name, tenant_id, region, plan, enrollment, version, enabled, hosting_mode)
+		 VALUES ($1,$2,$3,'—','team','pending','',false,'delegated')
+		 ON CONFLICT DO NOTHING`,
 		slug, name, tid)
 	if err != nil {
 		return model.Tenant{}, err
 	}
 	return s.TenantByTID(ctx, tid)
+}
+
+// randomSlug generates a stable, unique tenant slug for a platform-hosted tenant
+// (which has no Entra directory id to derive one from). Same "t-" prefix shape as
+// delegated slugs so downstream code (ownership, RGs, …) is uniform.
+func randomSlug() string {
+	var b [8]byte
+	_, _ = rand.Read(b[:])
+	return "t-" + hex.EncodeToString(b[:])
+}
+
+// CreatePlatformTenant creates a tenant hosted in the platform's OWN subscription
+// (a dedicated resource group per tenant), with no Entra directory of its own —
+// users are assigned to it via memberships. Enabled immediately (a platform admin
+// created it deliberately), so the provisioner picks up its footprint next sweep.
+func (s *Store) CreatePlatformTenant(ctx context.Context, name, region, plan, subscriptionID string) (model.Tenant, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = "New tenant"
+	}
+	if strings.TrimSpace(region) == "" {
+		region = "—"
+	}
+	if strings.TrimSpace(plan) == "" {
+		plan = "team"
+	}
+	slug := randomSlug()
+	rg := "cortex-" + slug // dedicated RG per tenant in the platform subscription
+	_, err := s.pool.Exec(ctx,
+		`INSERT INTO tenants (id, name, tenant_id, region, plan, enrollment, version, enabled,
+		   hosting_mode, subscription_id, resource_group, infra_delegated, infra_detail)
+		 VALUES ($1,$2,NULL,$3,$4,'pending','',true,'platform',$5,$6,true,'Hosted in the platform subscription.')`,
+		slug, name, region, plan, subscriptionID, rg)
+	if err != nil {
+		return model.Tenant{}, err
+	}
+	return s.TenantBySlug(ctx, slug)
+}
+
+// SetReconcilerPrincipal records the object id of a platform-hosted tenant's
+// pre-created reconciler managed identity, so its /recon calls (whose token tid is
+// the shared platform directory) resolve to this tenant by identity.
+func (s *Store) SetReconcilerPrincipal(ctx context.Context, slug, principalID string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE tenants SET reconciler_principal_id = $2 WHERE id = $1`, slug, principalID)
+	return err
+}
+
+// TenantByReconcilerOID resolves a tenant by its reconciler's managed-identity
+// object id (platform-hosted tenants, whose token tid is the shared platform
+// directory and can't identify them).
+func (s *Store) TenantByReconcilerOID(ctx context.Context, oid string) (model.Tenant, error) {
+	if strings.TrimSpace(oid) == "" {
+		return model.Tenant{}, ErrNotFound
+	}
+	t, err := scanTenant(s.pool.QueryRow(ctx,
+		`SELECT `+tenantCols+` FROM tenants WHERE reconciler_principal_id = $1`, oid))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return t, ErrNotFound
+	}
+	return t, err
 }
 
 // isPlaceholderName reports whether a tenant name is only the default placeholder
@@ -791,6 +856,7 @@ func (s *Store) TenantsRegistry(ctx context.Context) ([]model.TenantRegistryRow,
 			&r.SubscriptionID, &r.ReconcilerIdentity, &r.FoundryProject, &r.ReconcilerVersion, &installedAt, &r.Enabled,
 			&r.Cluster.Name, &r.Cluster.Phase, &r.Cluster.K8sVersion, &r.Cluster.ArgoInstalled, &r.Cluster.NodeCount, &r.Cluster.Detail,
 			&r.Cluster.IngressInstalled, &r.Cluster.GatewayIP, &r.Cluster.IngressIssuer, &r.Cluster.InfraDelegated, &r.Cluster.InfraDetail, &r.Cluster.FootprintState, &r.Cluster.FootprintDetail,
+			&r.HostingMode, &r.ResourceGroup, &r.ReconcilerPrincipalID,
 			&r.EntitledAgents, &r.EntitledStores, &r.EntitledDeployments, &r.EntitledInfrastructure); err != nil {
 			return nil, err
 		}
@@ -918,16 +984,10 @@ func (s *Store) recountAgents(ctx context.Context, slug string) error {
 /* ── Reconciler sync + heartbeat ─────────────────────────────────────────── */
 
 // SyncDesired returns the desired state (enabled agents) for a tenant's
-// reconciler. Unknown tenants get an empty set (they register via heartbeat).
-func (s *Store) SyncDesired(ctx context.Context, tid string) (shared.DesiredState, error) {
-	out := shared.DesiredState{TenantID: tid, Agents: []shared.DesiredAgent{}}
-	t, err := s.TenantByTID(ctx, tid)
-	if errors.Is(err, ErrNotFound) {
-		return out, nil
-	}
-	if err != nil {
-		return out, err
-	}
+// reconciler. The tenant is resolved by the caller (by reconciler identity or
+// directory id), so this works for both delegated and platform-hosted tenants.
+func (s *Store) SyncDesired(ctx context.Context, t model.Tenant) (shared.DesiredState, error) {
+	out := shared.DesiredState{TenantID: t.TenantID, Agents: []shared.DesiredAgent{}}
 	rows, err := s.pool.Query(ctx,
 		`SELECT a.agent_id, a.name, coalesce(ca.type,'prompt'),
 		        coalesce((SELECT v.version FROM catalog_versions v
@@ -1139,13 +1199,16 @@ type InfraTarget struct {
 	InfraID        string
 	ArmTemplate    string
 	State          string // current infra_state
+	HostingMode    string // 'delegated' | 'platform'
+	ResourceGroup  string // the tenant's footprint RG (platform-hosted); '' ⇒ config default
 }
 
 // InfraTargets returns every enabled infrastructure entity (across tenants) that
 // has a resolved ARM template and a known subscription to provision it into.
 func (s *Store) InfraTargets(ctx context.Context) ([]InfraTarget, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT t.id, coalesce(t.tenant_id,''), coalesce(t.subscription_id,''), i.id, i.arm_template, coalesce(ti.infra_state,'')
+		`SELECT t.id, coalesce(t.tenant_id,''), coalesce(t.subscription_id,''), i.id, i.arm_template, coalesce(ti.infra_state,''),
+		        coalesce(t.hosting_mode,'delegated'), coalesce(t.resource_group,'')
 		 FROM tenant_infrastructure ti
 		 JOIN infrastructure i ON i.id = ti.infra_id
 		 JOIN tenants t ON t.id = ti.tenant_slug
@@ -1157,7 +1220,8 @@ func (s *Store) InfraTargets(ctx context.Context) ([]InfraTarget, error) {
 	var out []InfraTarget
 	for rows.Next() {
 		var it InfraTarget
-		if err := rows.Scan(&it.TenantSlug, &it.TenantID, &it.SubscriptionID, &it.InfraID, &it.ArmTemplate, &it.State); err != nil {
+		if err := rows.Scan(&it.TenantSlug, &it.TenantID, &it.SubscriptionID, &it.InfraID, &it.ArmTemplate, &it.State,
+			&it.HostingMode, &it.ResourceGroup); err != nil {
 			return nil, err
 		}
 		out = append(out, it)
@@ -1214,20 +1278,26 @@ func (s *Store) SetInfraDelegation(ctx context.Context, slug string, delegated b
 // FootprintTarget is an enabled, delegated tenant whose footprint the control
 // plane should provision.
 type FootprintTarget struct {
-	Slug           string
-	TenantID       string
-	SubscriptionID string
-	Name           string
-	State          string // current footprint_state
-	Reprovision    bool   // platform admin asked to re-submit over a ready footprint
+	Slug                  string
+	TenantID              string
+	SubscriptionID        string
+	Name                  string
+	State                 string // current footprint_state
+	Reprovision           bool   // platform admin asked to re-submit over a ready footprint
+	HostingMode           string // 'delegated' | 'platform'
+	ResourceGroup         string // per-tenant RG (platform-hosted); '' ⇒ use the config default
+	Region                string // per-tenant region; '' ⇒ use the config default
+	ReconcilerPrincipalID string // pre-created reconciler MI oid (platform-hosted)
 }
 
-// FootprintTargets returns enabled, delegated tenants whose footprint the control
-// plane should (re)provision: those without a ready footprint yet, plus any a
-// platform admin flagged for re-provisioning.
+// FootprintTargets returns enabled tenants whose footprint the control plane
+// should (re)provision: those without a ready footprint yet, plus any a platform
+// admin flagged for re-provisioning. Covers both delegated tenants (customer
+// subscription via Lighthouse) and platform-hosted ones (platform subscription).
 func (s *Store) FootprintTargets(ctx context.Context) ([]FootprintTarget, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT id, coalesce(tenant_id,''), coalesce(subscription_id,''), name, coalesce(footprint_state,''), coalesce(footprint_reprovision,false)
+		`SELECT id, coalesce(tenant_id,''), coalesce(subscription_id,''), name, coalesce(footprint_state,''), coalesce(footprint_reprovision,false),
+		        coalesce(hosting_mode,'delegated'), coalesce(resource_group,''), region, coalesce(reconciler_principal_id,'')
 		 FROM tenants
 		 WHERE enabled = true AND coalesce(subscription_id,'') <> ''
 		   AND (coalesce(footprint_state,'') <> 'ready' OR footprint_reprovision = true)`)
@@ -1238,7 +1308,8 @@ func (s *Store) FootprintTargets(ctx context.Context) ([]FootprintTarget, error)
 	var out []FootprintTarget
 	for rows.Next() {
 		var t FootprintTarget
-		if err := rows.Scan(&t.Slug, &t.TenantID, &t.SubscriptionID, &t.Name, &t.State, &t.Reprovision); err != nil {
+		if err := rows.Scan(&t.Slug, &t.TenantID, &t.SubscriptionID, &t.Name, &t.State, &t.Reprovision,
+			&t.HostingMode, &t.ResourceGroup, &t.Region, &t.ReconcilerPrincipalID); err != nil {
 			return nil, err
 		}
 		out = append(out, t)
@@ -1331,15 +1402,7 @@ func setNested(m map[string]any, path []string, value any) {
 // ApplyHeartbeat records a reconciler heartbeat: it upserts the tenant with the
 // authoritative in-tenant install details (name, region, subscription, reconciler
 // identity, Foundry project) and updates each managed agent's actual health.
-func (s *Store) ApplyHeartbeat(ctx context.Context, hb shared.Heartbeat) error {
-	if hb.TenantID == "" {
-		return errors.New("heartbeat missing tenantId")
-	}
-	t, err := s.EnsureTenantForTID(ctx, hb.TenantID, hb.TenantName)
-	if err != nil {
-		return err
-	}
-
+func (s *Store) ApplyHeartbeat(ctx context.Context, t model.Tenant, hb shared.Heartbeat) error {
 	reconciling := 0
 	for _, a := range hb.Agents {
 		if a.Health == "reconciling" {

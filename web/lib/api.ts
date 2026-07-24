@@ -50,6 +50,8 @@ interface ApiTenant {
   reconcilerVersion?: string;
   installedAt?: string;
   enabled?: boolean;
+  hostingMode?: string;
+  resourceGroup?: string;
   cluster?: ApiCluster | null;
 }
 interface ApiCluster {
@@ -90,6 +92,7 @@ interface ApiMe {
   email: string;
   role: Role;
   tenant: ApiTenant | null;
+  tenants?: ApiTenant[] | null;
 }
 interface ApiFleet {
   stats: FleetStats;
@@ -110,7 +113,7 @@ interface ApiTenantContext {
 // token; the Go API validates it against Entra's JWKS. Never sent to the browser.
 const SESSION_COOKIES = ["authjs.session-token", "__Secure-authjs.session-token"];
 
-async function getAccessToken(): Promise<string> {
+async function getAccessToken(): Promise<{ token: string; tenantSlug: string }> {
   const store = await cookies();
   for (const base of SESSION_COOKIES) {
     let raw = store.get(base)?.value;
@@ -136,10 +139,21 @@ async function getAccessToken(): Promise<string> {
     const tenants = decoded.tenants as Record<string, { accessToken?: string; error?: string }> | undefined;
     const activeTid = decoded.activeTid as string | undefined;
     const active = tenants && activeTid ? tenants[activeTid] : undefined;
+    // The explicitly-selected Cortex tenant (platform-hosted tenants share one
+    // directory, so the tenant is a slug sent as X-Cortex-Tenant, not a token).
+    const tenantSlug = (decoded.activeTenantSlug as string | undefined) ?? "";
     if (active?.error) throw new ApiError(401, `token ${active.error}`);
-    if (active?.accessToken) return active.accessToken;
+    if (active?.accessToken) return { token: active.accessToken, tenantSlug };
   }
   throw new ApiError(401, "no access token in session");
+}
+
+// authHeaders builds the Authorization + optional X-Cortex-Tenant headers.
+async function authHeaders(extra?: Record<string, string>): Promise<Record<string, string>> {
+  const { token, tenantSlug } = await getAccessToken();
+  const h: Record<string, string> = { Authorization: `Bearer ${token}`, ...extra };
+  if (tenantSlug) h["X-Cortex-Tenant"] = tenantSlug;
+  return h;
 }
 
 export class ApiError extends Error {
@@ -152,9 +166,8 @@ export class ApiError extends Error {
 }
 
 async function apiGet<T>(path: string): Promise<T> {
-  const token = await getAccessToken();
   const res = await fetch(`${API_URL}${path}`, {
-    headers: { Authorization: `Bearer ${token}` },
+    headers: await authHeaders(),
     cache: "no-store",
   });
   if (!res.ok) {
@@ -170,13 +183,9 @@ export async function apiSend<T = unknown>(
   path: string,
   body?: unknown,
 ): Promise<T> {
-  const token = await getAccessToken();
   const res = await fetch(`${API_URL}${path}`, {
     method,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
-    },
+    headers: await authHeaders(body !== undefined ? { "Content-Type": "application/json" } : undefined),
     body: body === undefined ? undefined : JSON.stringify(body),
     cache: "no-store",
   });
@@ -206,6 +215,7 @@ function toSummary(t: ApiTenant): TenantSummary {
     monthlyCalls: t.monthlyCalls,
     lifecycle: (t.lifecycle ?? "enrolling") as Lifecycle,
     enabled: t.enabled ?? true,
+    hostingMode: (t.hostingMode as TenantSummary["hostingMode"]) ?? "delegated",
   };
 }
 
@@ -339,6 +349,7 @@ export interface Me {
   tid: string;
   oid: string;
   tenant: TenantSummary | null;
+  tenants: TenantSummary[];
 }
 
 export const getMe = cache(async (): Promise<Me> => {
@@ -350,6 +361,7 @@ export const getMe = cache(async (): Promise<Me> => {
     tid: m.tid,
     oid: m.oid,
     tenant: m.tenant ? toSummary(m.tenant) : null,
+    tenants: (m.tenants ?? []).map(toSummary),
   };
 });
 
@@ -458,6 +470,22 @@ export const getTenantsRegistry = cache(async (): Promise<TenantRegistryRow[]> =
     lifecycle: (t.lifecycle ?? "enrolling") as Lifecycle,
     enabled: t.enabled ?? true,
   }));
+});
+
+/* ── Memberships (platform-hosted tenant assignments) ─────────────────────── */
+
+export interface TenantMember {
+  email: string;
+  oid: string;
+  role: string;
+  createdAt: string;
+}
+
+export const getTenantMembers = cache(async (slug: string): Promise<TenantMember[]> => {
+  const r = await apiGet<{ members: TenantMember[] }>(
+    `/api/tenants/${encodeURIComponent(slug)}/members`,
+  );
+  return r.members ?? [];
 });
 
 /* ── Applications (Helm deployments → Argo CD) ────────────────────────────── */

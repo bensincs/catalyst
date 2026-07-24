@@ -19,6 +19,9 @@ param reconcilerIdentityId string
 @description('Cluster name, for a stable role-assignment name.')
 param clusterName string
 
+@description('Whether the parent footprint is a cross-tenant (Lighthouse) deployment. Cross-tenant assignments of a delegated role to a managed identity must set delegatedManagedIdentityResourceId; same-tenant (platform-hosted) ones must not.')
+param isDelegated bool = true
+
 // Network Contributor — read the AGC subnet + write its inbound NSG rule.
 var networkContributorRoleId = '4d97b98b-1d4f-4787-a291-c67834d212e7'
 
@@ -28,6 +31,6 @@ resource nsgRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' 
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', networkContributorRoleId)
     principalId: reconcilerPrincipalId
     principalType: 'ServicePrincipal'
-    delegatedManagedIdentityResourceId: reconcilerIdentityId
+    delegatedManagedIdentityResourceId: isDelegated ? reconcilerIdentityId : null
   }
 }

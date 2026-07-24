@@ -14,6 +14,12 @@ const (
 	RoleTenant   Role = "tenant"
 )
 
+// HostingMode is where a tenant's Azure footprint lives.
+const (
+	HostingDelegated = "delegated" // customer's own subscription, via Azure Lighthouse
+	HostingPlatform  = "platform"  // the platform's own subscription, a dedicated RG per tenant
+)
+
 // Identity is the authenticated caller, derived from the internal token + tenant.
 type Identity struct {
 	OID   string `json:"oid"`
@@ -47,6 +53,12 @@ type Tenant struct {
 	FoundryProject     string  `json:"foundryProject,omitempty"`
 	ReconcilerVersion  string  `json:"reconcilerVersion,omitempty"`
 	InstalledAt        *string `json:"installedAt,omitempty"`
+
+	// Hosting: 'delegated' (customer subscription via Lighthouse) or 'platform'
+	// (the platform's own subscription, a dedicated resource group per tenant).
+	HostingMode           string `json:"hostingMode"`
+	ResourceGroup         string `json:"resourceGroup,omitempty"`
+	ReconcilerPrincipalID string `json:"-"` // pre-created reconciler MI oid (platform-hosted); internal
 }
 
 // Agent is an enabled agent running in a tenant.
@@ -78,7 +90,7 @@ type FleetResponse struct {
 }
 
 type TenantContextResponse struct {
-	Tenant Tenant `json:"tenant"`
+	Tenant Tenant  `json:"tenant"`
 	Agents []Agent `json:"agents"`
 	// The tenant's ENABLED resources — enough to draw its dependency topology
 	// (both on the tenant's own overview and the platform drill-in) without extra
@@ -90,8 +102,22 @@ type TenantContextResponse struct {
 
 type MeResponse struct {
 	Identity
-	// Tenant is the caller's own tenant when Role == tenant (nil for platform).
+	// Tenant is the caller's primary/default tenant (nil for platform admins).
 	Tenant *Tenant `json:"tenant"`
+	// Tenants is every tenant the caller can access — their delegated directory
+	// tenant plus any they're assigned to (memberships). Drives the console's
+	// tenant switcher. Empty for platform admins (who see the whole fleet).
+	Tenants []Tenant `json:"tenants,omitempty"`
+}
+
+// Membership is an explicit user → tenant assignment (platform-hosted tenants).
+// oid is bound on first sign-in; until then the row is matched by email.
+type Membership struct {
+	TenantSlug string    `json:"tenantSlug"`
+	Email      string    `json:"email"`
+	OID        string    `json:"oid,omitempty"`
+	Role       string    `json:"role"`
+	CreatedAt  time.Time `json:"createdAt"`
 }
 
 // CatalogAgent is an agent definition, authored by the platform (Owner == "") or
@@ -209,7 +235,7 @@ type Infrastructure struct {
 	Enabled    bool   `json:"enabled"`
 	InfraState string `json:"infraState,omitempty"` // "" | provisioning | ready | failed | deprovisioning
 	Health     string `json:"health,omitempty"`     // reconciling | live | blocked
-	Waiting    bool   `json:"waiting,omitempty"`     // enabled but held for unmet infra deps
+	Waiting    bool   `json:"waiting,omitempty"`    // enabled but held for unmet infra deps
 	// PendingDelete: the definition is being deleted and torn down; kept visible
 	// as "Deleting" until its last provisioned instance is gone.
 	PendingDelete bool `json:"pendingDelete,omitempty"`
@@ -234,8 +260,8 @@ type Application struct {
 	Values         string            `json:"values,omitempty"`
 	ExposeService  string            `json:"exposeService"` // Service the gateway routes to ("" = internal)
 	ExposePort     int               `json:"exposePort"`    // Service port (default 80)
-	Wiring         []shared.WireLink `json:"wiring"`       // infra dependency output → Helm values path
-	Dependencies   []Dependency      `json:"dependencies"` // infrastructure | application | agent
+	Wiring         []shared.WireLink `json:"wiring"`        // infra dependency output → Helm values path
+	Dependencies   []Dependency      `json:"dependencies"`  // infrastructure | application | agent
 	CreatedBy      string            `json:"createdBy,omitempty"`
 	CreatedAt      time.Time         `json:"createdAt"`
 

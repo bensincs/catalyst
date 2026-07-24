@@ -67,6 +67,7 @@ export interface TenantSummary {
   monthlyCalls: number;
   lifecycle: Lifecycle;
   enabled: boolean; // access gate: may sign in / run a reconciler
+  hostingMode?: "delegated" | "platform"; // where the tenant's footprint lives
 }
 
 export interface EnabledAgent {

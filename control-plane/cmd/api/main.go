@@ -64,6 +64,7 @@ func main() {
 		cfg.EntraRequiredScp,
 		cfg.PlatformTenantID,
 		cfg.EntraIssuerHost,
+		cfg.PlatformAdminEmails,
 	)
 	recon := auth.NewRecon(
 		keys,
@@ -71,7 +72,7 @@ func main() {
 		cfg.EntraExtraAud,
 		cfg.EntraIssuerHost,
 	)
-	srv := httpapi.NewServer(st, authn, recon, cfg.CORSOrigin, cfg.EntraClientID, cfg.EntraIssuerHost)
+	srv := httpapi.NewServer(st, authn, recon, cfg.CORSOrigin, cfg.EntraClientID, cfg.EntraIssuerHost, cfg.PlatformTenantID, cfg.PlatformSubscriptionID)
 
 	// Infra worker: discovers Lighthouse-delegated subscriptions, provisions each
 	// enabled tenant's footprint (reconciler + Foundry + AKS) and each deployment's
@@ -84,14 +85,15 @@ func main() {
 		apiScope = "api://" + cfg.EntraClientID
 	}
 	if prov, err := infra.New(st, infra.Config{
-		Enabled:            cfg.CrossTenantProvisioning,
-		ManagingTenantID:   cfg.PlatformTenantID,
-		InfraResourceGroup: cfg.InfraResourceGroup,
-		FootprintRG:        cfg.FootprintRG,
-		Region:             cfg.InfraRegion,
-		ControlPlaneURL:    cfg.ControlPlanePublicURL,
-		APIScope:           apiScope,
-		ReconcilerImage:    cfg.ReconcilerImage,
+		Enabled:                cfg.CrossTenantProvisioning,
+		ManagingTenantID:       cfg.PlatformTenantID,
+		InfraResourceGroup:     cfg.InfraResourceGroup,
+		FootprintRG:            cfg.FootprintRG,
+		Region:                 cfg.InfraRegion,
+		ControlPlaneURL:        cfg.ControlPlanePublicURL,
+		APIScope:               apiScope,
+		ReconcilerImage:        cfg.ReconcilerImage,
+		PlatformSubscriptionID: cfg.PlatformSubscriptionID,
 	}); err != nil {
 		slog.Error("infra provisioner init failed", "err", err)
 	} else if prov == nil {

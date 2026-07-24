@@ -74,6 +74,12 @@ param footprintResourceGroup string = 'cortex'
 @description('Resource group the control plane deploys application infrastructure into.')
 param infraResourceGroup string = 'cortex-infra'
 
+@description('The platform\'s OWN subscription id, where platform-hosted tenants (same subscription, a dedicated RG per tenant) are provisioned. Empty ⇒ platform-hosted tenants disabled. When set, the control-plane identity is granted Contributor + User Access Administrator on it.')
+param platformSubscriptionId string = ''
+
+@description('Comma-separated allowlist of platform-admin emails. When set, only these platform-directory users are Platform Admins (so ordinary users can live in the platform directory, assigned to tenants). Empty ⇒ any platform-directory user is an admin (back-compat).')
+param platformAdminEmails string = ''
+
 @description('PostgreSQL administrator login.')
 param postgresAdminUser string = 'cortexadmin'
 
@@ -134,6 +140,17 @@ resource logs 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
 resource uami 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
   name: '${namePrefix}-cp'
   location: location
+}
+
+// Platform-hosted tenants: grant the control-plane identity Contributor + User
+// Access Administrator on the platform's own subscription, so it can provision
+// per-tenant footprints there (there is no Lighthouse delegation to itself).
+module platformSubRoles 'platform-sub-roles.bicep' = if (!empty(platformSubscriptionId)) {
+  name: 'cortex-platform-sub-roles'
+  scope: subscription(platformSubscriptionId)
+  params: {
+    controlPlanePrincipalId: uami.properties.principalId
+  }
 }
 
 resource acr 'Microsoft.ContainerRegistry/registries@2023-11-01-preview' = {
@@ -286,6 +303,11 @@ resource api 'Microsoft.App/containerApps@2024-03-01' = if (deployApps) {
             { name: 'CONTROL_PLANE_PUBLIC_URL', value: 'https://${apiDomain}' }
             { name: 'CORTEX_API_SCOPE', value: 'api://${entraClientId}' }
             { name: 'RECONCILER_IMAGE', value: reconcilerImage }
+            // Platform-hosted tenants: the platform's own subscription + the
+            // platform-admin allowlist (so ordinary users may live in the
+            // platform directory, assigned to tenants, without being admins).
+            { name: 'PLATFORM_SUBSCRIPTION_ID', value: platformSubscriptionId }
+            { name: 'PLATFORM_ADMIN_EMAILS', value: platformAdminEmails }
           ]
         }
       ]

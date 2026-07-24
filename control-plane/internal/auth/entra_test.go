@@ -66,6 +66,47 @@ func serve(a *Authenticator, token string) (*httptest.ResponseRecorder, *model.I
 	return rr, captured
 }
 
+// TestPlatformAdminAllowlist: with an allowlist configured, only allowlisted
+// emails in the platform directory are Platform Admins — so ordinary users can
+// live in the platform directory (assigned to tenants) without being admins.
+func TestPlatformAdminAllowlist(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := StaticKeySet{testKid: &key.PublicKey}
+
+	claimsFor := func(email string) jwt.MapClaims {
+		c := validClaims(testPlatform)
+		c["email"] = email
+		return c
+	}
+
+	t.Run("allowlisted platform user is admin", func(t *testing.T) {
+		a := New(keys, testClientID, "", testScope, testPlatform, issuerHost, []string{"boss@corp.com"})
+		_, id := serve(a, signToken(t, key, testKid, claimsFor("boss@corp.com")))
+		if id == nil || id.Role != model.RolePlatform {
+			t.Fatalf("expected platform role, got %+v", id)
+		}
+	})
+
+	t.Run("non-allowlisted platform user is a tenant member", func(t *testing.T) {
+		a := New(keys, testClientID, "", testScope, testPlatform, issuerHost, []string{"boss@corp.com"})
+		_, id := serve(a, signToken(t, key, testKid, claimsFor("member@corp.com")))
+		if id == nil || id.Role != model.RoleTenant {
+			t.Fatalf("expected tenant role for non-allowlisted platform-directory user, got %+v", id)
+		}
+	})
+
+	t.Run("empty allowlist keeps back-compat (any platform user is admin)", func(t *testing.T) {
+		a := New(keys, testClientID, "", testScope, testPlatform, issuerHost, nil)
+		_, id := serve(a, signToken(t, key, testKid, claimsFor("anyone@corp.com")))
+		if id == nil || id.Role != model.RolePlatform {
+			t.Fatalf("expected platform role with empty allowlist, got %+v", id)
+		}
+	})
+}
+
 func TestEntraValidation(t *testing.T) {
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -74,7 +115,7 @@ func TestEntraValidation(t *testing.T) {
 	otherKey, _ := rsa.GenerateKey(rand.Reader, 2048)
 
 	keys := StaticKeySet{testKid: &key.PublicKey}
-	a := New(keys, testClientID, "", testScope, testPlatform, issuerHost)
+	a := New(keys, testClientID, "", testScope, testPlatform, issuerHost, nil)
 
 	t.Run("valid platform token", func(t *testing.T) {
 		rr, id := serve(a, signToken(t, key, testKid, validClaims(testPlatform)))

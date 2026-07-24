@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -58,9 +59,11 @@ type Server struct {
 	corsOrigin      string
 	entraClientID   string // Cortex app registration — the audience clusters pin to
 	entraIssuerHost string // Entra issuer host (cloud-specific), for per-tenant issuers
+	platformTID     string // the platform's own directory (ingress issuer for platform-hosted tenants)
+	platformSub     string // the platform's own subscription (where platform-hosted tenants are created)
 }
 
-func NewServer(st *store.Store, a *auth.Authenticator, recon *auth.ReconAuthenticator, corsOrigin, entraClientID, entraIssuerHost string) *Server {
+func NewServer(st *store.Store, a *auth.Authenticator, recon *auth.ReconAuthenticator, corsOrigin, entraClientID, entraIssuerHost, platformTID, platformSub string) *Server {
 	return &Server{
 		store:           st,
 		auth:            a,
@@ -68,8 +71,14 @@ func NewServer(st *store.Store, a *auth.Authenticator, recon *auth.ReconAuthenti
 		corsOrigin:      corsOrigin,
 		entraClientID:   entraClientID,
 		entraIssuerHost: entraIssuerHost,
+		platformTID:     strings.ToLower(platformTID),
+		platformSub:     strings.TrimSpace(platformSub),
 	}
 }
+
+// reconTenantKey stashes the tenant a reconciler request resolved to (by identity
+// or directory id) so the handlers don't re-resolve it.
+type reconTenantKey struct{}
 
 func (s *Server) Router() http.Handler {
 	r := chi.NewRouter()
@@ -114,9 +123,14 @@ func (s *Server) Router() http.Handler {
 
 			// Tenant registry + entitlements + access (platform)
 			r.Get("/tenants", s.handleTenantsRegistry)
+			r.Post("/tenants", s.handleCreateTenant)
 			r.Patch("/tenants/{slug}/all-entitlements", s.handleSetAllEntitlements)
 			r.Patch("/tenants/{slug}/enabled", s.handleSetTenantEnabled)
 			r.Post("/tenants/{slug}/reprovision", s.handleReprovisionFootprint)
+			// Membership (platform-hosted tenants): assign/list/remove users.
+			r.Get("/tenants/{slug}/members", s.handleListMembers)
+			r.Post("/tenants/{slug}/members", s.handleAddMember)
+			r.Delete("/tenants/{slug}/members/{email}", s.handleRemoveMember)
 
 			// Agent ↔ memory-store connection (a relation, not a CRUD verb).
 			r.Post("/tenant/agents/{agentId}/store", s.handleConnectAgentStore)
@@ -139,14 +153,23 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	id, _ := auth.IdentityFrom(r.Context())
 	resp := model.MeResponse{Identity: id}
 
+	// Bind any memberships created for this user's email before they'd signed in,
+	// so oid-based authorization works from here on.
+	_ = s.store.BindMemberships(r.Context(), id.OID, id.Email)
+
 	if id.Role == model.RoleTenant {
-		t, err := s.store.EnsureTenantForTID(r.Context(), id.TID, orgNameFromEmail(id.Email))
+		tenants, primary, err := s.accessibleTenants(r.Context(), id)
 		if err != nil {
 			s.fail(w, r, err)
 			return
 		}
-		resp.Tenant = &t
-		if err := s.store.UpsertUser(r.Context(), id, &t.ID); err != nil {
+		resp.Tenants = tenants
+		resp.Tenant = primary
+		var primarySlug *string
+		if primary != nil {
+			primarySlug = &primary.ID
+		}
+		if err := s.store.UpsertUser(r.Context(), id, primarySlug); err != nil {
 			s.fail(w, r, err)
 			return
 		}
@@ -157,10 +180,51 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// tenantGate blocks non-enabled tenants from every /api route except /me.
-// Platform admins always pass. First contact records the tenant (disabled) so it
-// surfaces for platform approval, then rejects it so the console can show a
-// pending-approval screen.
+// accessibleTenants returns every tenant a non-platform caller can act on: their
+// delegated directory tenant (JIT-created, if they sign in from their own
+// directory) plus any platform-hosted tenants they're assigned to. The first is
+// the primary/default the console lands on.
+func (s *Server) accessibleTenants(ctx context.Context, id model.Identity) ([]model.Tenant, *model.Tenant, error) {
+	seen := map[string]bool{}
+	var out []model.Tenant
+	// A caller signing in from their own (non-platform) directory owns that
+	// directory's delegated tenant — JIT-create it so it surfaces for approval.
+	if !strings.EqualFold(id.TID, s.platformTID) {
+		t, err := s.store.EnsureTenantForTID(ctx, id.TID, orgNameFromEmail(id.Email))
+		if err != nil {
+			return nil, nil, err
+		}
+		seen[t.ID] = true
+		out = append(out, t)
+	}
+	members, err := s.store.MembershipTenants(ctx, id.OID, id.Email)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, t := range members {
+		if !seen[t.ID] {
+			seen[t.ID] = true
+			out = append(out, t)
+		}
+	}
+	var primary *model.Tenant
+	for i := range out {
+		if out[i].Enabled {
+			primary = &out[i]
+			break
+		}
+	}
+	if primary == nil && len(out) > 0 {
+		primary = &out[0]
+	}
+	return out, primary, nil
+}
+
+// tenantGate blocks callers with no enabled tenant from every /api route except
+// /me. Platform admins always pass. A caller from their own directory needs that
+// (delegated) tenant enabled; a platform-directory member needs at least one
+// enabled tenant assignment. First contact records a delegated tenant (disabled)
+// so it surfaces for platform approval, then rejects it (pending-approval screen).
 func (s *Server) tenantGate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id, ok := auth.IdentityFrom(r.Context())
@@ -172,20 +236,45 @@ func (s *Server) tenantGate(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r) // the platform tenant is always enabled
 			return
 		}
-		t, err := s.store.EnsureTenantForTID(r.Context(), id.TID, orgNameFromEmail(id.Email))
+		// A caller from their own (non-platform) directory: their delegated tenant
+		// must be enabled. JIT-create it so it surfaces for approval.
+		if !strings.EqualFold(id.TID, s.platformTID) {
+			t, err := s.store.EnsureTenantForTID(r.Context(), id.TID, orgNameFromEmail(id.Email))
+			if err != nil {
+				s.fail(w, r, err)
+				return
+			}
+			if t.Enabled {
+				next.ServeHTTP(w, r)
+				return
+			}
+			// A disabled directory tenant still passes if the user has some other
+			// enabled assignment; otherwise it's the pending-approval case.
+			if member, _ := s.store.HasEnabledMembership(r.Context(), id.OID, id.Email); !member {
+				writeJSON(w, http.StatusForbidden, map[string]string{"error": "tenant not enabled", "code": "tenant_disabled"})
+				return
+			}
+			next.ServeHTTP(w, r)
+			return
+		}
+		// A platform-directory member (not an admin): needs ≥1 enabled assignment.
+		member, err := s.store.HasEnabledMembership(r.Context(), id.OID, id.Email)
 		if err != nil {
 			s.fail(w, r, err)
 			return
 		}
-		if !t.Enabled {
-			writeJSON(w, http.StatusForbidden, map[string]string{"error": "tenant not enabled", "code": "tenant_disabled"})
+		if !member {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "no tenant access", "code": "no_membership"})
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
 }
 
-// reconGate blocks a reconciler whose tenant isn't enabled. An unknown tenant is
+// reconGate resolves + authorizes the reconciler's tenant and stashes it for the
+// handlers. Platform-hosted tenants are identified by their pre-created
+// reconciler managed-identity oid (their token tid is the shared platform
+// directory); delegated tenants by the token tid. An unknown delegated tenant is
 // recorded (disabled) so it surfaces for approval, then rejected.
 func (s *Server) reconGate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -194,7 +283,19 @@ func (s *Server) reconGate(next http.Handler) http.Handler {
 			writeErr(w, http.StatusUnauthorized, "unauthenticated reconciler")
 			return
 		}
-		t, err := s.store.EnsureTenantForTID(r.Context(), id.TID, "")
+		// Platform-hosted: match the reconciler's managed-identity oid.
+		t, err := s.store.TenantByReconcilerOID(r.Context(), id.OID)
+		if errors.Is(err, store.ErrNotFound) {
+			// No identity match. A platform-directory token with no recorded
+			// reconciler identity is not a known tenant (the platform runs no
+			// tenant reconciler of its own) — reject rather than mint one.
+			if strings.EqualFold(id.TID, s.platformTID) {
+				writeErr(w, http.StatusForbidden, "unrecognized reconciler")
+				return
+			}
+			// Delegated: the tenant is the token's own directory.
+			t, err = s.store.EnsureTenantForTID(r.Context(), id.TID, "")
+		}
 		if err != nil {
 			s.fail(w, r, err)
 			return
@@ -203,7 +304,8 @@ func (s *Server) reconGate(next http.Handler) http.Handler {
 			writeErr(w, http.StatusForbidden, "tenant not enabled")
 			return
 		}
-		next.ServeHTTP(w, r)
+		ctx := context.WithValue(r.Context(), reconTenantKey{}, t)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
@@ -286,7 +388,7 @@ func (s *Server) handleTenantContext(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	if id.Role != model.RolePlatform && !strings.EqualFold(t.TenantID, id.TID) {
+	if !s.authorizeTenant(r.Context(), id, t) {
 		writeErr(w, http.StatusForbidden, "not authorized for this tenant")
 		return
 	}
@@ -456,18 +558,28 @@ func (s *Server) handleApply(w http.ResponseWriter, r *http.Request) {
 }
 
 // ownerWrite is the platform-or-owner half of every write-permission check:
-// platform admins may modify anything; a tenant only what it owns. The caller
-// loads the owner (per kind) and passes the noun for the 403 message.
+// platform admins may modify anything; a tenant only what it owns. Authorization
+// against the owning tenant is by membership or directory id, so it works for
+// both delegated and platform-hosted tenants. The caller loads the owner (per
+// kind) and passes the noun for the 403 message.
 func (s *Server) ownerWrite(w http.ResponseWriter, r *http.Request, id model.Identity, owner, noun string) (string, bool) {
 	if id.Role == model.RolePlatform {
 		return owner, true
 	}
-	t, err := s.store.EnsureTenantForTID(r.Context(), id.TID, orgNameFromEmail(id.Email))
+	if owner == "" {
+		writeErr(w, http.StatusForbidden, "not your "+noun)
+		return "", false
+	}
+	t, err := s.store.TenantBySlug(r.Context(), owner)
 	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeErr(w, http.StatusForbidden, "not your "+noun)
+			return "", false
+		}
 		s.fail(w, r, err)
 		return "", false
 	}
-	if owner != t.ID {
+	if !s.authorizeTenant(r.Context(), id, t) {
 		writeErr(w, http.StatusForbidden, "not your "+noun)
 		return "", false
 	}
@@ -502,6 +614,99 @@ func (s *Server) handleTenantsRegistry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"tenants": rows})
+}
+
+// handleCreateTenant creates a platform-hosted tenant (platform only): a tenant
+// in the platform's OWN subscription, a dedicated resource group per tenant, with
+// no Entra directory of its own. Users are assigned to it via memberships. The
+// provisioner deploys its footprint next sweep.
+func (s *Server) handleCreateTenant(w http.ResponseWriter, r *http.Request) {
+	id, _ := auth.IdentityFrom(r.Context())
+	if !s.requirePlatform(w, id) {
+		return
+	}
+	if s.platformSub == "" {
+		writeErr(w, http.StatusPreconditionFailed, "platform-hosted tenants require PLATFORM_SUBSCRIPTION_ID to be configured")
+		return
+	}
+	var body struct {
+		Name   string `json:"name"`
+		Region string `json:"region"`
+		Plan   string `json:"plan"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if strings.TrimSpace(body.Name) == "" {
+		writeErr(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	t, err := s.store.CreatePlatformTenant(r.Context(), body.Name, body.Region, body.Plan, s.platformSub)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, t)
+}
+
+// handleListMembers lists a tenant's assigned users (platform only).
+func (s *Server) handleListMembers(w http.ResponseWriter, r *http.Request) {
+	id, _ := auth.IdentityFrom(r.Context())
+	if !s.requirePlatform(w, id) {
+		return
+	}
+	members, err := s.store.MembershipsForTenant(r.Context(), chi.URLParam(r, "slug"))
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"members": members})
+}
+
+// handleAddMember assigns a user (by email) to a tenant (platform only).
+func (s *Server) handleAddMember(w http.ResponseWriter, r *http.Request) {
+	id, _ := auth.IdentityFrom(r.Context())
+	if !s.requirePlatform(w, id) {
+		return
+	}
+	slug := chi.URLParam(r, "slug")
+	if _, err := s.store.TenantBySlug(r.Context(), slug); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "tenant not found")
+			return
+		}
+		s.fail(w, r, err)
+		return
+	}
+	var body struct {
+		Email string `json:"email"`
+		Role  string `json:"role"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if !strings.Contains(body.Email, "@") {
+		writeErr(w, http.StatusBadRequest, "a valid email is required")
+		return
+	}
+	if err := s.store.AddMembership(r.Context(), slug, body.Email, body.Role); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "assigned"})
+}
+
+// handleRemoveMember revokes a user's assignment to a tenant (platform only).
+func (s *Server) handleRemoveMember(w http.ResponseWriter, r *http.Request) {
+	id, _ := auth.IdentityFrom(r.Context())
+	if !s.requirePlatform(w, id) {
+		return
+	}
+	if err := s.store.RemoveMembership(r.Context(), chi.URLParam(r, "slug"), chi.URLParam(r, "email")); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "removed"})
 }
 
 /* ── Memory stores (platform-authored + tenant-created) ──────────────────── */
@@ -642,26 +847,26 @@ func (s *Server) infraWriteAllowed(w http.ResponseWriter, r *http.Request, id mo
 /* ── Reconciler (in-tenant, Entra-token auth; tenant = token tid) ─────────── */
 
 func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
-	id, ok := auth.ReconIdentityFrom(r.Context())
-	if !ok || id.TID == "" {
+	t, ok := r.Context().Value(reconTenantKey{}).(model.Tenant)
+	if !ok {
 		writeErr(w, http.StatusUnauthorized, "unauthenticated reconciler")
 		return
 	}
-	ds, err := s.store.SyncDesired(r.Context(), id.TID)
+	ds, err := s.store.SyncDesired(r.Context(), t)
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	// Pin this tenant's cluster ingress to accept only its own Entra tokens,
-	// addressed to the Cortex app registration (issuer derived from the token's
-	// tenant, so a token can't be reused across tenants).
-	ds.IngressAuth = s.ingressAuthForTenant(id.TID)
+	// Pin this tenant's cluster ingress to accept only Entra tokens addressed to
+	// the Cortex app registration, issued by the tenant's directory (delegated) or
+	// the platform directory (platform-hosted).
+	ds.IngressAuth = s.ingressAuthForTenant(t)
 	writeJSON(w, http.StatusOK, ds)
 }
 
 func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
-	id, ok := auth.ReconIdentityFrom(r.Context())
-	if !ok || id.TID == "" {
+	t, ok := r.Context().Value(reconTenantKey{}).(model.Tenant)
+	if !ok {
 		writeErr(w, http.StatusUnauthorized, "unauthenticated reconciler")
 		return
 	}
@@ -669,10 +874,9 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &hb) {
 		return
 	}
-	// The tenant comes from the validated token, not the request body — the
+	// The tenant comes from the validated identity, not the request body — the
 	// reconciler can only ever report for its own tenant.
-	hb.TenantID = id.TID
-	if err := s.store.ApplyHeartbeat(r.Context(), hb); err != nil {
+	if err := s.store.ApplyHeartbeat(r.Context(), t, hb); err != nil {
 		s.fail(w, r, err)
 		return
 	}
@@ -695,12 +899,60 @@ func (s *Server) callerTenant(w http.ResponseWriter, r *http.Request) (model.Ten
 		writeErr(w, http.StatusBadRequest, "this is a tenant-scoped action")
 		return model.Tenant{}, false
 	}
-	t, err := s.store.EnsureTenantForTID(r.Context(), id.TID, orgNameFromEmail(id.Email))
+	// An explicit selection (the console's active tenant) wins — a member may
+	// belong to several tenants, all in one directory.
+	if slug := strings.TrimSpace(r.Header.Get("X-Cortex-Tenant")); slug != "" {
+		t, err := s.store.TenantBySlug(r.Context(), slug)
+		if errors.Is(err, store.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "tenant not found")
+			return model.Tenant{}, false
+		}
+		if err != nil {
+			s.fail(w, r, err)
+			return model.Tenant{}, false
+		}
+		if !s.authorizeTenant(r.Context(), id, t) {
+			writeErr(w, http.StatusForbidden, "not authorized for this tenant")
+			return model.Tenant{}, false
+		}
+		return t, true
+	}
+	// No explicit selection: the caller's own directory (delegated) tenant, or —
+	// for a platform-directory member — their primary assigned tenant.
+	if !strings.EqualFold(id.TID, s.platformTID) {
+		t, err := s.store.EnsureTenantForTID(r.Context(), id.TID, orgNameFromEmail(id.Email))
+		if err != nil {
+			s.fail(w, r, err)
+			return model.Tenant{}, false
+		}
+		return t, true
+	}
+	members, err := s.store.MembershipTenants(r.Context(), id.OID, id.Email)
 	if err != nil {
 		s.fail(w, r, err)
 		return model.Tenant{}, false
 	}
-	return t, true
+	for _, t := range members {
+		if t.Enabled {
+			return t, true
+		}
+	}
+	writeErr(w, http.StatusBadRequest, "select a tenant")
+	return model.Tenant{}, false
+}
+
+// authorizeTenant reports whether a caller may act on a tenant: platform admins
+// may act on any; a caller from the tenant's own directory (delegated) may; and
+// anyone explicitly assigned to it (membership) may.
+func (s *Server) authorizeTenant(ctx context.Context, id model.Identity, t model.Tenant) bool {
+	if id.Role == model.RolePlatform {
+		return true
+	}
+	if t.HostingMode == model.HostingDelegated && t.TenantID != "" && strings.EqualFold(t.TenantID, id.TID) {
+		return true
+	}
+	member, _ := s.store.IsMember(ctx, t.ID, id.OID, id.Email)
+	return member
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
@@ -747,7 +999,7 @@ func (s *Server) cors(next http.Handler) http.Handler {
 		if s.corsOrigin != "" {
 			w.Header().Set("Access-Control-Allow-Origin", s.corsOrigin)
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Cortex-Tenant")
 			w.Header().Set("Vary", "Origin")
 		}
 		if r.Method == http.MethodOptions {

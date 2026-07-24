@@ -18,6 +18,10 @@ declare module "next-auth" {
     /** Every directory this human has connected — the tenant switcher's list. */
     tenants: SessionTenant[];
     activeTid: string;
+    /** The explicitly-selected Cortex tenant slug (platform-hosted tenants share
+     *  one directory, so the tenant is a slug, not a directory token). Empty ⇒
+     *  the active directory's own (delegated) tenant. */
+    activeTenantSlug?: string;
     error?: string;
   }
 }
@@ -30,6 +34,8 @@ declare module "next-auth/jwt" {
     tenants?: Record<string, TenantToken>;
     /** Which directory's token is currently forwarded to the API. */
     activeTid?: string;
+    /** The explicitly-selected Cortex tenant slug (X-Cortex-Tenant header). */
+    activeTenantSlug?: string;
     error?: string;
   }
 }
