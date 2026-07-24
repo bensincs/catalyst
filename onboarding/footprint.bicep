@@ -75,8 +75,8 @@ param embeddingModelName string = 'text-embedding-3-small'
 @description('Embedding model version. Empty lets Azure pick the current default version.')
 param embeddingModelVersion string = ''
 
-@description('Embedding deployment SKU (throughput type).')
-param embeddingSkuName string = 'Standard'
+@description('Embedding model deployment SKU. GlobalStandard is available in every region (Standard is region-limited — e.g. absent in uksouth for text-embedding-3-small).')
+param embeddingSkuName string = 'GlobalStandard'
 
 @description('Embedding capacity, in thousands of tokens-per-minute.')
 param embeddingCapacity int = 30

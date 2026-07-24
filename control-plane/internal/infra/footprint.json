@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.40.2.10011",
-      "templateHash": "13996163765152497508"
+      "templateHash": "486262166496510189"
     }
   },
   "parameters": {
@@ -120,9 +120,9 @@
     },
     "embeddingSkuName": {
       "type": "string",
-      "defaultValue": "Standard",
+      "defaultValue": "GlobalStandard",
       "metadata": {
-        "description": "Embedding deployment SKU (throughput type)."
+        "description": "Embedding model deployment SKU. GlobalStandard is available in every region (Standard is region-limited — e.g. absent in uksouth for text-embedding-3-small)."
       }
     },
     "embeddingCapacity": {
