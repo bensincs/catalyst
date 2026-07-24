@@ -366,10 +366,14 @@ resource aksUserAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' 
 
 // Network Contributor on the AKS node (MC_) resource group so the reconciler can
 // open the AGC association subnet's NSG for inbound frontend traffic (the add-on
-// leaves it denied). Scoped via a module because the node RG is AKS-created.
+// leaves it denied). Scoped via a module because the node RG is AKS-created. The
+// scope is a static name (not aks.properties.nodeResourceGroup) to satisfy Bicep,
+// so an explicit dependsOn is required — otherwise this races AKS and fails with
+// "Resource group 'MC_…' could not be found".
 module nodeResourceGroupRoles 'footprint-noderg.bicep' = if (deployCluster) {
   name: 'cortex-noderg-roles'
   scope: resourceGroup(nodeResourceGroupName)
+  dependsOn: [ aks ]
   params: {
     reconcilerPrincipalId: reconIdentityPrincipalId
     reconcilerIdentityId: reconIdentityId

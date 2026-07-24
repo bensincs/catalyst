@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.40.2.10011",
-      "templateHash": "486262166496510189"
+      "templateHash": "14567832965836088860"
     }
   },
   "parameters": {
@@ -687,6 +687,7 @@
         }
       },
       "dependsOn": [
+        "[resourceId('Microsoft.ContainerService/managedClusters', parameters('clusterName'))]",
         "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix')))]"
       ]
     }
