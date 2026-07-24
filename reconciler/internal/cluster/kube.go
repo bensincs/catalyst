@@ -3,6 +3,7 @@ package cluster
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 
@@ -154,7 +155,9 @@ func (k *kube) reconcileApplications(ctx context.Context, apps []shared.DesiredA
 		// routes via the Service, so this works with CNI Overlay.
 		if svc := strings.TrimSpace(a.ExposeService); svc != "" {
 			route := appRoute(name, a.Namespace, a.ID, appHost(name, o.AppsDomain), svc, a.ExposePort)
-			_, _ = k.dyn.Resource(routeGVR).Namespace(a.Namespace).Apply(ctx, name, route, ssaOpts)
+			if _, err := k.dyn.Resource(routeGVR).Namespace(a.Namespace).Apply(ctx, name, route, ssaOpts); err != nil {
+				slog.Warn("cluster: apply HTTPRoute failed", "app", name, "err", trunc(err.Error()))
+			}
 			exposed[name] = true
 		}
 		st := shared.ApplicationStatus{ID: a.ID, SyncStatus: "pending", HealthStatus: "pending"}
@@ -250,9 +253,13 @@ func (k *kube) ensureGateway(ctx context.Context, subnetID string) {
 	}}
 	_, _ = k.dyn.Resource(nsGVR).Apply(ctx, gatewayNS, ns, ssaOpts)
 	if strings.TrimSpace(subnetID) != "" {
-		_, _ = k.dyn.Resource(albGVR).Namespace(gatewayNS).Apply(ctx, albName, applicationLoadBalancer(subnetID), ssaOpts)
+		if _, err := k.dyn.Resource(albGVR).Namespace(gatewayNS).Apply(ctx, albName, applicationLoadBalancer(subnetID), ssaOpts); err != nil {
+			slog.Warn("cluster: apply ApplicationLoadBalancer failed", "err", trunc(err.Error()))
+		}
 	}
-	_, _ = k.dyn.Resource(gwGVR).Namespace(gatewayNS).Apply(ctx, gatewayName, gateway(), ssaOpts)
+	if _, err := k.dyn.Resource(gwGVR).Namespace(gatewayNS).Apply(ctx, gatewayName, gateway(), ssaOpts); err != nil {
+		slog.Warn("cluster: apply Gateway failed", "err", trunc(err.Error()))
+	}
 }
 
 // gatewayAddress returns the AGC frontend FQDN the ALB controller assigned to the

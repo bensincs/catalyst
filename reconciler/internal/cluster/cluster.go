@@ -154,10 +154,12 @@ func (c *Client) Reconcile(ctx context.Context, apps []shared.DesiredApplication
 	// Application + an HTTPRoute. The AKS ALB add-on programs Application Gateway
 	// for Containers from a shared Gateway + those routes; report its FQDN.
 	k.ensureTenantProject(ctx)
-	k.ensureGateway(ctx, c.agcSubnetID(ctx, m.nodeResourceGroup))
+	subnet := c.agcSubnetID(ctx, m.nodeResourceGroup)
+	k.ensureGateway(ctx, subnet)
 	appStatuses := k.reconcileApplications(ctx, apps, c.o)
 	status.GatewayIP = k.gatewayAddress(ctx)
 	status.IngressInstalled = status.GatewayIP != ""
+	slog.Info("cluster: gateway reconcile", "nodeRG", m.nodeResourceGroup, "subnetFound", subnet != "", "address", status.GatewayIP)
 
 	// Each app's Azure infra is provisioned by the control plane (via Lighthouse)
 	// and its outputs are already merged into the Helm values by the time an app
@@ -227,6 +229,7 @@ func (c *Client) agcSubnetID(ctx context.Context, nodeRG string) string {
 		} `json:"value"`
 	}
 	if err := c.arm(ctx, http.MethodGet, u, &body); err != nil {
+		slog.Warn("cluster: list AGC subnet failed", "nodeRG", nodeRG, "err", trunc(err.Error()))
 		return ""
 	}
 	for _, v := range body.Value {
