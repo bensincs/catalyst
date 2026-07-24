@@ -78,7 +78,8 @@ const tenantCols = `id, name, coalesce(tenant_id,''), region, plan, enrollment, 
 	subscription_id, reconciler_identity, foundry_project, reconciler_version, installed_at, enabled,
 	cluster_name, cluster_phase, cluster_k8s_version, cluster_argo_installed, cluster_node_count, cluster_detail,
 	cluster_ingress_installed, cluster_gateway_ip, cluster_ingress_issuer, infra_delegated, infra_detail, footprint_state, footprint_detail,
-	coalesce(hosting_mode,'delegated'), coalesce(resource_group,''), coalesce(reconciler_principal_id,''), coalesce(cluster_mode,'aks'), coalesce(footprint_config,'{}')`
+	coalesce(hosting_mode,'delegated'), coalesce(resource_group,''), coalesce(reconciler_principal_id,''), coalesce(cluster_mode,'aks'), coalesce(footprint_config,'{}'),
+	(coalesce(byo_kubeconfig,'') <> '')`
 
 func scanTenant(row pgx.Row) (model.Tenant, error) {
 	var t model.Tenant
@@ -89,7 +90,7 @@ func scanTenant(row pgx.Row) (model.Tenant, error) {
 		&t.SubscriptionID, &t.ReconcilerIdentity, &t.FoundryProject, &t.ReconcilerVersion, &installedAt, &t.Enabled,
 		&t.Cluster.Name, &t.Cluster.Phase, &t.Cluster.K8sVersion, &t.Cluster.ArgoInstalled, &t.Cluster.NodeCount, &t.Cluster.Detail,
 		&t.Cluster.IngressInstalled, &t.Cluster.GatewayIP, &t.Cluster.IngressIssuer, &t.Cluster.InfraDelegated, &t.Cluster.InfraDetail, &t.Cluster.FootprintState, &t.Cluster.FootprintDetail,
-		&t.HostingMode, &t.ResourceGroup, &t.ReconcilerPrincipalID, &t.ClusterMode, &footprintConfig)
+		&t.HostingMode, &t.ResourceGroup, &t.ReconcilerPrincipalID, &t.ClusterMode, &footprintConfig, &t.HasBYOKubeconfig)
 	if installedAt != "" {
 		t.InstalledAt = &installedAt
 	}
@@ -310,8 +311,12 @@ func (s *Store) CreatePlatformTenant(ctx context.Context, name, region, plan, su
 }
 
 // SetFootprintConfig records a tenant's footprint shape (cluster mode + config)
-// before it's stamped. Platform admins call this from the footprint editor.
-func (s *Store) SetFootprintConfig(ctx context.Context, slug, clusterMode string, config map[string]any) error {
+// before it's stamped. Platform admins call this from the footprint editor. For a
+// bring-your-own cluster, kubeconfig carries the credentials the reconciler uses
+// to reach it; it's stored in its own column (never in footprint_config, so it's
+// never serialized back). An empty kubeconfig leaves any stored one intact — a
+// config-only edit (e.g. changing a note) doesn't clear the credentials.
+func (s *Store) SetFootprintConfig(ctx context.Context, slug, clusterMode string, config map[string]any, kubeconfig string) error {
 	if clusterMode != "aks" && clusterMode != "byo" {
 		clusterMode = "aks"
 	}
@@ -322,7 +327,11 @@ func (s *Store) SetFootprintConfig(ctx context.Context, slug, clusterMode string
 		}
 	}
 	tag, err := s.pool.Exec(ctx,
-		`UPDATE tenants SET cluster_mode = $2, footprint_config = $3 WHERE id = $1`, slug, clusterMode, raw)
+		`UPDATE tenants
+		 SET cluster_mode = $2,
+		     footprint_config = $3,
+		     byo_kubeconfig = CASE WHEN $4 <> '' THEN $4 ELSE byo_kubeconfig END
+		 WHERE id = $1`, slug, clusterMode, raw, strings.TrimSpace(kubeconfig))
 	if err != nil {
 		return err
 	}
@@ -961,7 +970,7 @@ func (s *Store) TenantsRegistry(ctx context.Context) ([]model.TenantRegistryRow,
 			&r.SubscriptionID, &r.ReconcilerIdentity, &r.FoundryProject, &r.ReconcilerVersion, &installedAt, &r.Enabled,
 			&r.Cluster.Name, &r.Cluster.Phase, &r.Cluster.K8sVersion, &r.Cluster.ArgoInstalled, &r.Cluster.NodeCount, &r.Cluster.Detail,
 			&r.Cluster.IngressInstalled, &r.Cluster.GatewayIP, &r.Cluster.IngressIssuer, &r.Cluster.InfraDelegated, &r.Cluster.InfraDetail, &r.Cluster.FootprintState, &r.Cluster.FootprintDetail,
-			&r.HostingMode, &r.ResourceGroup, &r.ReconcilerPrincipalID, &r.ClusterMode, &footprintConfig,
+			&r.HostingMode, &r.ResourceGroup, &r.ReconcilerPrincipalID, &r.ClusterMode, &footprintConfig, &r.HasBYOKubeconfig,
 			&r.EntitledAgents, &r.EntitledStores, &r.EntitledDeployments, &r.EntitledInfrastructure); err != nil {
 			return nil, err
 		}
@@ -1398,6 +1407,7 @@ type FootprintTarget struct {
 	ReconcilerPrincipalID string // pre-created reconciler MI oid (platform-hosted)
 	ClusterMode           string // 'aks' | 'byo'
 	Config                map[string]any
+	Kubeconfig            string // bring-your-own cluster kubeconfig (cluster_mode 'byo'); raw, injected into the footprint as a secret
 }
 
 // FootprintTargets returns enabled tenants whose footprint the control plane
@@ -1409,7 +1419,7 @@ func (s *Store) FootprintTargets(ctx context.Context) ([]FootprintTarget, error)
 	rows, err := s.pool.Query(ctx,
 		`SELECT id, coalesce(tenant_id,''), coalesce(subscription_id,''), name, coalesce(footprint_state,''), coalesce(footprint_reprovision,false),
 		        coalesce(hosting_mode,'delegated'), coalesce(resource_group,''), region, coalesce(reconciler_principal_id,''),
-		        coalesce(cluster_mode,'aks'), coalesce(footprint_config,'{}')
+		        coalesce(cluster_mode,'aks'), coalesce(footprint_config,'{}'), coalesce(byo_kubeconfig,'')
 		 FROM tenants
 		 WHERE enabled = true AND coalesce(subscription_id,'') <> ''
 		   AND (footprint_reprovision = true
@@ -1423,7 +1433,7 @@ func (s *Store) FootprintTargets(ctx context.Context) ([]FootprintTarget, error)
 		var t FootprintTarget
 		var config []byte
 		if err := rows.Scan(&t.Slug, &t.TenantID, &t.SubscriptionID, &t.Name, &t.State, &t.Reprovision,
-			&t.HostingMode, &t.ResourceGroup, &t.Region, &t.ReconcilerPrincipalID, &t.ClusterMode, &config); err != nil {
+			&t.HostingMode, &t.ResourceGroup, &t.Region, &t.ReconcilerPrincipalID, &t.ClusterMode, &config, &t.Kubeconfig); err != nil {
 			return nil, err
 		}
 		if len(config) > 0 {

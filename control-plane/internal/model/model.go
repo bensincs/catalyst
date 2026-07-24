@@ -65,6 +65,9 @@ type Tenant struct {
 	// identifiers for byo).
 	ClusterMode     string         `json:"clusterMode"`
 	FootprintConfig map[string]any `json:"footprintConfig,omitempty"`
+	// HasBYOKubeconfig reports whether a bring-your-own cluster kubeconfig is
+	// stored (cluster_mode 'byo'). The kubeconfig itself is never serialized.
+	HasBYOKubeconfig bool `json:"hasByoKubeconfig"`
 }
 
 // Agent is an enabled agent running in a tenant.

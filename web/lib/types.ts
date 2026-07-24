@@ -239,6 +239,7 @@ export interface TenantContextInfo {
   hostingMode: "delegated" | "platform";
   clusterMode: "aks" | "byo";
   footprintConfig: Record<string, unknown>;
+  hasByoKubeconfig: boolean;
   cluster: ClusterInfo;
 }
 

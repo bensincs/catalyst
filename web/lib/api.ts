@@ -54,6 +54,7 @@ interface ApiTenant {
   resourceGroup?: string;
   clusterMode?: string;
   footprintConfig?: Record<string, unknown> | null;
+  hasByoKubeconfig?: boolean;
   cluster?: ApiCluster | null;
 }
 interface ApiCluster {
@@ -237,6 +238,7 @@ function toContext(t: ApiTenant): TenantContextInfo {
     hostingMode: (t.hostingMode as TenantContextInfo["hostingMode"]) ?? "delegated",
     clusterMode: (t.clusterMode as TenantContextInfo["clusterMode"]) ?? "aks",
     footprintConfig: (t.footprintConfig as Record<string, unknown> | null) ?? {},
+    hasByoKubeconfig: t.hasByoKubeconfig ?? false,
     cluster: toCluster(t.cluster),
   };
 }

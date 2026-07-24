@@ -451,6 +451,13 @@ CREATE INDEX IF NOT EXISTS memberships_email_idx ON memberships(lower(email));
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS cluster_mode     text  NOT NULL DEFAULT 'aks';
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS footprint_config jsonb NOT NULL DEFAULT '{}';
 
+-- Bring-your-own (cluster_mode = 'byo') cluster kubeconfig: the reconciler reaches
+-- the customer's (e.g. Arc-connected) cluster directly with these credentials.
+-- Held in its own column (never in footprint_config) so it's never serialized to
+-- the console API — only a presence flag is; the control plane base64-encodes it
+-- into the footprint deployment as a container secret.
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS byo_kubeconfig text NOT NULL DEFAULT '';
+
 -- Migrate memberships from the original email-only shape (PK on email) to a
 -- generic principal key, so a user can be assigned by object id too. Idempotent:
 -- only runs while the principal column is absent.

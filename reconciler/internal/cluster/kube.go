@@ -141,6 +141,10 @@ func (k *kube) reconcileApplications(ctx context.Context, apps []shared.DesiredA
 	exposed := map[string]bool{}     // app names that publish a gateway Ingress
 	ociRepos := map[string]string{} // Argo repo-secret name → OCI registry URL
 	ri := k.dyn.Resource(appGVR).Namespace(argoNamespace)
+	// A bring-your-own (kubeconfig/Arc) cluster has no Application Gateway for
+	// Containers and likely no Gateway API CRDs — the customer owns ingress — so
+	// the reconciler stamps Argo Applications only and never touches HTTPRoutes.
+	manageRoutes := o.Kind != kindKubeconfig
 
 	for _, a := range apps {
 		name := appName(a.ID)
@@ -154,7 +158,7 @@ func (k *kube) reconcileApplications(ctx context.Context, apps []shared.DesiredA
 		// Expose the app through the gateway only when it declares the Service to
 		// route to (charts name it unpredictably); empty ⇒ cluster-internal. AGC
 		// routes via the Service, so this works with CNI Overlay.
-		if svc := strings.TrimSpace(a.ExposeService); svc != "" {
+		if svc := strings.TrimSpace(a.ExposeService); svc != "" && manageRoutes {
 			route := appRoute(name, a.Namespace, a.ID, appHost(name, o.AppsDomain), svc, a.ExposePort)
 			if _, err := k.dyn.Resource(routeGVR).Namespace(a.Namespace).Apply(ctx, name, route, ssaOpts); err != nil {
 				slog.Warn("cluster: apply HTTPRoute failed", "app", name, "err", trunc(err.Error()))
@@ -188,12 +192,14 @@ func (k *kube) reconcileApplications(ctx context.Context, apps []shared.DesiredA
 		}
 	}
 	// GC HTTPRoutes cluster-wide for apps that are gone or no longer expose a
-	// Service, so they stop serving.
-	if list, err := k.dyn.Resource(routeGVR).List(ctx, managed); err == nil {
-		for i := range list.Items {
-			n := list.Items[i].GetName()
-			if !exposed[n] {
-				_ = k.dyn.Resource(routeGVR).Namespace(list.Items[i].GetNamespace()).Delete(ctx, n, metav1.DeleteOptions{})
+	// Service, so they stop serving. Skipped for BYO clusters (no routes managed).
+	if manageRoutes {
+		if list, err := k.dyn.Resource(routeGVR).List(ctx, managed); err == nil {
+			for i := range list.Items {
+				n := list.Items[i].GetName()
+				if !exposed[n] {
+					_ = k.dyn.Resource(routeGVR).Namespace(list.Items[i].GetNamespace()).Delete(ctx, n, metav1.DeleteOptions{})
+				}
 			}
 		}
 	}

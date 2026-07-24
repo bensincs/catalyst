@@ -34,14 +34,18 @@ func main() {
 	foundrySrc := tokens.SourceFor(cred, cfg.FoundryScope)
 
 	// Cluster/GitOps is opt-in: when enabled, the reconciler bootstraps Argo CD
-	// into the tenant's AKS cluster and stamps its Helm deployments in.
+	// into the tenant's cluster and stamps its Helm deployments in. The cluster is
+	// either the Cortex-provisioned AKS cluster (reached via ARM) or a
+	// bring-your-own/Arc cluster (reached from a supplied kubeconfig).
 	var clusterClient *cluster.Client
 	if cfg.ClusterEnabled {
 		clusterClient = cluster.New(cred, cluster.Options{
+			Kind:            cfg.ClusterKind,
 			SubscriptionID:  cfg.SubscriptionID,
 			ResourceGroup:   cfg.ClusterResourceGroup,
 			ClusterName:     cfg.ClusterName,
 			ArgoVersion:     cfg.ArgoCDVersion,
+			Kubeconfig:      cfg.Kubeconfig,
 			AppsDomain:      cfg.AppsDomain,
 			HelmOCIRegistry: cfg.HelmOCIRegistry,
 			HelmOCIUsername: cfg.HelmOCIUsername,
@@ -61,6 +65,7 @@ func main() {
 		"reconcilerVersion", cfg.ReconcilerVersion,
 		"authScope", cfg.CortexAPIScope,
 		"clusterEnabled", cfg.ClusterEnabled,
+		"clusterKind", cfg.ClusterKind,
 		"cluster", cfg.ClusterName,
 		"poll", cfg.PollInterval.String(),
 	)

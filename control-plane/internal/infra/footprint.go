@@ -3,6 +3,7 @@ package infra
 import (
 	"context"
 	_ "embed"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -296,6 +297,16 @@ func (p *Provisioner) submitFootprint(ctx context.Context, sub, rg string, t sto
 		"isDelegated":     map[string]any{"value": isDelegated},
 		"tenantSlug":      map[string]any{"value": t.Slug},
 		"deployCluster":   map[string]any{"value": deployCluster},
+	}
+	// Bring-your-own cluster: the reconciler reaches it directly from the supplied
+	// kubeconfig (base64-encoded for safe transport as a container secret). Without
+	// a kubeconfig the footprint still deploys (reconciler + Foundry only); the
+	// reconciler runs Foundry-only until one is provided.
+	if !deployCluster {
+		params["clusterKind"] = map[string]any{"value": "kubeconfig"}
+		if kc := strings.TrimSpace(t.Kubeconfig); kc != "" {
+			params["kubeconfigBase64"] = map[string]any{"value": base64.StdEncoding.EncodeToString([]byte(kc))}
+		}
 	}
 	// The cluster + Foundry follow the tenant's region.
 	if region != "" {

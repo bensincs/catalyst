@@ -26,6 +26,7 @@ export function FootprintPanel({
   footprintState,
   clusterMode,
   config,
+  hasByoKubeconfig,
 }: {
   slug: string;
   name: string;
@@ -33,6 +34,7 @@ export function FootprintPanel({
   footprintState?: string;
   clusterMode: "aks" | "byo";
   config: Cfg;
+  hasByoKubeconfig: boolean;
 }) {
   const router = useRouter();
   const { toast } = useToast();
@@ -42,6 +44,9 @@ export function FootprintPanel({
   const [nodeCount, setNodeCount] = useState(String(config.nodeCount ?? ""));
   const [nodeVmSize, setNodeVmSize] = useState(String(config.nodeVmSize ?? ""));
   const [byoNote, setByoNote] = useState(String(config.note ?? ""));
+  // The kubeconfig is never echoed back (stored server-side, redacted); the field
+  // starts empty and only sends when the admin pastes a new one.
+  const [kubeconfig, setKubeconfig] = useState("");
 
   const state = (footprintState || "draft") as keyof typeof LABEL;
   const provisioning = footprintState === "provisioning";
@@ -57,10 +62,14 @@ export function FootprintPanel({
               ...(nodeVmSize.trim() ? { nodeVmSize: nodeVmSize.trim() } : {}),
               ...(nodeCount.trim() ? { nodeCount: Number(nodeCount) } : {}),
             }
-          : { ...(byoNote.trim() ? { note: byoNote.trim() } : {}) };
+          : {
+              ...(byoNote.trim() ? { note: byoNote.trim() } : {}),
+              ...(kubeconfig.trim() ? { kubeconfig: kubeconfig.trim() } : {}),
+            };
       const res = await saveFootprintConfig(slug, mode, cfg);
       if (res.ok) {
         toast({ title: "Footprint saved", description: `${mode === "aks" ? "AKS" : "Bring your own"} cluster.`, tone: "success" });
+        setKubeconfig(""); // stored server-side; don't keep the credential in the field
         router.refresh();
       } else {
         toast({ title: "Couldn't save", description: res.error, tone: "danger" });
@@ -109,11 +118,33 @@ export function FootprintPanel({
               <Field label="Node count" value={nodeCount} onChange={setNodeCount} placeholder="e.g. 2" type="number" />
             </div>
           ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               <Field label="Note" value={byoNote} onChange={setByoNote} placeholder="Arc cluster reference / notes" />
+              <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <span style={{ fontSize: 12, color: "var(--text-secondary)", display: "flex", alignItems: "center", gap: 8 }}>
+                  Kubeconfig
+                  {hasByoKubeconfig ? (
+                    <StatusBadge tone="success" label="Stored" variant="soft" />
+                  ) : (
+                    <StatusBadge tone="danger" label="Required" variant="soft" />
+                  )}
+                </span>
+                <textarea
+                  className={styles.input}
+                  style={{ paddingLeft: 12, minHeight: 120, fontFamily: "var(--font-mono, monospace)", fontSize: 12, lineHeight: 1.5, resize: "vertical" }}
+                  value={kubeconfig}
+                  onChange={(e) => setKubeconfig(e.target.value)}
+                  placeholder={hasByoKubeconfig ? "A kubeconfig is stored — paste a new one to replace it." : "Paste the cluster kubeconfig…"}
+                  spellCheck={false}
+                />
+              </label>
               <p className={panel.sub} style={{ margin: 0 }}>
-                The footprint deploys the reconciler + Foundry only; connect it to your Arc cluster. (Reconciler
-                Arc connection is being finished.)
+                The footprint deploys the reconciler + Foundry and reaches your cluster from this
+                kubeconfig — the reconciler bootstraps Argo CD and stamps your apps into it; ingress
+                stays yours. Paste a flattened config with an inline CA and a static credential:{" "}
+                <code>kubectl config view --flatten --minify</code> (a service-account token or client
+                cert — exec/auth-provider plugins aren&apos;t supported). The cluster&apos;s API server
+                must be reachable from Azure.
               </p>
             </div>
           )}

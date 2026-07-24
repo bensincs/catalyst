@@ -779,7 +779,21 @@ func (s *Server) handleSetFootprintConfig(w http.ResponseWriter, r *http.Request
 	if !decodeJSON(w, r, &body) {
 		return
 	}
-	if err := s.store.SetFootprintConfig(r.Context(), chi.URLParam(r, "slug"), body.ClusterMode, body.Config); err != nil {
+	// The bring-your-own cluster kubeconfig rides in the config map from the editor
+	// but is persisted separately (its own column, never serialized back), so pull
+	// it out here. A blank value leaves any stored kubeconfig intact.
+	kubeconfig := ""
+	if body.Config != nil {
+		if v, ok := body.Config["kubeconfig"].(string); ok {
+			kubeconfig = strings.TrimSpace(v)
+			delete(body.Config, "kubeconfig")
+		}
+	}
+	if kubeconfig != "" && !looksLikeKubeconfig(kubeconfig) {
+		writeErr(w, http.StatusBadRequest, "that doesn't look like a kubeconfig — expected YAML with clusters/server and inline credentials (kubectl config view --flatten)")
+		return
+	}
+	if err := s.store.SetFootprintConfig(r.Context(), chi.URLParam(r, "slug"), body.ClusterMode, body.Config, kubeconfig); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			writeErr(w, http.StatusNotFound, "tenant not found")
 			return
@@ -790,6 +804,14 @@ func (s *Server) handleSetFootprintConfig(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, map[string]string{"status": "saved"})
 }
 
+// looksLikeKubeconfig is a light sanity check so an obviously-wrong paste is
+// rejected at save time rather than surfacing as an unreachable cluster later. It
+// deliberately doesn't fully parse (the reconciler enforces the real constraints:
+// HTTPS, inline CA, static credentials).
+func looksLikeKubeconfig(s string) bool {
+	return strings.Contains(s, "clusters") && strings.Contains(s, "server")
+}
+
 // handleStampFootprint queues a tenant's footprint for provisioning — the
 // deferred "stamp" a platform admin presses after configuring it (platform only).
 func (s *Server) handleStampFootprint(w http.ResponseWriter, r *http.Request) {
@@ -797,7 +819,17 @@ func (s *Server) handleStampFootprint(w http.ResponseWriter, r *http.Request) {
 	if !s.requirePlatform(w, id) {
 		return
 	}
-	if err := s.store.StampFootprint(r.Context(), chi.URLParam(r, "slug")); err != nil {
+	slug := chi.URLParam(r, "slug")
+	// A bring-your-own cluster can't be stamped without the kubeconfig the
+	// reconciler needs to reach it — fail clearly instead of deploying a
+	// reconciler that reports the cluster unreachable.
+	if t, err := s.store.TenantBySlug(r.Context(), slug); err == nil {
+		if t.ClusterMode == "byo" && !t.HasBYOKubeconfig {
+			writeErr(w, http.StatusBadRequest, "bring-your-own cluster requires a kubeconfig — add one before stamping")
+			return
+		}
+	}
+	if err := s.store.StampFootprint(r.Context(), slug); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			writeErr(w, http.StatusNotFound, "tenant not found or has no subscription")
 			return

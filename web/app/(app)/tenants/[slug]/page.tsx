@@ -45,6 +45,7 @@ export default async function TenantDrillInPage({
               footprintState={ctx.tenant.cluster.footprintState}
               clusterMode={ctx.tenant.clusterMode}
               config={ctx.tenant.footprintConfig}
+              hasByoKubeconfig={ctx.tenant.hasByoKubeconfig}
             />
           ) : null}
           <EntitlementsPanel
