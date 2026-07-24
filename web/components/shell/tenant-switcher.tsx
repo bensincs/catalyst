@@ -13,9 +13,16 @@ export function TenantSwitcher() {
   const { cortexTenants, activeTenantSlug, activeTenant } = useConsole();
   const [pending, start] = useTransition();
 
-  if (!cortexTenants || cortexTenants.length < 2) return null;
+  // Only enabled tenants are selectable — a disabled tenant is cut off, so it
+  // shouldn't appear as an option to operate.
+  const options = (cortexTenants ?? []).filter((t) => t.enabled);
+  if (options.length < 2) return null;
 
-  const current = activeTenantSlug || activeTenant?.id || cortexTenants[0]?.id || "";
+  const current =
+    (activeTenantSlug && options.some((t) => t.id === activeTenantSlug) ? activeTenantSlug : "") ||
+    (activeTenant && options.some((t) => t.id === activeTenant.id) ? activeTenant.id : "") ||
+    options[0]?.id ||
+    "";
 
   return (
     <label className={styles.tenantSwitch}>
@@ -30,7 +37,7 @@ export function TenantSwitcher() {
           });
         }}
       >
-        {cortexTenants.map((t) => (
+        {options.map((t) => (
           <option key={t.id} value={t.id}>
             {t.name}
           </option>

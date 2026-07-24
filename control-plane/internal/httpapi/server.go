@@ -907,54 +907,40 @@ func (s *Server) callerTenant(w http.ResponseWriter, r *http.Request) (model.Ten
 		writeErr(w, http.StatusBadRequest, "this is a tenant-scoped action")
 		return model.Tenant{}, false
 	}
-	// An explicit selection (the console's active tenant) wins — a member may
-	// belong to several tenants, all in one directory.
+	// The console's active selection is honored when the caller is authorized for
+	// it (which requires it to be enabled); a stale or now-disabled selection
+	// falls through to the caller's primary so the console is never stranded.
 	if slug := strings.TrimSpace(r.Header.Get("X-Cortex-Tenant")); slug != "" {
-		t, err := s.store.TenantBySlug(r.Context(), slug)
-		if errors.Is(err, store.ErrNotFound) {
-			writeErr(w, http.StatusNotFound, "tenant not found")
-			return model.Tenant{}, false
+		if t, err := s.store.TenantBySlug(r.Context(), slug); err == nil && s.authorizeTenant(r.Context(), id, t) {
+			return t, true
 		}
-		if err != nil {
-			s.fail(w, r, err)
-			return model.Tenant{}, false
-		}
-		if !s.authorizeTenant(r.Context(), id, t) {
-			writeErr(w, http.StatusForbidden, "not authorized for this tenant")
-			return model.Tenant{}, false
-		}
-		return t, true
 	}
-	// No explicit selection: the caller's own directory (delegated) tenant, or —
-	// for a platform-directory member — their primary assigned tenant.
-	if !strings.EqualFold(id.TID, s.platformTID) {
-		t, err := s.store.EnsureTenantForTID(r.Context(), id.TID, orgNameFromEmail(id.Email))
-		if err != nil {
-			s.fail(w, r, err)
-			return model.Tenant{}, false
-		}
-		return t, true
-	}
-	members, err := s.store.MembershipTenants(r.Context(), id.OID, id.Email)
+	// Otherwise the caller's primary: the first ENABLED tenant they can access
+	// (their delegated directory tenant, or an assigned one).
+	_, primary, err := s.accessibleTenants(r.Context(), id)
 	if err != nil {
 		s.fail(w, r, err)
 		return model.Tenant{}, false
 	}
-	for _, t := range members {
-		if t.Enabled {
-			return t, true
-		}
+	if primary != nil && primary.Enabled {
+		return *primary, true
 	}
-	writeErr(w, http.StatusBadRequest, "select a tenant")
+	writeJSON(w, http.StatusForbidden, map[string]string{"error": "tenant not enabled", "code": "tenant_disabled"})
 	return model.Tenant{}, false
 }
 
-// authorizeTenant reports whether a caller may act on a tenant: platform admins
-// may act on any; a caller from the tenant's own directory (delegated) may; and
-// anyone explicitly assigned to it (membership) may.
+// authorizeTenant reports whether a caller may act on a specific tenant: platform
+// admins may act on any (including disabled ones, to re-enable/inspect); everyone
+// else needs the tenant to be ENABLED and to either be from its own directory
+// (delegated) or be explicitly assigned to it (membership). The enabled check is
+// per-tenant here (not just the blanket tenantGate), so disabling one of a user's
+// tenants cuts off exactly that tenant, not all-or-nothing.
 func (s *Server) authorizeTenant(ctx context.Context, id model.Identity, t model.Tenant) bool {
 	if id.Role == model.RolePlatform {
 		return true
+	}
+	if !t.Enabled {
+		return false
 	}
 	if t.HostingMode == model.HostingDelegated && t.TenantID != "" && strings.EqualFold(t.TenantID, id.TID) {
 		return true

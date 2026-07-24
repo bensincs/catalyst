@@ -339,6 +339,13 @@ func (s *Store) SetTenantEnabled(ctx context.Context, slug string, enabled bool)
 	return nil
 }
 
+// DeleteTenant removes a tenant row and everything owned by it (agents, apps,
+// memberships, … cascade). The Azure footprint is torn down separately.
+func (s *Store) DeleteTenant(ctx context.Context, slug string) error {
+	_, err := s.pool.Exec(ctx, `DELETE FROM tenants WHERE id = $1`, slug)
+	return err
+}
+
 func computeStats(tenants []model.Tenant) model.FleetStats {
 	st := model.FleetStats{Tenants: len(tenants)}
 	for _, t := range tenants {
