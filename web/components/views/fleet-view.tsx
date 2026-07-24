@@ -25,14 +25,16 @@ import styles from "./fleet-view.module.css";
 
 type SortKey = "name" | "agents" | "calls" | "heartbeat";
 
-const LIFECYCLE_ORDER: Lifecycle[] = ["live", "enrolling", "provisioning", "pending", "degraded", "suspended"];
+const LIFECYCLE_ORDER: Lifecycle[] = ["live", "enrolling", "provisioning", "draft", "pending", "failed", "degraded", "suspended"];
 
 const FILTERS: { id: "all" | Lifecycle; label: string }[] = [
   { id: "all", label: "All" },
   { id: "live", label: "Live" },
   { id: "enrolling", label: "Enrolling" },
   { id: "provisioning", label: "Provisioning" },
+  { id: "draft", label: "Draft" },
   { id: "pending", label: "Pending" },
+  { id: "failed", label: "Failed" },
   { id: "degraded", label: "Degraded" },
 ];
 

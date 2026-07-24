@@ -108,16 +108,30 @@ const heartbeatFreshWindow = 30 * time.Second
 // surfaced as a badge throughout the console:
 //
 //	pending      — not delegated yet (awaiting the Lighthouse delegation)
-//	provisioning — delegated; Cortex is provisioning the footprint (reconciler + Foundry + AKS)
+//	draft        — footprint configured but not stamped yet (nothing provisioned)
+//	provisioning — Cortex is provisioning the footprint (reconciler + Foundry + AKS)
+//	failed       — the footprint deployment failed (surfaced even if the reconciler,
+//	               one part that did deploy, is heartbeating — so a partial failure
+//	               isn't masked as live)
 //	enrolling    — footprint ready, awaiting the reconciler's first heartbeat
-//	live         — reconciler heartbeating within the freshness window
-//	degraded     — a bound reconciler has gone stale, or provisioning failed
+//	live         — footprint ready AND reconciler heartbeating within the window
+//	degraded     — a bound reconciler has gone stale
 //	suspended    — administratively suspended
 func deriveLifecycle(enrollment string, lastHeartbeat *time.Time, delegated bool, footprintState string) string {
 	if enrollment == "suspended" {
 		return "suspended"
 	}
-	// A fresh heartbeat means the reconciler is up — live, regardless of the rest.
+	// Not stamped yet — a draft footprint the admin hasn't provisioned.
+	if footprintState == "draft" {
+		return "draft"
+	}
+	// The footprint deployment failed. Surface this BEFORE the heartbeat check: the
+	// reconciler container may have deployed and be heartbeating while another part
+	// of the footprint failed — that partial failure must not read as "live".
+	if footprintState == "failed" {
+		return "failed"
+	}
+	// A fresh heartbeat means the reconciler is up — live.
 	if lastHeartbeat != nil && time.Since(*lastHeartbeat) < heartbeatFreshWindow {
 		return "live"
 	}
@@ -125,15 +139,11 @@ func deriveLifecycle(enrollment string, lastHeartbeat *time.Time, delegated bool
 	if lastHeartbeat != nil {
 		return "degraded"
 	}
-	// Environment provisioning failed.
-	if footprintState == "failed" {
-		return "degraded"
-	}
 	if delegated {
 		if footprintState == "ready" {
 			return "enrolling" // provisioned; awaiting the reconciler's first heartbeat
 		}
-		return "provisioning" // delegated; Cortex is provisioning the footprint
+		return "provisioning" // Cortex is provisioning the footprint
 	}
 	return "pending" // awaiting the Lighthouse delegation
 }

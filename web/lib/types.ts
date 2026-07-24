@@ -27,7 +27,7 @@ export type EnrollmentStatus = "bound" | "pending" | "suspended" | "offboarding"
 // delegation) → provisioning (Cortex building the environment) → enrolling
 // (environment ready, awaiting the reconciler's first heartbeat) → live; degraded
 // when a bound reconciler goes stale or provisioning failed; suspended when cut off.
-export type Lifecycle = "pending" | "provisioning" | "enrolling" | "live" | "degraded" | "suspended";
+export type Lifecycle = "pending" | "draft" | "provisioning" | "failed" | "enrolling" | "live" | "degraded" | "suspended";
 
 export type Plan = "enterprise" | "sovereign" | "team";
 
@@ -344,6 +344,8 @@ export const LIFECYCLE_META: Record<Lifecycle, HealthMeta> = {
   live: { label: "Live", tone: "success" },
   enrolling: { label: "Enrolling", tone: "info" },
   provisioning: { label: "Provisioning", tone: "info" },
+  draft: { label: "Draft", tone: "neutral" },
+  failed: { label: "Failed", tone: "danger" },
   pending: { label: "Pending", tone: "neutral" },
   degraded: { label: "Degraded", tone: "warning" },
   suspended: { label: "Suspended", tone: "neutral" },
