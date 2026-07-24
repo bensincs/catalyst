@@ -346,6 +346,49 @@ func (s *Store) DeleteTenant(ctx context.Context, slug string) error {
 	return err
 }
 
+// RenameTenant sets a tenant's display name (platform admins).
+func (s *Store) RenameTenant(ctx context.Context, slug, name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ErrNotFound
+	}
+	tag, err := s.pool.Exec(ctx, `UPDATE tenants SET name = $2 WHERE id = $1`, slug, name)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// SearchUsers finds previously-signed-in users by name or email (for the members
+// type-ahead). Empty query returns the most-recent sign-ins.
+func (s *Store) SearchUsers(ctx context.Context, q string, limit int) ([]model.UserSummary, error) {
+	q = strings.TrimSpace(q)
+	if limit <= 0 || limit > 50 {
+		limit = 20
+	}
+	like := "%" + strings.ToLower(q) + "%"
+	rows, err := s.pool.Query(ctx,
+		`SELECT oid, coalesce(name,''), coalesce(email,'') FROM users
+		 WHERE $1 = '' OR lower(name) LIKE $2 OR lower(email) LIKE $2
+		 ORDER BY last_login DESC NULLS LAST LIMIT $3`, q, like, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []model.UserSummary{}
+	for rows.Next() {
+		var u model.UserSummary
+		if err := rows.Scan(&u.OID, &u.Name, &u.Email); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
 func computeStats(tenants []model.Tenant) model.FleetStats {
 	st := model.FleetStats{Tenants: len(tenants)}
 	for _, t := range tenants {

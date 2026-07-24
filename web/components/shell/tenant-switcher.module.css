@@ -1,0 +1,49 @@
+.trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  max-width: 240px;
+  padding: 0 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  transition:
+    background var(--dur-fast) var(--ease-out-quart),
+    box-shadow var(--dur-fast) var(--ease-out-quart);
+}
+.trigger:hover,
+.trigger[data-open] {
+  background: var(--surface-hover);
+  box-shadow: 0 0 0 1px var(--border-strong);
+}
+.trigger[data-pending] {
+  opacity: 0.7;
+}
+
+.leadIcon {
+  flex: none;
+  color: var(--text-secondary);
+}
+
+.name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-body-sm);
+  font-weight: 550;
+}
+
+.chevron {
+  flex: none;
+  color: var(--text-secondary);
+}
+
+@media (max-width: 560px) {
+  .trigger {
+    max-width: 150px;
+  }
+}

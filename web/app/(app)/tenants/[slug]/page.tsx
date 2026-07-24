@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { ApiError, getApplications, getCatalog, getInfrastructure, getMe, getMemoryStores, getTenantContext, getTenantMembers, getTenantsRegistry } from "@/lib/api";
 import { TenantOverview } from "@/components/views/tenant-overview";
 import { TenantAccessPanel } from "@/components/views/tenant-access-panel";
+import { TenantRenamePanel } from "@/components/views/tenant-rename-panel";
 import { FootprintReprovisionPanel } from "@/components/views/footprint-reprovision-panel";
 import { TenantMembersPanel } from "@/components/views/tenant-members-panel";
 import { EntitlementsPanel } from "@/components/views/entitlements-panel";
@@ -31,6 +32,7 @@ export default async function TenantDrillInPage({
       const members = platformHosted ? await getTenantMembers(slug) : [];
       entitlements = (
         <>
+          <TenantRenamePanel slug={slug} name={ctx.tenant.name} />
           <TenantAccessPanel slug={slug} name={ctx.tenant.name} enabled={ctx.tenant.enabled} />
           {platformHosted ? (
             <TenantMembersPanel slug={slug} name={ctx.tenant.name} members={members} />

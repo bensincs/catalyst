@@ -486,6 +486,19 @@ export const getTenantMembers = cache(async (slug: string): Promise<TenantMember
   return r.members ?? [];
 });
 
+export interface UserOption {
+  oid: string;
+  name: string;
+  email: string;
+}
+
+/** Search previously-signed-in users (name/email) for the members type-ahead.
+ *  Not cached — called live as the admin types. */
+export async function fetchUserSearch(q: string): Promise<UserOption[]> {
+  const r = await apiGet<{ users: UserOption[] }>(`/api/users/search?q=${encodeURIComponent(q)}`);
+  return r.users ?? [];
+}
+
 /* ── Applications (Helm deployments → Argo CD) ────────────────────────────── */
 
 interface ApiApplication {

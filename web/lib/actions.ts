@@ -212,6 +212,14 @@ export async function removeTenantMember(slug: string, principal: string): Promi
   );
 }
 
+// Rename a tenant (platform admins only).
+export async function renameTenant(slug: string, name: string): Promise<ActionResult> {
+  return run(
+    () => apiSend("PATCH", `/api/tenants/${encodeURIComponent(slug)}/name`, { name }),
+    [`/tenants/${slug}`, "/"],
+  );
+}
+
 /* ── Agents ───────────────────────────────────────────────────────────────── */
 
 export async function createCatalogAgent(input: {

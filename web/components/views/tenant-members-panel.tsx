@@ -1,17 +1,22 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { UserPlus, X } from "lucide-react";
+import { UserPlus, X, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/providers/toast-provider";
 import { addTenantMember, removeTenantMember } from "@/lib/actions";
-import type { TenantMember } from "@/lib/api";
-import styles from "./entitlements-panel.module.css";
+import { searchUsers } from "@/lib/tenant-actions";
+import type { TenantMember, UserOption } from "@/lib/api";
+import styles from "./tenant-members-panel.module.css";
+import panel from "./entitlements-panel.module.css";
 
-/** Platform control to assign/revoke users on a platform-hosted tenant. A member
- *  is assigned by email (their Entra oid binds on first sign-in) OR by Entra
- *  object id directly. */
+const GUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+/** Platform control to assign/revoke users on a tenant. Assigning is a type-ahead
+ *  over previously-signed-in users; a full email or Entra object id can also be
+ *  entered directly for someone who hasn't signed in yet (oid binds on first
+ *  sign-in). */
 export function TenantMembersPanel({
   slug,
   name,
@@ -23,17 +28,53 @@ export function TenantMembersPanel({
 }) {
   const router = useRouter();
   const { toast } = useToast();
-  const [member, setMember] = useState("");
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<UserOption[]>([]);
+  const [open, setOpen] = useState(false);
   const [pending, start] = useTransition();
+  const boxRef = useRef<HTMLDivElement | null>(null);
 
-  const add = () =>
+  const assigned = new Set(members.map((m) => m.principal.toLowerCase()));
+  const value = query.trim();
+  const freeTextValid = value.includes("@") || GUID.test(value);
+
+  // Debounced live search over signed-in users.
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length < 1) {
+      setResults([]);
+      return;
+    }
+    let alive = true;
+    const t = setTimeout(async () => {
+      const r = await searchUsers(q);
+      if (alive) setResults(r);
+    }, 180);
+    return () => {
+      alive = false;
+      clearTimeout(t);
+    };
+  }, [query]);
+
+  // Close on outside click.
+  useEffect(() => {
+    const onDown = (e: PointerEvent) => {
+      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("pointerdown", onDown);
+    return () => document.removeEventListener("pointerdown", onDown);
+  }, []);
+
+  const assign = (identifier: string) =>
     start(async () => {
-      const value = member.trim();
-      if (!value) return;
-      const res = await addTenantMember(slug, value);
+      const v = identifier.trim();
+      if (!v) return;
+      const res = await addTenantMember(slug, v);
       if (res.ok) {
-        toast({ title: `Assigned ${value}`, description: `Added to ${name}.`, tone: "success" });
-        setMember("");
+        toast({ title: `Assigned ${v}`, description: `Added to ${name}.`, tone: "success" });
+        setQuery("");
+        setResults([]);
+        setOpen(false);
         router.refresh();
       } else {
         toast({ title: "Couldn't assign", description: res.error, tone: "danger" });
@@ -51,72 +92,81 @@ export function TenantMembersPanel({
       }
     });
 
+  const suggestions = results.filter(
+    (u) => !assigned.has((u.email || u.oid).toLowerCase()),
+  );
+
   return (
-    <section className={styles.panel} aria-label="Tenant members">
-      <div className={styles.head}>
-        <div className={styles.headText}>
-          <h2 className={styles.title}>Members</h2>
-          <p className={styles.sub}>
-            Assign users to {name} by email (their directory identity binds on first sign-in) or by
-            Entra object id. Members can operate this tenant from the console.
+    <section className={panel.panel} aria-label="Tenant members">
+      <div className={panel.head}>
+        <div className={panel.headText}>
+          <h2 className={panel.title}>Members</h2>
+          <p className={panel.sub}>
+            Assign users to {name}. Search people who&apos;ve signed in, or enter an email / Entra
+            object id directly — access binds to their identity on first sign-in.
           </p>
         </div>
       </div>
 
-      <div style={{ display: "flex", gap: 8, margin: "12px 0", flexWrap: "wrap" }}>
-        <input
-          value={member}
-          onChange={(e) => setMember(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") add();
-          }}
-          placeholder="Email or Entra object id"
-          style={{
-            flex: "1 1 260px",
-            padding: "8px 10px",
-            borderRadius: 8,
-            border: "1px solid var(--border, #333)",
-            background: "transparent",
-            color: "inherit",
-            font: "inherit",
-          }}
-        />
-        <Button variant="secondary" icon={UserPlus} loading={pending} onClick={add}>
-          Assign
-        </Button>
+      <div className={styles.combo} ref={boxRef}>
+        <div className={styles.field}>
+          <Search size={15} strokeWidth={2} aria-hidden className={styles.fieldIcon} />
+          <input
+            className={styles.input}
+            value={query}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setOpen(true);
+            }}
+            onFocus={() => setOpen(true)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && freeTextValid) assign(value);
+              if (e.key === "Escape") setOpen(false);
+            }}
+            placeholder="Search name/email, or paste an email or object id"
+            aria-label="Assign a user"
+            autoComplete="off"
+          />
+          <Button variant="secondary" icon={UserPlus} loading={pending} disabled={!freeTextValid} onClick={() => assign(value)}>
+            Assign
+          </Button>
+        </div>
+
+        {open && (suggestions.length > 0 || (value && freeTextValid)) && (
+          <ul className={styles.menu} role="listbox">
+            {suggestions.map((u) => (
+              <li key={u.oid}>
+                <button type="button" className={styles.option} onClick={() => assign(u.email || u.oid)}>
+                  <span className={styles.optName}>{u.name || u.email || u.oid}</span>
+                  {u.email && u.email !== u.name ? <span className={styles.optMeta}>{u.email}</span> : null}
+                </button>
+              </li>
+            ))}
+            {value && freeTextValid && !suggestions.some((u) => (u.email || u.oid).toLowerCase() === value.toLowerCase()) ? (
+              <li>
+                <button type="button" className={styles.option} onClick={() => assign(value)}>
+                  <span className={styles.optName}>Assign “{value}”</span>
+                  <span className={styles.optMeta}>{value.includes("@") ? "email" : "object id"}</span>
+                </button>
+              </li>
+            ) : null}
+          </ul>
+        )}
       </div>
 
       {members.length === 0 ? (
-        <p className={styles.sub}>No users assigned yet.</p>
+        <p className={panel.sub}>No users assigned yet.</p>
       ) : (
-        <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 6 }}>
+        <ul className={styles.list}>
           {members.map((m) => {
             const isEmail = m.principal.includes("@");
-            const hint = isEmail ? (m.oid ? "" : "  ·  pending first sign-in") : "  ·  object id";
             return (
-              <li
-                key={m.principal}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: 8,
-                  padding: "6px 10px",
-                  borderRadius: 8,
-                  border: "1px solid var(--border, #333)",
-                }}
-              >
-                <span style={isEmail ? undefined : { fontFamily: "var(--font-mono, monospace)" }}>
+              <li key={m.principal} className={styles.row}>
+                <span className={isEmail ? undefined : styles.mono}>
                   {m.principal}
-                  {hint}
+                  {isEmail ? (m.oid ? "" : <span className={styles.tag}>pending sign-in</span>) : <span className={styles.tag}>object id</span>}
                 </span>
-                <Button
-                  variant="ghost"
-                  icon={X}
-                  loading={pending}
-                  onClick={() => remove(m.principal)}
-                  aria-label={`Remove ${m.principal}`}
-                >
+                <Button variant="ghost" icon={X} loading={pending} onClick={() => remove(m.principal)} aria-label={`Remove ${m.principal}`}>
                   Remove
                 </Button>
               </li>

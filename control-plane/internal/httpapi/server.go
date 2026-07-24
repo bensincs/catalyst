@@ -127,11 +127,14 @@ func (s *Server) Router() http.Handler {
 			r.Post("/tenants", s.handleCreateTenant)
 			r.Patch("/tenants/{slug}/all-entitlements", s.handleSetAllEntitlements)
 			r.Patch("/tenants/{slug}/enabled", s.handleSetTenantEnabled)
+			r.Patch("/tenants/{slug}/name", s.handleRenameTenant)
 			r.Post("/tenants/{slug}/reprovision", s.handleReprovisionFootprint)
 			// Membership (platform-hosted tenants): assign/list/remove users.
 			r.Get("/tenants/{slug}/members", s.handleListMembers)
 			r.Post("/tenants/{slug}/members", s.handleAddMember)
 			r.Delete("/tenants/{slug}/members/{principal}", s.handleRemoveMember)
+			// Previously-signed-in users, for the members type-ahead.
+			r.Get("/users/search", s.handleSearchUsers)
 
 			// Agent ↔ memory-store connection (a relation, not a CRUD verb).
 			r.Post("/tenant/agents/{agentId}/store", s.handleConnectAgentStore)
@@ -715,6 +718,48 @@ func (s *Server) handleRemoveMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "removed"})
+}
+
+// handleRenameTenant sets a tenant's display name (platform only).
+func (s *Server) handleRenameTenant(w http.ResponseWriter, r *http.Request) {
+	id, _ := auth.IdentityFrom(r.Context())
+	if !s.requirePlatform(w, id) {
+		return
+	}
+	var body struct {
+		Name string `json:"name"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if strings.TrimSpace(body.Name) == "" {
+		writeErr(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	if err := s.store.RenameTenant(r.Context(), chi.URLParam(r, "slug"), body.Name); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "tenant not found")
+			return
+		}
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "renamed"})
+}
+
+// handleSearchUsers returns previously-signed-in users matching a query, for the
+// members type-ahead (platform only).
+func (s *Server) handleSearchUsers(w http.ResponseWriter, r *http.Request) {
+	id, _ := auth.IdentityFrom(r.Context())
+	if !s.requirePlatform(w, id) {
+		return
+	}
+	users, err := s.store.SearchUsers(r.Context(), r.URL.Query().Get("q"), 20)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"users": users})
 }
 
 /* ── Memory stores (platform-authored + tenant-created) ──────────────────── */

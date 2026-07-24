@@ -122,6 +122,13 @@ type Membership struct {
 	CreatedAt  time.Time `json:"createdAt"`
 }
 
+// UserSummary is a previously-signed-in user, for the members type-ahead search.
+type UserSummary struct {
+	OID   string `json:"oid"`
+	Name  string `json:"name"`
+	Email string `json:"email"`
+}
+
 // CatalogAgent is an agent definition, authored by the platform (Owner == "") or
 // by a tenant (Owner == <tenant slug>, private to it). Platform agents are granted
 // to tenants via entitlements; tenant agents are private.
