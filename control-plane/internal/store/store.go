@@ -78,19 +78,23 @@ const tenantCols = `id, name, coalesce(tenant_id,''), region, plan, enrollment, 
 	subscription_id, reconciler_identity, foundry_project, reconciler_version, installed_at, enabled,
 	cluster_name, cluster_phase, cluster_k8s_version, cluster_argo_installed, cluster_node_count, cluster_detail,
 	cluster_ingress_installed, cluster_gateway_ip, cluster_ingress_issuer, infra_delegated, infra_detail, footprint_state, footprint_detail,
-	coalesce(hosting_mode,'delegated'), coalesce(resource_group,''), coalesce(reconciler_principal_id,'')`
+	coalesce(hosting_mode,'delegated'), coalesce(resource_group,''), coalesce(reconciler_principal_id,''), coalesce(cluster_mode,'aks'), coalesce(footprint_config,'{}')`
 
 func scanTenant(row pgx.Row) (model.Tenant, error) {
 	var t model.Tenant
 	var installedAt string
+	var footprintConfig []byte
 	err := row.Scan(&t.ID, &t.Name, &t.TenantID, &t.Region, &t.Plan, &t.Enrollment,
 		&t.Version, &t.AgentCount, &t.ReconcilingCount, &t.MonthlyCalls, &t.Drift, &t.LastHeartbeat,
 		&t.SubscriptionID, &t.ReconcilerIdentity, &t.FoundryProject, &t.ReconcilerVersion, &installedAt, &t.Enabled,
 		&t.Cluster.Name, &t.Cluster.Phase, &t.Cluster.K8sVersion, &t.Cluster.ArgoInstalled, &t.Cluster.NodeCount, &t.Cluster.Detail,
 		&t.Cluster.IngressInstalled, &t.Cluster.GatewayIP, &t.Cluster.IngressIssuer, &t.Cluster.InfraDelegated, &t.Cluster.InfraDetail, &t.Cluster.FootprintState, &t.Cluster.FootprintDetail,
-		&t.HostingMode, &t.ResourceGroup, &t.ReconcilerPrincipalID)
+		&t.HostingMode, &t.ResourceGroup, &t.ReconcilerPrincipalID, &t.ClusterMode, &footprintConfig)
 	if installedAt != "" {
 		t.InstalledAt = &installedAt
+	}
+	if len(footprintConfig) > 0 {
+		_ = json.Unmarshal(footprintConfig, &t.FootprintConfig)
 	}
 	t.Lifecycle = deriveLifecycle(t.Enrollment, t.LastHeartbeat, t.Cluster.InfraDelegated, t.Cluster.FootprintState)
 	return t, err
@@ -286,13 +290,53 @@ func (s *Store) CreatePlatformTenant(ctx context.Context, name, region, plan, su
 	rg := "cortex-" + slug // dedicated RG per tenant in the platform subscription
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO tenants (id, name, tenant_id, region, plan, enrollment, version, enabled,
-		   hosting_mode, subscription_id, resource_group, infra_delegated, infra_detail)
-		 VALUES ($1,$2,NULL,$3,$4,'pending','',true,'platform',$5,$6,true,'Hosted in the platform subscription.')`,
+		   hosting_mode, subscription_id, resource_group, infra_delegated, infra_detail, footprint_state)
+		 VALUES ($1,$2,NULL,$3,$4,'pending','',true,'platform',$5,$6,true,'Hosted in the platform subscription.','draft')`,
 		slug, name, region, plan, subscriptionID, rg)
 	if err != nil {
 		return model.Tenant{}, err
 	}
 	return s.TenantBySlug(ctx, slug)
+}
+
+// SetFootprintConfig records a tenant's footprint shape (cluster mode + config)
+// before it's stamped. Platform admins call this from the footprint editor.
+func (s *Store) SetFootprintConfig(ctx context.Context, slug, clusterMode string, config map[string]any) error {
+	if clusterMode != "aks" && clusterMode != "byo" {
+		clusterMode = "aks"
+	}
+	raw := []byte("{}")
+	if len(config) > 0 {
+		if b, err := json.Marshal(config); err == nil {
+			raw = b
+		}
+	}
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE tenants SET cluster_mode = $2, footprint_config = $3 WHERE id = $1`, slug, clusterMode, raw)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// StampFootprint queues a tenant's footprint for provisioning — the deferred
+// "stamp" a platform admin presses after configuring it. Moves it out of 'draft'
+// and flags a (re)submit; the next provisioner sweep deploys it. Errors
+// ErrNotFound when the tenant is missing or has no subscription to deploy into.
+func (s *Store) StampFootprint(ctx context.Context, slug string) error {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE tenants SET footprint_reprovision = true, footprint_state = 'provisioning', footprint_detail = 'Stamp requested.'
+		 WHERE id = $1 AND coalesce(subscription_id,'') <> ''`, slug)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // SetReconcilerPrincipal records the object id of a platform-hosted tenant's
@@ -901,17 +945,21 @@ func (s *Store) TenantsRegistry(ctx context.Context) ([]model.TenantRegistryRow,
 	for rows.Next() {
 		var r model.TenantRegistryRow
 		var installedAt string
+		var footprintConfig []byte
 		if err := rows.Scan(&r.ID, &r.Name, &r.TenantID, &r.Region, &r.Plan, &r.Enrollment,
 			&r.Version, &r.AgentCount, &r.ReconcilingCount, &r.MonthlyCalls, &r.Drift, &r.LastHeartbeat,
 			&r.SubscriptionID, &r.ReconcilerIdentity, &r.FoundryProject, &r.ReconcilerVersion, &installedAt, &r.Enabled,
 			&r.Cluster.Name, &r.Cluster.Phase, &r.Cluster.K8sVersion, &r.Cluster.ArgoInstalled, &r.Cluster.NodeCount, &r.Cluster.Detail,
 			&r.Cluster.IngressInstalled, &r.Cluster.GatewayIP, &r.Cluster.IngressIssuer, &r.Cluster.InfraDelegated, &r.Cluster.InfraDetail, &r.Cluster.FootprintState, &r.Cluster.FootprintDetail,
-			&r.HostingMode, &r.ResourceGroup, &r.ReconcilerPrincipalID,
+			&r.HostingMode, &r.ResourceGroup, &r.ReconcilerPrincipalID, &r.ClusterMode, &footprintConfig,
 			&r.EntitledAgents, &r.EntitledStores, &r.EntitledDeployments, &r.EntitledInfrastructure); err != nil {
 			return nil, err
 		}
 		if installedAt != "" {
 			r.InstalledAt = &installedAt
+		}
+		if len(footprintConfig) > 0 {
+			_ = json.Unmarshal(footprintConfig, &r.FootprintConfig)
 		}
 		r.Lifecycle = deriveLifecycle(r.Enrollment, r.LastHeartbeat, r.Cluster.InfraDelegated, r.Cluster.FootprintState)
 		if r.EntitledAgents == nil {
@@ -1338,19 +1386,24 @@ type FootprintTarget struct {
 	ResourceGroup         string // per-tenant RG (platform-hosted); '' ⇒ use the config default
 	Region                string // per-tenant region; '' ⇒ use the config default
 	ReconcilerPrincipalID string // pre-created reconciler MI oid (platform-hosted)
+	ClusterMode           string // 'aks' | 'byo'
+	Config                map[string]any
 }
 
 // FootprintTargets returns enabled tenants whose footprint the control plane
 // should (re)provision: those without a ready footprint yet, plus any a platform
-// admin flagged for re-provisioning. Covers both delegated tenants (customer
-// subscription via Lighthouse) and platform-hosted ones (platform subscription).
+// admin flagged for re-provisioning. 'draft' footprints are excluded — they wait
+// for an explicit stamp. Covers both delegated tenants (customer subscription via
+// Lighthouse) and platform-hosted ones (platform subscription).
 func (s *Store) FootprintTargets(ctx context.Context) ([]FootprintTarget, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT id, coalesce(tenant_id,''), coalesce(subscription_id,''), name, coalesce(footprint_state,''), coalesce(footprint_reprovision,false),
-		        coalesce(hosting_mode,'delegated'), coalesce(resource_group,''), region, coalesce(reconciler_principal_id,'')
+		        coalesce(hosting_mode,'delegated'), coalesce(resource_group,''), region, coalesce(reconciler_principal_id,''),
+		        coalesce(cluster_mode,'aks'), coalesce(footprint_config,'{}')
 		 FROM tenants
 		 WHERE enabled = true AND coalesce(subscription_id,'') <> ''
-		   AND (coalesce(footprint_state,'') <> 'ready' OR footprint_reprovision = true)`)
+		   AND (footprint_reprovision = true
+		        OR coalesce(footprint_state,'') NOT IN ('ready','draft'))`)
 	if err != nil {
 		return nil, err
 	}
@@ -1358,9 +1411,13 @@ func (s *Store) FootprintTargets(ctx context.Context) ([]FootprintTarget, error)
 	var out []FootprintTarget
 	for rows.Next() {
 		var t FootprintTarget
+		var config []byte
 		if err := rows.Scan(&t.Slug, &t.TenantID, &t.SubscriptionID, &t.Name, &t.State, &t.Reprovision,
-			&t.HostingMode, &t.ResourceGroup, &t.Region, &t.ReconcilerPrincipalID); err != nil {
+			&t.HostingMode, &t.ResourceGroup, &t.Region, &t.ReconcilerPrincipalID, &t.ClusterMode, &config); err != nil {
 			return nil, err
+		}
+		if len(config) > 0 {
+			_ = json.Unmarshal(config, &t.Config)
 		}
 		out = append(out, t)
 	}
@@ -1372,23 +1429,6 @@ func (s *Store) SetFootprintState(ctx context.Context, slug, state, detail strin
 	_, err := s.pool.Exec(ctx,
 		`UPDATE tenants SET footprint_state = $2, footprint_detail = $3 WHERE id = $1`, slug, state, detail)
 	return err
-}
-
-// RequestFootprintReprovision flags a delegated tenant for a one-shot footprint
-// re-submit, so footprint template changes reach an already-provisioned tenant.
-// The next provisioner sweep re-PUTs the (idempotent) template and clears the
-// flag. Errors ErrNotFound when the tenant is missing or not delegated (no sub).
-func (s *Store) RequestFootprintReprovision(ctx context.Context, slug string) error {
-	tag, err := s.pool.Exec(ctx,
-		`UPDATE tenants SET footprint_reprovision = true, footprint_state = 'provisioning', footprint_detail = 'Re-provision requested.'
-		 WHERE id = $1 AND coalesce(subscription_id,'') <> ''`, slug)
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-	return nil
 }
 
 // ClearFootprintReprovision consumes the one-shot reprovision flag (called by the

@@ -220,6 +220,27 @@ export async function renameTenant(slug: string, name: string): Promise<ActionRe
   );
 }
 
+// Save a tenant's footprint shape (cluster mode + config) before stamping.
+export async function saveFootprintConfig(
+  slug: string,
+  clusterMode: string,
+  config: Record<string, unknown>,
+): Promise<ActionResult> {
+  return run(
+    () => apiSend("PATCH", `/api/tenants/${encodeURIComponent(slug)}/footprint`, { clusterMode, config }),
+    [`/tenants/${slug}`],
+  );
+}
+
+// Stamp (provision / re-provision) a tenant's footprint — the same path the
+// reprovision button uses.
+export async function stampFootprint(slug: string): Promise<ActionResult> {
+  return run(
+    () => apiSend("POST", `/api/tenants/${encodeURIComponent(slug)}/footprint/stamp`),
+    [`/tenants/${slug}`, "/"],
+  );
+}
+
 /* ── Agents ───────────────────────────────────────────────────────────────── */
 
 export async function createCatalogAgent(input: {

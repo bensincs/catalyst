@@ -442,6 +442,15 @@ CREATE TABLE IF NOT EXISTS memberships (
 CREATE INDEX IF NOT EXISTS memberships_oid_idx   ON memberships(oid);
 CREATE INDEX IF NOT EXISTS memberships_email_idx ON memberships(lower(email));
 
+-- ── Footprint: cluster mode + deferred, configurable stamping ───────────────
+-- A tenant's footprint isn't auto-stamped for platform-created tenants: it starts
+-- as 'draft' so a platform admin can configure it (cluster_mode + footprint_config)
+-- and then explicitly stamp it. cluster_mode is 'aks' (Cortex provisions an AKS
+-- cluster) or 'byo' (bring your own — e.g. an Azure Arc-connected cluster; Cortex
+-- deploys only the reconciler + Foundry and wires them to the existing cluster).
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS cluster_mode     text  NOT NULL DEFAULT 'aks';
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS footprint_config jsonb NOT NULL DEFAULT '{}';
+
 -- Migrate memberships from the original email-only shape (PK on email) to a
 -- generic principal key, so a user can be assigned by object id too. Idempotent:
 -- only runs while the principal column is absent.

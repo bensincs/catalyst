@@ -116,8 +116,26 @@ func TestPlatformTenantAndMemberships(t *testing.T) {
 		t.Fatalf("oid membership should be revoked")
 	}
 
-	// A platform-hosted tenant shows in the footprint targets (it has a sub).
+	// A platform-hosted tenant starts as a 'draft' footprint — NOT auto-stamped,
+	// so it isn't a provisioning target until a platform admin stamps it.
 	targets, err := st.FootprintTargets(ctx)
+	if err != nil {
+		t.Fatalf("footprint targets: %v", err)
+	}
+	for _, tg := range targets {
+		if tg.Slug == tn.ID {
+			t.Fatalf("draft footprint should not be a provisioning target yet")
+		}
+	}
+
+	// Configure (BYO) then stamp; now it's a target carrying its cluster mode.
+	if err := st.SetFootprintConfig(ctx, tn.ID, "byo", map[string]any{"note": "arc"}); err != nil {
+		t.Fatalf("set footprint config: %v", err)
+	}
+	if err := st.StampFootprint(ctx, tn.ID); err != nil {
+		t.Fatalf("stamp: %v", err)
+	}
+	targets, err = st.FootprintTargets(ctx)
 	if err != nil {
 		t.Fatalf("footprint targets: %v", err)
 	}
@@ -125,13 +143,13 @@ func TestPlatformTenantAndMemberships(t *testing.T) {
 	for _, tg := range targets {
 		if tg.Slug == tn.ID {
 			found = true
-			if tg.HostingMode != "platform" || tg.ResourceGroup == "" {
-				t.Fatalf("footprint target missing hosting fields: %+v", tg)
+			if tg.HostingMode != "platform" || tg.ResourceGroup == "" || tg.ClusterMode != "byo" {
+				t.Fatalf("footprint target missing fields: %+v", tg)
 			}
 		}
 	}
 	if !found {
-		t.Fatalf("platform tenant not in footprint targets")
+		t.Fatalf("stamped platform tenant not in footprint targets")
 	}
 }
 

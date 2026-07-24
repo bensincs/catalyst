@@ -3,7 +3,7 @@ import { ApiError, getApplications, getCatalog, getInfrastructure, getMe, getMem
 import { TenantOverview } from "@/components/views/tenant-overview";
 import { TenantAccessPanel } from "@/components/views/tenant-access-panel";
 import { TenantRenamePanel } from "@/components/views/tenant-rename-panel";
-import { FootprintReprovisionPanel } from "@/components/views/footprint-reprovision-panel";
+import { FootprintPanel } from "@/components/views/footprint-panel";
 import { TenantMembersPanel } from "@/components/views/tenant-members-panel";
 import { EntitlementsPanel } from "@/components/views/entitlements-panel";
 
@@ -38,10 +38,13 @@ export default async function TenantDrillInPage({
             <TenantMembersPanel slug={slug} name={ctx.tenant.name} members={members} />
           ) : null}
           {ctx.tenant.cluster.infraDelegated ? (
-            <FootprintReprovisionPanel
+            <FootprintPanel
               slug={slug}
               name={ctx.tenant.name}
+              hostingMode={ctx.tenant.hostingMode}
               footprintState={ctx.tenant.cluster.footprintState}
+              clusterMode={ctx.tenant.clusterMode}
+              config={ctx.tenant.footprintConfig}
             />
           ) : null}
           <EntitlementsPanel

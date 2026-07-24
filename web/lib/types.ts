@@ -236,6 +236,9 @@ export interface TenantContextInfo {
   lastHeartbeatMs: number;
   lifecycle: Lifecycle;
   enabled: boolean;
+  hostingMode: "delegated" | "platform";
+  clusterMode: "aks" | "byo";
+  footprintConfig: Record<string, unknown>;
   cluster: ClusterInfo;
 }
 

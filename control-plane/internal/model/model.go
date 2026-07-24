@@ -59,6 +59,12 @@ type Tenant struct {
 	HostingMode           string `json:"hostingMode"`
 	ResourceGroup         string `json:"resourceGroup,omitempty"`
 	ReconcilerPrincipalID string `json:"-"` // pre-created reconciler MI oid (platform-hosted); internal
+
+	// Footprint shape: cluster_mode ('aks' | 'byo') + free-form config the admin
+	// sets before stamping (region, node size/count for AKS; the Arc/BYO cluster
+	// identifiers for byo).
+	ClusterMode     string         `json:"clusterMode"`
+	FootprintConfig map[string]any `json:"footprintConfig,omitempty"`
 }
 
 // Agent is an enabled agent running in a tenant.

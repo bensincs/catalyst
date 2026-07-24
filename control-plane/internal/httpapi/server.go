@@ -129,6 +129,9 @@ func (s *Server) Router() http.Handler {
 			r.Patch("/tenants/{slug}/enabled", s.handleSetTenantEnabled)
 			r.Patch("/tenants/{slug}/name", s.handleRenameTenant)
 			r.Post("/tenants/{slug}/reprovision", s.handleReprovisionFootprint)
+			// Footprint editor: configure the cluster shape, then stamp it.
+			r.Patch("/tenants/{slug}/footprint", s.handleSetFootprintConfig)
+			r.Post("/tenants/{slug}/footprint/stamp", s.handleStampFootprint)
 			// Membership (platform-hosted tenants): assign/list/remove users.
 			r.Get("/tenants/{slug}/members", s.handleListMembers)
 			r.Post("/tenants/{slug}/members", s.handleAddMember)
@@ -336,18 +339,18 @@ func (s *Server) handleSetTenantEnabled(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
-// handleReprovisionFootprint flags a delegated tenant for a one-shot footprint
-// re-submit (platform only), so footprint template changes — config fixes, new
-// features — reach an already-provisioned tenant. The provisioner's next sweep
-// re-PUTs the idempotent template into the tenant's subscription.
+// handleReprovisionFootprint re-submits a tenant's footprint (platform only) so
+// template changes — config fixes, new features — reach an already-provisioned
+// tenant. Same code path as stamping (StampFootprint): reprovision is just a
+// re-stamp of an already-ready footprint.
 func (s *Server) handleReprovisionFootprint(w http.ResponseWriter, r *http.Request) {
 	id, _ := auth.IdentityFrom(r.Context())
 	if !s.requirePlatform(w, id) {
 		return
 	}
-	if err := s.store.RequestFootprintReprovision(r.Context(), chi.URLParam(r, "slug")); err != nil {
+	if err := s.store.StampFootprint(r.Context(), chi.URLParam(r, "slug")); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			writeErr(w, http.StatusNotFound, "tenant not found or not delegated")
+			writeErr(w, http.StatusNotFound, "tenant not found or has no subscription")
 			return
 		}
 		s.fail(w, r, err)
@@ -760,6 +763,49 @@ func (s *Server) handleSearchUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"users": users})
+}
+
+// handleSetFootprintConfig records a tenant's footprint shape — cluster mode
+// (aks|byo) + config — before it's stamped (platform only).
+func (s *Server) handleSetFootprintConfig(w http.ResponseWriter, r *http.Request) {
+	id, _ := auth.IdentityFrom(r.Context())
+	if !s.requirePlatform(w, id) {
+		return
+	}
+	var body struct {
+		ClusterMode string         `json:"clusterMode"`
+		Config      map[string]any `json:"config"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if err := s.store.SetFootprintConfig(r.Context(), chi.URLParam(r, "slug"), body.ClusterMode, body.Config); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "tenant not found")
+			return
+		}
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "saved"})
+}
+
+// handleStampFootprint queues a tenant's footprint for provisioning — the
+// deferred "stamp" a platform admin presses after configuring it (platform only).
+func (s *Server) handleStampFootprint(w http.ResponseWriter, r *http.Request) {
+	id, _ := auth.IdentityFrom(r.Context())
+	if !s.requirePlatform(w, id) {
+		return
+	}
+	if err := s.store.StampFootprint(r.Context(), chi.URLParam(r, "slug")); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "tenant not found or has no subscription")
+			return
+		}
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "stamping"})
 }
 
 /* ── Memory stores (platform-authored + tenant-created) ──────────────────── */

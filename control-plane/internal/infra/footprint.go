@@ -213,7 +213,7 @@ func (p *Provisioner) ensureFootprint(ctx context.Context, t store.FootprintTarg
 			_ = p.store.SetReconcilerPrincipal(ctx, t.Slug, id.principalID)
 		}
 	}
-	if err := p.submitFootprint(ctx, t.SubscriptionID, rg, t.Name, t.Slug, reconIdentityResourceID, isDelegated); err != nil {
+	if err := p.submitFootprint(ctx, t.SubscriptionID, rg, t, reconIdentityResourceID, isDelegated); err != nil {
 		slog.Warn("provision: submit footprint failed", "tenant", t.Slug, "err", err.Error())
 		_ = p.store.SetFootprintState(ctx, t.Slug, "failed", trunc(err.Error()))
 		return
@@ -277,24 +277,39 @@ func (p *Provisioner) createResourceGroup(ctx context.Context, sub, rg, region s
 
 // submitFootprint deploys the footprint template with the platform's parameters.
 // For platform-hosted tenants it passes the pre-created reconciler identity and
-// flags the deployment same-tenant (isDelegated=false), so the template
-// references that identity and omits the Lighthouse-only
-// delegatedManagedIdentityResourceId on its role assignments.
-func (p *Provisioner) submitFootprint(ctx context.Context, sub, rg, tenantName, tenantSlug, reconcilerIdentityResourceID string, isDelegated bool) error {
+// flags the deployment same-tenant (isDelegated=false). cluster_mode drives
+// whether an AKS cluster is provisioned ('aks') or skipped ('byo' — bring your
+// own; the footprint deploys only the reconciler + Foundry). footprint_config
+// supplies optional AKS sizing (region, nodeCount, nodeVmSize).
+func (p *Provisioner) submitFootprint(ctx context.Context, sub, rg string, t store.FootprintTarget, reconcilerIdentityResourceID string, isDelegated bool) error {
 	var template map[string]any
 	if err := json.Unmarshal(footprintTemplate, &template); err != nil {
 		return fmt.Errorf("footprint template invalid: %w", err)
 	}
+	deployCluster := !strings.EqualFold(t.ClusterMode, "byo")
 	params := map[string]any{
-		"tenantName":      map[string]any{"value": firstNonEmpty(tenantName, "Cortex tenant")},
+		"tenantName":      map[string]any{"value": firstNonEmpty(t.Name, "Cortex tenant")},
 		"controlPlaneUrl": map[string]any{"value": p.controlPlaneURL},
 		"cortexApiScope":  map[string]any{"value": p.apiScope},
 		"reconcilerImage": map[string]any{"value": p.reconcilerImage},
 		"isDelegated":     map[string]any{"value": isDelegated},
-		"tenantSlug":      map[string]any{"value": tenantSlug},
+		"tenantSlug":      map[string]any{"value": t.Slug},
+		"deployCluster":   map[string]any{"value": deployCluster},
 	}
 	if reconcilerIdentityResourceID != "" {
 		params["reconcilerIdentityResourceId"] = map[string]any{"value": reconcilerIdentityResourceID}
+	}
+	// Optional AKS sizing from the admin-set footprint config.
+	if deployCluster {
+		if v := configString(t.Config, "region"); v != "" {
+			params["location"] = map[string]any{"value": v}
+		}
+		if v := configString(t.Config, "nodeVmSize"); v != "" {
+			params["nodeVmSize"] = map[string]any{"value": v}
+		}
+		if n := configInt(t.Config, "nodeCount"); n > 0 {
+			params["nodeCount"] = map[string]any{"value": n}
+		}
 	}
 	payload, err := json.Marshal(map[string]any{
 		"properties": map[string]any{"mode": "Incremental", "template": template, "parameters": params},
@@ -303,6 +318,33 @@ func (p *Provisioner) submitFootprint(ctx context.Context, sub, rg, tenantName, 
 		return err
 	}
 	return p.arm(ctx, http.MethodPut, p.footprintDeploymentURL(sub, rg), payload, nil)
+}
+
+// configString reads a string field from a footprint config map (tolerant of
+// missing/typed values).
+func configString(m map[string]any, key string) string {
+	if m == nil {
+		return ""
+	}
+	if s, ok := m[key].(string); ok {
+		return strings.TrimSpace(s)
+	}
+	return ""
+}
+
+// configInt reads an int field from a footprint config map (JSON numbers decode
+// as float64).
+func configInt(m map[string]any, key string) int {
+	if m == nil {
+		return 0
+	}
+	switch v := m[key].(type) {
+	case float64:
+		return int(v)
+	case int:
+		return v
+	}
+	return 0
 }
 
 // deploymentState reads a deployment's provisioning state (found=false when it
