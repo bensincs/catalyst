@@ -46,7 +46,8 @@ export function FootprintPanel({
 
   const state = (footprintState || "draft") as keyof typeof LABEL;
   const provisioning = footprintState === "provisioning";
-  const configurable = hostingMode === "platform";
+  // Cluster shape is configurable for every tenant — delegated tenants can bring
+  // their own (Arc) cluster too, not just platform-hosted ones.
   const stampLabel = !footprintState || footprintState === "draft" ? "Stamp footprint" : "Re-provision";
 
   const save = () =>
@@ -88,8 +89,9 @@ export function FootprintPanel({
             <StatusBadge tone={TONE[state] ?? "neutral"} label={LABEL[state] ?? footprintState} variant="soft" />
           </h2>
           <p className={panel.sub}>
-            The reconciler, Foundry, and (for an AKS-managed cluster) the Kubernetes cluster provisioned
-            for {name}. Configure the shape, then stamp it — nothing is provisioned until you do.
+            The reconciler, Foundry, and the Kubernetes cluster for {name}. Choose an AKS-managed
+            cluster (Cortex provisions it) or bring your own (connect an existing Arc cluster —
+            Cortex deploys only the reconciler + Foundry). Configure the shape, then stamp it.
           </p>
         </div>
         <Button variant="secondary" icon={provisioning ? RefreshCw : Stamp} loading={pending || provisioning} onClick={stamp}>
@@ -97,8 +99,7 @@ export function FootprintPanel({
         </Button>
       </div>
 
-      {configurable ? (
-        <div style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 12 }}>
+      <div style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 12 }}>
           <div className={styles.field} style={{ gap: 8 }}>
             <ModeChip active={mode === "aks"} onClick={() => setMode("aks")} title="AKS-managed" desc="Cortex provisions an AKS cluster" />
             <ModeChip active={mode === "byo"} onClick={() => setMode("byo")} title="Bring your own" desc="Connect an existing (Arc) cluster" />
@@ -126,7 +127,6 @@ export function FootprintPanel({
             </Button>
           </div>
         </div>
-      ) : null}
     </section>
   );
 }
