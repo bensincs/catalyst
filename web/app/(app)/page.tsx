@@ -1,5 +1,6 @@
-import { getFleet, getMe, getMyContext } from "@/lib/api";
+import { getFleet, getMe, getMyContext, getTombstones } from "@/lib/api";
 import { FleetView } from "@/components/views/fleet-view";
+import { DeletedTenantsPanel } from "@/components/views/deleted-tenants-panel";
 import { TenantOverview } from "@/components/views/tenant-overview";
 
 export const dynamic = "force-dynamic";
@@ -8,8 +9,13 @@ export default async function HomePage() {
   const me = await getMe();
 
   if (me.role === "platform") {
-    const fleet = await getFleet();
-    return <FleetView stats={fleet.stats} tenants={fleet.tenants} now={Date.now()} />;
+    const [fleet, tombstones] = await Promise.all([getFleet(), getTombstones()]);
+    return (
+      <>
+        <FleetView stats={fleet.stats} tenants={fleet.tenants} now={Date.now()} />
+        <DeletedTenantsPanel tombstones={tombstones} />
+      </>
+    );
   }
 
   // One context call carries the tenant's enabled resources — enough to draw the

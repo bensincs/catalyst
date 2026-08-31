@@ -24,6 +24,7 @@ import type {
   TenantContextInfo,
   TenantRegistryRow,
   TenantSummary,
+  Tombstone,
 } from "@/lib/types";
 
 const API_URL = process.env.CORTEX_API_URL ?? "http://localhost:8080";
@@ -158,8 +159,22 @@ export class ApiError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    /** The API's machine-readable `code` when it sent one (e.g. "tenant_deleted",
+     *  "tenant_disabled", "no_membership"). Lets callers tell a permissions
+     *  problem apart from the control plane actually being unreachable. */
+    readonly code?: string,
   ) {
     super(message);
+  }
+}
+
+/** Pull the `code` field out of an API error body, if present. */
+function errorCode(body: string): string | undefined {
+  try {
+    const v = JSON.parse(body) as { code?: unknown };
+    return typeof v.code === "string" ? v.code : undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -170,7 +185,7 @@ async function apiGet<T>(path: string): Promise<T> {
   });
   if (!res.ok) {
     const body = await res.text().catch(() => "");
-    throw new ApiError(res.status, `GET ${path} → ${res.status} ${body}`);
+    throw new ApiError(res.status, `GET ${path} → ${res.status} ${body}`, errorCode(body));
   }
   return (await res.json()) as T;
 }
@@ -481,6 +496,12 @@ export interface TenantMember {
   role: string;
   createdAt: string;
 }
+
+/** Deleted tenants, newest first. Platform admins only. */
+export const getTombstones = cache(async (): Promise<Tombstone[]> => {
+  const r = await apiGet<{ tombstones: Tombstone[] }>("/api/tenant-tombstones");
+  return r.tombstones ?? [];
+});
 
 export const getTenantMembers = cache(async (slug: string): Promise<TenantMember[]> => {
   const r = await apiGet<{ members: TenantMember[] }>(

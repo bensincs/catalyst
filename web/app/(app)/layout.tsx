@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { redirect } from "next/navigation";
-import { CloudOff } from "lucide-react";
+import { CloudOff, ShieldAlert } from "lucide-react";
 import { auth } from "@/auth";
 import { ApiError, getFleet, getMe, getMyContext, type Me } from "@/lib/api";
 import { ConsoleProvider, type ConsoleData } from "@/components/providers/console-provider";
@@ -21,6 +21,37 @@ function initialsFrom(name: string, email: string): string {
   const parts = src.split(/[\s@.]+/).filter(Boolean);
   if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
   return src.slice(0, 2).toUpperCase();
+}
+
+/** Turn the API's error code into something the person reading it can act on.
+ *  These are all "your access", not "the system is broken". */
+function forbiddenReason(code?: string): { title: string; description: string } {
+  switch (code) {
+    case "tenant_deleted":
+      return {
+        title: "This organization was deleted",
+        description:
+          "A platform administrator deleted your organization from Cortex, so signing in no longer creates one. If this wasn't expected, ask them to restore it — deleted organizations can be brought back from the fleet view.",
+      };
+    case "tenant_disabled":
+      return {
+        title: "Waiting for approval",
+        description:
+          "Your organization is registered but hasn't been enabled yet. A platform administrator needs to approve it before you can use Cortex.",
+      };
+    case "no_membership":
+      return {
+        title: "No access to this organization",
+        description:
+          "Your account isn't a member of any enabled organization. Ask a platform administrator to add you.",
+      };
+    default:
+      return {
+        title: "Access denied",
+        description:
+          "Your account doesn't have access to this part of Cortex. Ask a platform administrator to check your assignment.",
+      };
+  }
 }
 
 export default async function AppLayout({ children }: { children: ReactNode }) {
@@ -46,9 +77,18 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   } catch (e) {
     // Session alive but token missing/expired → send them back to sign in.
     if (e instanceof ApiError && e.status === 401) redirect("/signin");
-    // The control plane is unreachable (or erroring) — render a calm, retryable
-    // state instead of a raw 500. Tenants and their agents keep running; the
-    // console just can't read their state until the connection is restored.
+
+    // A 403 is a permissions answer, not a connectivity failure. Saying
+    // "unreachable" for one sends people looking at the control plane when the
+    // actual answer is about their access — so name the real reason.
+    if (e instanceof ApiError && e.status === 403) {
+      const { title, description } = forbiddenReason(e.code);
+      return <ErrorState variant="page" icon={ShieldAlert} title={title} description={description} />;
+    }
+
+    // Anything else — the control plane really is unreachable (or erroring).
+    // Tenants and their agents keep running; the console just can't read their
+    // state until the connection is restored.
     return (
       <ErrorState
         variant="page"

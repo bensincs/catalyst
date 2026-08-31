@@ -383,3 +383,17 @@ export const ENV_META: Record<
   uat: { label: "UAT", short: "UAT", tone: "warning" },
   prod: { label: "Production", short: "PROD", tone: "danger" },
 };
+
+/** A deliberately deleted tenant.
+ *
+ *  Deletion tombstones the slug, otherwise the tenant returns within ~30s: the
+ *  Lighthouse discovery sweep re-registers every delegated subscription, and the
+ *  slug is derived deterministically from the Entra directory id. Restoring
+ *  removes the tombstone so the tenant can be discovered or signed into again. */
+export interface Tombstone {
+  slug: string;
+  tenantId?: string;
+  name: string;
+  deletedBy?: string;
+  deletedAt?: string;
+}
