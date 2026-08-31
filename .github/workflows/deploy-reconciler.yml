@@ -35,8 +35,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP || 'cortex-control-plane' }}
-      ACR_NAME: ${{ vars.ACR_NAME || 'cortexcpacrzo7yflmq' }}
-      PUBLIC_ACR_NAME: ${{ vars.PUBLIC_ACR_NAME || 'cortexpubliczo7yflmq' }}
+      ACR_NAME: ${{ vars.ACR_NAME || 'cortexcpacr6hy6uurw' }}
+      PUBLIC_ACR_NAME: ${{ vars.PUBLIC_ACR_NAME || 'cortexpublic6hy6uurw' }}
       API_APP: ${{ vars.API_APP || 'cortex-cp-api' }}
     steps:
       - uses: actions/checkout@v4

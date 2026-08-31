@@ -166,7 +166,7 @@ export function InfrastructureForm({
             value={bicepModule}
             onChange={(e) => setBicepModule(e.target.value)}
             spellCheck={false}
-            placeholder="br:cortexcpacrzo7yflmq.azurecr.io/bicep/postgres:1.2.0"
+            placeholder="br:cortexcpacr6hy6uurw.azurecr.io/bicep/postgres:1.2.0"
           />
         </Field>
       </FormSection>

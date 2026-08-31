@@ -23,7 +23,7 @@ import (
 // so the same binary drives any environment.
 const (
 	defAPIURL   = "https://api.catalyst.msft.ae"
-	defAPIAppID = "33e1686e-d227-454a-9974-4978c567720b"           // the control-plane API app registration
+	defAPIAppID = "1680be6b-9a92-4244-b800-4d3b902fecff"           // the control-plane API app registration
 	defClientID = "04b07795-8ddb-461a-bbee-02f9e1bf7b46"           // Azure CLI public client (pre-consented to the API scope)
 	defTenant   = "organizations"                                  // any work/school tenant; pin with --tenant
 )

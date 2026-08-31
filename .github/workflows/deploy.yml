@@ -39,7 +39,7 @@ jobs:
             dockerfile: web/Dockerfile
     env:
       RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP || 'cortex-control-plane' }}
-      ACR_NAME: ${{ vars.ACR_NAME || 'cortexcpacrzo7yflmq' }}
+      ACR_NAME: ${{ vars.ACR_NAME || 'cortexcpacr6hy6uurw' }}
     steps:
       - uses: actions/checkout@v4
 

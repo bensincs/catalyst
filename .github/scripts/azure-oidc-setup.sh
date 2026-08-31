@@ -15,10 +15,10 @@ set -euo pipefail
 
 REPO="${1:-bensincs/catalyst}"
 APP_NAME="${APP_NAME:-cortex-github-oidc}"
-SUBSCRIPTION="${AZURE_SUBSCRIPTION_ID:-dd78ec54-2f00-41fc-8055-8c1f2ad66a1d}"
+SUBSCRIPTION="${AZURE_SUBSCRIPTION_ID:-4bb69453-53d7-4a30-87ca-3d6f29499276}"
 RG="${AZURE_RESOURCE_GROUP:-cortex-control-plane}"
-ACR_NAME="${ACR_NAME:-cortexcpacrzo7yflmq}"
-PUBLIC_ACR_NAME="${PUBLIC_ACR_NAME:-cortexpubliczo7yflmq}"
+ACR_NAME="${ACR_NAME:-cortexcpacr6hy6uurw}"
+PUBLIC_ACR_NAME="${PUBLIC_ACR_NAME:-cortexpublic6hy6uurw}"
 read -r -a BRANCHES <<<"${BRANCHES:-main feat/k8s-gitops-mesh}"
 
 echo "Repo:         $REPO"

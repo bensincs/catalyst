@@ -51,8 +51,8 @@ env:
   # The two ids are not secret (overridable as repo variables); the three real
   # secrets must be set as repo secrets and must MATCH the live values — a what-if
   # will otherwise show (and an apply would perform) a password/secret rotation.
-  CORTEX_ENTRA_CLIENT_ID: ${{ vars.CORTEX_ENTRA_CLIENT_ID || '33e1686e-d227-454a-9974-4978c567720b' }}
-  CORTEX_PLATFORM_TENANT_ID: ${{ vars.CORTEX_PLATFORM_TENANT_ID || 'cab08f14-2b61-43ee-8ebe-16acd8e371bf' }}
+  CORTEX_ENTRA_CLIENT_ID: ${{ vars.CORTEX_ENTRA_CLIENT_ID || '1680be6b-9a92-4244-b800-4d3b902fecff' }}
+  CORTEX_PLATFORM_TENANT_ID: ${{ vars.CORTEX_PLATFORM_TENANT_ID || '592f2526-87c5-4b56-a69c-911ca616e213' }}
   CORTEX_PG_ADMIN_PASSWORD: ${{ secrets.CORTEX_PG_ADMIN_PASSWORD }}
   CORTEX_AUTH_SECRET: ${{ secrets.CORTEX_AUTH_SECRET }}
   CORTEX_ENTRA_CLIENT_SECRET: ${{ secrets.CORTEX_ENTRA_CLIENT_SECRET }}
