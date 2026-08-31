@@ -118,6 +118,7 @@ func main() {
 		ResourceGroup:  cfg.DNSResourceGroup,
 		ACMEDirectory:  cfg.ACMEDirectoryURL,
 		ACMEEmail:      cfg.ACMEEmail,
+		Region:         cfg.InfraRegion,
 	}); err != nil {
 		slog.Error("ingress manager init failed", "err", err)
 	} else if ing == nil {

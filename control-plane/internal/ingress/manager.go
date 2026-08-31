@@ -29,6 +29,9 @@ type Config struct {
 	// otherwise.
 	ACMEDirectory string
 	ACMEEmail     string
+	// Region for the resource group holding the zones. Zones themselves are
+	// global, but a resource GROUP must name a real region.
+	Region string
 }
 
 // Manager keeps each tenant's DNS zone and wildcard certificate correct.
@@ -40,6 +43,7 @@ type Manager struct {
 	resourceGroup  string
 	acmeDirectory  string
 	acmeEmail      string
+	region         string
 
 	// nextIssue throttles certificate attempts per tenant. The sweep runs every
 	// 30s, but Let's Encrypt rate-limits hard (and bans on sustained abuse), so a
@@ -69,6 +73,10 @@ func New(st *store.Store, cfg Config) (*Manager, error) {
 	if rg == "" {
 		rg = "cortex-dns"
 	}
+	region := strings.TrimSpace(cfg.Region)
+	if region == "" {
+		region = "uksouth"
+	}
 	return &Manager{
 		nextIssue:      map[string]time.Time{},
 		cred:           cred,
@@ -78,6 +86,7 @@ func New(st *store.Store, cfg Config) (*Manager, error) {
 		resourceGroup:  rg,
 		acmeDirectory:  dir,
 		acmeEmail:      strings.TrimSpace(cfg.ACMEEmail),
+		region:         region,
 	}, nil
 }
 
@@ -117,7 +126,9 @@ func (m *Manager) backOff(slug string) {
 func (m *Manager) ensureResourceGroup(ctx context.Context) error {
 	url := fmt.Sprintf("%s/subscriptions/%s/resourcegroups/%s?api-version=2021-04-01",
 		armBase, m.subscriptionID, m.resourceGroup)
-	body, _ := json.Marshal(map[string]any{"location": "global"})
+	// A resource group needs a real region — "global" is only valid for the DNS
+	// zone resource itself, which lives inside the group.
+	body, _ := json.Marshal(map[string]any{"location": m.region})
 	return m.armDo(ctx, http.MethodPut, url, body, nil)
 }
 
@@ -130,9 +141,10 @@ func (m *Manager) reconcile(ctx context.Context) {
 	if len(targets) == 0 {
 		return
 	}
+	// Best-effort: if the group already exists this is a no-op, and a failure
+	// here must not stop tenants whose zone is already in place.
 	if err := m.ensureResourceGroup(ctx); err != nil {
 		slog.Warn("ingress: ensure DNS resource group failed", "rg", m.resourceGroup, "err", trunc(err.Error()))
-		return
 	}
 	for _, t := range targets {
 		m.ensure(ctx, t)
