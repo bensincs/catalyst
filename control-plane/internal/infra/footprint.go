@@ -429,6 +429,83 @@ func (p *Provisioner) deploymentState(ctx context.Context, url string) (map[stri
 	return outs, body.Properties.ProvisioningState, true
 }
 
+// armError is one level of an ARM error payload.
+type armError struct {
+	Code    string     `json:"code"`
+	Message string     `json:"message"`
+	Details []armError `json:"details"`
+}
+
+// leaf returns the innermost code+message, which is the one that names the real
+// problem. The outer levels are always the same two useless wrappers
+// (DeploymentFailed → ResourceDeploymentFailure).
+func (e armError) leaf() (string, string) {
+	for _, d := range e.Details {
+		if c, m := d.leaf(); c != "" || m != "" {
+			return c, m
+		}
+	}
+	return e.Code, e.Message
+}
+
+// deploymentFailure explains why a deployment failed, in one line.
+//
+// The deployment's own `properties.error` only ever says "DeploymentFailed →
+// ResourceDeploymentFailure", which tells an operator nothing. The actionable
+// error (ServerNameAlreadyExists, QuotaExceeded, VMSizeNotSupported…) lives on
+// the failed *operation*, so this walks those — recursing once into a nested
+// deployment, since a module deploys as its own deployment and that's where a
+// module's resource errors surface.
+//
+// Best-effort: an empty string just means the console shows the state without a
+// reason, exactly as before.
+func (p *Provisioner) deploymentFailure(ctx context.Context, sub, rg, name string, depth int) string {
+	opsURL := fmt.Sprintf(
+		"https://management.azure.com/subscriptions/%s/resourceGroups/%s/providers/Microsoft.Resources/deployments/%s/operations?api-version=%s",
+		sub, rg, name, infraAPIVersion)
+	var ops struct {
+		Value []struct {
+			Properties struct {
+				ProvisioningState string `json:"provisioningState"`
+				TargetResource    struct {
+					ResourceName string `json:"resourceName"`
+					ResourceType string `json:"resourceType"`
+				} `json:"targetResource"`
+				StatusMessage struct {
+					Error armError `json:"error"`
+				} `json:"statusMessage"`
+			} `json:"properties"`
+		} `json:"value"`
+	}
+	if err := p.arm(ctx, http.MethodGet, opsURL, nil, &ops); err != nil {
+		return ""
+	}
+	for _, op := range ops.Value {
+		pr := op.Properties
+		if !strings.EqualFold(pr.ProvisioningState, "Failed") {
+			continue
+		}
+		// A failed nested deployment carries no error of its own — the resource
+		// that actually failed is inside it.
+		if depth < 2 && strings.EqualFold(pr.TargetResource.ResourceType, "Microsoft.Resources/deployments") {
+			if inner := p.deploymentFailure(ctx, sub, rg, pr.TargetResource.ResourceName, depth+1); inner != "" {
+				return inner
+			}
+			continue
+		}
+		code, msg := pr.StatusMessage.Error.leaf()
+		if code == "" && msg == "" {
+			continue
+		}
+		out := strings.TrimSpace(code + ": " + strings.TrimSpace(msg))
+		if res := pr.TargetResource.ResourceName; res != "" {
+			out = res + " — " + out
+		}
+		return trunc(out)
+	}
+	return ""
+}
+
 func firstNonEmpty(vals ...string) string {
 	for _, v := range vals {
 		if strings.TrimSpace(v) != "" {

@@ -310,6 +310,7 @@ function toApplication(a: ApiApplication): Application {
     enabled: Boolean(a.enabled),
     health: (a.health as Application["health"]) || undefined,
     syncStatus: a.syncStatus || undefined,
+    detail: a.detail || undefined,
     healthStatus: a.healthStatus || undefined,
     waiting: Boolean(a.waiting),
   };
@@ -332,6 +333,7 @@ function toInfrastructure(i: ApiInfrastructure): Infrastructure {
     entitled: Boolean(i.entitled),
     enabled: Boolean(i.enabled),
     infraState: i.infraState || undefined,
+    infraDetail: i.infraDetail || undefined,
     health: (i.health as Infrastructure["health"]) || undefined,
     waiting: Boolean(i.waiting),
     pendingDelete: Boolean(i.pendingDelete),
@@ -547,6 +549,7 @@ interface ApiApplication {
   enabled?: boolean;
   health?: string;
   syncStatus?: string;
+  detail?: string;
   healthStatus?: string;
   waiting?: boolean;
 }
@@ -572,6 +575,7 @@ interface ApiInfrastructure {
   entitled?: boolean;
   enabled?: boolean;
   infraState?: string;
+  infraDetail?: string;
   health?: string;
   waiting?: boolean;
   pendingDelete?: boolean;

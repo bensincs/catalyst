@@ -2,7 +2,7 @@
 
 import { useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Boxes, Cloud, GitBranch, Pencil, Plus, Power, Trash2 } from "lucide-react";
+import { AlertTriangle, Boxes, Cloud, GitBranch, Pencil, Plus, Power, Trash2 } from "lucide-react";
 import { PageHeader } from "@/components/ui/page-header";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -116,6 +116,14 @@ export function InfrastructureView({
                     )}
                   </div>
                   {i.description && <p className={styles.rowDesc}>{i.description}</p>}
+                  {/* A failed instance says why. Without this the row reads
+                      "Blocked" and the reason is only in ARM. */}
+                  {!platform && i.enabled && i.infraState === "failed" && i.infraDetail && (
+                    <p className={styles.rowError}>
+                      <AlertTriangle size={14} aria-hidden />
+                      <span>{i.infraDetail}</span>
+                    </p>
+                  )}
                   <DefinitionChips infra={i} />
                 </div>
                 {!removing && (manageable(i) || (!platform && (i.owned || i.entitled))) && (

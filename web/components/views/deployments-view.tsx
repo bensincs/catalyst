@@ -2,7 +2,7 @@
 
 import { useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Rocket, Plus, Trash2, Pencil, Power, GitBranch } from "lucide-react";
+import { AlertTriangle, Rocket, Plus, Trash2, Pencil, Power, GitBranch } from "lucide-react";
 import { PageHeader } from "@/components/ui/page-header";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -128,6 +128,14 @@ export function DeploymentsView({
                     )}
                   </div>
                   {a.description && <p className={styles.rowDesc}>{a.description}</p>}
+                  {/* Argo's reason, when it has one — otherwise the row just
+                      reads "Degraded" and the cause needs cluster access. */}
+                  {!platform && a.enabled && a.detail && (
+                    <p className={styles.rowError}>
+                      <AlertTriangle size={14} aria-hidden />
+                      <span>{a.detail}</span>
+                    </p>
+                  )}
                   <DefinitionChips app={a} showRuntime={!platform && !!a.enabled} />
                 </div>
                 {(manageable(a) || (!platform && (a.owned || a.entitled))) && (

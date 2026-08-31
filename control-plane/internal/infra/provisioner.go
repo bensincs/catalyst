@@ -142,11 +142,19 @@ func (p *Provisioner) ensure(ctx context.Context, tgt store.InfraTarget) {
 	if outs, pstate, found := p.deploymentState(ctx, p.deploymentURL(tgt.SubscriptionID, rg, name)); found {
 		switch {
 		case strings.EqualFold(pstate, "Succeeded"):
-			_ = p.store.SetInfraState(ctx, tgt.TenantSlug, tgt.InfraID, stateReady, outs)
+			_ = p.store.SetInfraState(ctx, tgt.TenantSlug, tgt.InfraID, stateReady, outs, "")
 		case strings.EqualFold(pstate, "Failed") || strings.EqualFold(pstate, "Canceled"):
-			_ = p.store.SetInfraState(ctx, tgt.TenantSlug, tgt.InfraID, stateFailed, nil)
+			// Pull the resource-level reason out of the deployment's operations.
+			// A Failed ARM deployment is terminal, so this is also the only
+			// chance to record it — the sweep short-circuits here from now on.
+			detail := p.deploymentFailure(ctx, tgt.SubscriptionID, rg, name, 0)
+			if detail == "" {
+				detail = "Deployment " + pstate + "."
+			}
+			slog.Warn("infra: deployment failed", "infra", tgt.InfraID, "tenant", tgt.TenantSlug, "detail", detail)
+			_ = p.store.SetInfraState(ctx, tgt.TenantSlug, tgt.InfraID, stateFailed, nil, detail)
 		default:
-			_ = p.store.SetInfraState(ctx, tgt.TenantSlug, tgt.InfraID, stateProvisioning, nil)
+			_ = p.store.SetInfraState(ctx, tgt.TenantSlug, tgt.InfraID, stateProvisioning, nil, "Provisioning…")
 		}
 		return
 	}
@@ -157,7 +165,8 @@ func (p *Provisioner) ensure(ctx context.Context, tgt store.InfraTarget) {
 	var template map[string]any
 	if err := json.Unmarshal([]byte(armStr), &template); err != nil {
 		slog.Warn("infra: template is not valid ARM JSON; skipping", "infra", tgt.InfraID)
-		_ = p.store.SetInfraState(ctx, tgt.TenantSlug, tgt.InfraID, stateFailed, nil)
+		_ = p.store.SetInfraState(ctx, tgt.TenantSlug, tgt.InfraID, stateFailed, nil,
+			"The infrastructure's compiled ARM template is not valid JSON — recompile the Bicep module.")
 		return
 	}
 	// The subscription may not have the app-infra RG or the template's resource
@@ -167,13 +176,20 @@ func (p *Provisioner) ensure(ctx context.Context, tgt store.InfraTarget) {
 	p.registerProviders(ctx, tgt.SubscriptionID, templateProviders(template))
 	if err := p.createResourceGroup(ctx, tgt.SubscriptionID, rg, ""); err != nil {
 		slog.Warn("infra: create resource group failed", "tenant", tgt.TenantSlug, "err", trunc(err.Error()))
+		_ = p.store.SetInfraState(ctx, tgt.TenantSlug, tgt.InfraID, stateProvisioning, nil,
+			"Waiting on the resource group: "+trunc(err.Error()))
 		return
 	}
+	// A rejected submit never becomes a deployment, so there is nothing for the
+	// state check above to find on the next sweep — record the rejection here or
+	// it is invisible. ARM preflight failures (quota, unsupported SKU, a name
+	// already taken) surface at exactly this point.
 	if err := p.submit(ctx, tgt.SubscriptionID, rg, name, template); err != nil {
 		slog.Warn("infra: submit deployment failed", "infra", tgt.InfraID, "tenant", tgt.TenantSlug, "err", trunc(err.Error()))
+		_ = p.store.SetInfraState(ctx, tgt.TenantSlug, tgt.InfraID, stateFailed, nil, armMessage(err.Error()))
 		return
 	}
-	_ = p.store.SetInfraState(ctx, tgt.TenantSlug, tgt.InfraID, stateProvisioning, nil)
+	_ = p.store.SetInfraState(ctx, tgt.TenantSlug, tgt.InfraID, stateProvisioning, nil, "Provisioning…")
 }
 
 // templateProviders returns the distinct resource-provider namespaces an ARM
@@ -533,4 +549,21 @@ func substituteTokens(arm, slug, region string) string {
 func tenantHash(slug string) string {
 	sum := sha256.Sum256([]byte(slug))
 	return hex.EncodeToString(sum[:])[:10]
+}
+
+// armMessage turns an ARM error body into the one line worth showing. ARM
+// replies are deeply nested JSON whose useful part is the innermost
+// code/message; the raw body is unreadable in a UI.
+func armMessage(raw string) string {
+	if i := strings.Index(raw, "{"); i >= 0 {
+		var body struct {
+			Error armError `json:"error"`
+		}
+		if json.Unmarshal([]byte(raw[i:]), &body) == nil {
+			if code, msg := body.Error.leaf(); code != "" || msg != "" {
+				return trunc(strings.TrimSpace(code + ": " + strings.TrimSpace(msg)))
+			}
+		}
+	}
+	return trunc(raw)
 }

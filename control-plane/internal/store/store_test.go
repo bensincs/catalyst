@@ -956,7 +956,7 @@ func TestInfraTeardownLifecycle(t *testing.T) {
 	if err := st.EnableInfrastructure(ctx, slug, infra); err != nil {
 		t.Fatalf("enable: %v", err)
 	}
-	if err := st.SetInfraState(ctx, slug, infra, "ready", nil); err != nil {
+	if err := st.SetInfraState(ctx, slug, infra, "ready", nil, ""); err != nil {
 		t.Fatalf("state: %v", err)
 	}
 	if err := st.DisableInfrastructure(ctx, slug, infra); err != nil {
@@ -981,7 +981,7 @@ func TestInfraTeardownLifecycle(t *testing.T) {
 	if err := st.EnableInfrastructure(ctx, slug, infra); err != nil {
 		t.Fatalf("re-enable: %v", err)
 	}
-	if err := st.SetInfraState(ctx, slug, infra, "ready", nil); err != nil {
+	if err := st.SetInfraState(ctx, slug, infra, "ready", nil, ""); err != nil {
 		t.Fatalf("state2: %v", err)
 	}
 	if err := st.DeleteInfrastructure(ctx, infra); err != nil {

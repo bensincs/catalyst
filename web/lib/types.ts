@@ -183,6 +183,7 @@ export interface Infrastructure {
   entitled: boolean;
   enabled?: boolean; // explicitly enabled (provisioned) in the viewing tenant
   infraState?: string; // Bicep infra: "" | provisioning | ready | failed | deprovisioning
+  infraDetail?: string; // why it's in that state — the ARM error for a failure
   health?: Health; // per-tenant lifecycle when enabled: reconciling | live | blocked
   waiting?: boolean; // enabled but held until dependencies converge
   pendingDelete?: boolean; // definition is being deleted + torn down ("Deleting")
@@ -217,6 +218,7 @@ export interface Application {
   enabled?: boolean; // explicitly enabled (deployed) in the viewing tenant
   health?: Health; // per-tenant lifecycle when enabled: reconciling | live | blocked
   syncStatus?: string; // Argo sync when enabled
+  detail?: string; // Argo's reason it's unhealthy or out of sync
   healthStatus?: string; // Argo health when enabled
   waiting?: boolean; // enabled but held until dependencies converge
 }

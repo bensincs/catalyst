@@ -324,6 +324,20 @@ CREATE INDEX IF NOT EXISTS tenant_infrastructure_tenant_idx ON tenant_infrastruc
 ALTER TABLE tenant_infrastructure ADD COLUMN IF NOT EXISTS pending_delete boolean NOT NULL DEFAULT false;
 DROP TABLE IF EXISTS infra_teardowns;
 
+-- infra_detail: WHY the instance is in its current state — for a failure, the
+-- resource-level ARM error (e.g. "ServerNameAlreadyExists: Specified server name
+-- is already used by another server."). Without it the console can only say
+-- "blocked", and the actual reason is only reachable by walking ARM deployment
+-- operations by hand. The message is stored truncated; it is operator-facing.
+ALTER TABLE tenant_infrastructure ADD COLUMN IF NOT EXISTS infra_detail text NOT NULL DEFAULT '';
+
+-- deploy_detail: Argo's own reason an Application is degraded or out of sync (a
+-- failed chart pull, a rejected manifest, a degraded workload). Reported by the
+-- reconciler on each heartbeat; empty when healthy. Same rationale as
+-- infra_detail — otherwise the console shows "Degraded" and the reason needs
+-- cluster access to find.
+ALTER TABLE tenant_deployments ADD COLUMN IF NOT EXISTS deploy_detail text NOT NULL DEFAULT '';
+
 -- Which platform infrastructure entities a tenant is entitled to enable.
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS entitled_infrastructure text[] NOT NULL DEFAULT '{}';
 

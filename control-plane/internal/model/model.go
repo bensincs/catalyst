@@ -247,6 +247,9 @@ type Infrastructure struct {
 	Entitled   bool   `json:"entitled"`
 	Enabled    bool   `json:"enabled"`
 	InfraState string `json:"infraState,omitempty"` // "" | provisioning | ready | failed | deprovisioning
+	// InfraDetail explains that state — for a failure the resource-level ARM
+	// error, so the console can say why instead of only "blocked".
+	InfraDetail string `json:"infraDetail,omitempty"`
 	Health     string `json:"health,omitempty"`     // reconciling | live | blocked
 	Waiting    bool   `json:"waiting,omitempty"`    // enabled but held for unmet infra deps
 	// PendingDelete: the definition is being deleted and torn down; kept visible
@@ -285,6 +288,8 @@ type Application struct {
 	Enabled      bool   `json:"enabled"`                // explicitly enabled (deployed) in the viewing tenant
 	Health       string `json:"health,omitempty"`       // per-tenant lifecycle: reconciling | live | blocked
 	SyncStatus   string `json:"syncStatus,omitempty"`   // Argo sync when enabled
+	// Detail is Argo's reason the deployment is unhealthy or out of sync.
+	Detail string `json:"detail,omitempty"`
 	HealthStatus string `json:"healthStatus,omitempty"` // Argo health when enabled
 	Waiting      bool   `json:"waiting,omitempty"`      // enabled but held for unmet dependencies
 	// Populated in the platform view:

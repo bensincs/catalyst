@@ -214,6 +214,11 @@ type ApplicationStatus struct {
 	ID           string `json:"id"`
 	SyncStatus   string `json:"syncStatus"`   // Synced | OutOfSync | Unknown | pending
 	HealthStatus string `json:"healthStatus"` // Healthy | Progressing | Degraded | Missing | pending
+	// Detail is why the app is unhealthy or out of sync — Argo's own message
+	// (a failed chart pull, a rejected manifest, a degraded resource). Empty
+	// when healthy. Without it the console can only show "Degraded" and the
+	// reason is reachable only with cluster access.
+	Detail string `json:"detail,omitempty"`
 }
 
 // Heartbeat is the reconciler's periodic report: the in-tenant install identity

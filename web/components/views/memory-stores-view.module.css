@@ -254,3 +254,26 @@
     justify-content: flex-end;
   }
 }
+
+/* Why an instance failed — the resource-level ARM error. Shown inline on the
+   row because the alternative is walking ARM deployment operations by hand. */
+.rowError {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--danger-border, var(--border));
+  border-radius: var(--radius-sm, 6px);
+  background: var(--danger-surface, var(--surface-hover));
+  font-size: var(--text-body-sm);
+  line-height: 1.5;
+  color: var(--text);
+  max-width: 68ch;
+  overflow-wrap: anywhere;
+}
+.rowError svg {
+  margin-top: 2px;
+  flex: none;
+  color: var(--danger, #d33);
+}

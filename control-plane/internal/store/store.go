@@ -1501,7 +1501,19 @@ func (s *Store) InfraTargets(ctx context.Context) ([]InfraTarget, error) {
 // infrastructure entity (control-plane worker → DB). SyncDesired merges the
 // outputs into dependent apps' Helm values and holds an app until its infra is
 // "ready".
-func (s *Store) SetInfraState(ctx context.Context, tenantSlug, infraID, state string, outputs map[string]any) error {
+// trunc256 caps an operator-facing detail message so one enormous ARM error
+// can't bloat every read of the row.
+func trunc256(s string) string {
+	if len(s) > 256 {
+		return s[:256]
+	}
+	return s
+}
+
+// detail explains the state — for a failure, the resource-level ARM error. It is
+// shown to operators in the console, so a failed instance says WHY rather than
+// just "blocked".
+func (s *Store) SetInfraState(ctx context.Context, tenantSlug, infraID, state string, outputs map[string]any, detail string) error {
 	raw := []byte("{}")
 	if len(outputs) > 0 {
 		if b, err := json.Marshal(outputs); err == nil {
@@ -1516,8 +1528,9 @@ func (s *Store) SetInfraState(ctx context.Context, tenantSlug, infraID, state st
 		health = shared.StatusBlocked
 	}
 	_, err := s.pool.Exec(ctx,
-		`UPDATE tenant_infrastructure SET infra_state = $3, infra_outputs = $4, health = $5 WHERE tenant_slug = $1 AND infra_id = $2`,
-		tenantSlug, infraID, state, raw, health)
+		`UPDATE tenant_infrastructure SET infra_state = $3, infra_outputs = $4, health = $5, infra_detail = $6
+		 WHERE tenant_slug = $1 AND infra_id = $2`,
+		tenantSlug, infraID, state, raw, health, trunc256(detail))
 	return err
 }
 
@@ -1725,9 +1738,10 @@ func (s *Store) ApplyHeartbeat(ctx context.Context, t model.Tenant, hb shared.He
 	// heartbeat is a harmless no-op).
 	for _, a := range hb.Applications {
 		if _, err := s.pool.Exec(ctx,
-			`UPDATE tenant_deployments SET sync_status = $3, health_status = $4, health = $5
+			`UPDATE tenant_deployments SET sync_status = $3, health_status = $4, health = $5, deploy_detail = $6
 			 WHERE tenant_slug = $1 AND app_id = $2`,
-			t.ID, a.ID, a.SyncStatus, a.HealthStatus, deriveDeploymentHealth(a.SyncStatus, a.HealthStatus)); err != nil {
+			t.ID, a.ID, a.SyncStatus, a.HealthStatus, deriveDeploymentHealth(a.SyncStatus, a.HealthStatus),
+			trunc256(a.Detail)); err != nil {
 			return err
 		}
 	}
@@ -1891,7 +1905,7 @@ func (s *Store) ApplicationsForTenant(ctx context.Context, slug string) ([]model
 	rows, err := s.pool.Query(ctx,
 		`SELECT `+applicationCols+`,
 		        (td.app_id IS NOT NULL) AS enabled, coalesce(td.sync_status,''), coalesce(td.health_status,''),
-		        coalesce(td.waiting,false)
+		        coalesce(td.waiting,false), coalesce(td.deploy_detail,'')
 		 FROM applications a
 		 LEFT JOIN tenant_deployments td ON td.app_id = a.id AND td.tenant_slug = $1
 		 WHERE a.owner_tenant = $1 OR (a.owner_tenant = '' AND a.id = ANY($2))
@@ -1905,9 +1919,9 @@ func (s *Store) ApplicationsForTenant(ctx context.Context, slug string) ([]model
 		var a model.Application
 		var wraw, draw []byte
 		var enabled bool
-		var sync, health string
+		var sync, health, deployDetail string
 		var waiting bool
-		if err := rows.Scan(append(appScanDest(&a, &wraw, &draw), &enabled, &sync, &health, &waiting)...); err != nil {
+		if err := rows.Scan(append(appScanDest(&a, &wraw, &draw), &enabled, &sync, &health, &waiting, &deployDetail)...); err != nil {
 			return nil, err
 		}
 		a.Wiring = wiringFromRaw(wraw)
@@ -1918,6 +1932,7 @@ func (s *Store) ApplicationsForTenant(ctx context.Context, slug string) ([]model
 		a.Enabled = enabled
 		if enabled {
 			a.SyncStatus, a.HealthStatus = sync, health
+			a.Detail = deployDetail
 			a.Health = deriveDeploymentHealth(sync, health)
 			a.Waiting = waiting
 		}
@@ -2084,7 +2099,7 @@ func (s *Store) InfrastructureForTenant(ctx context.Context, slug string) ([]mod
 	}
 	rows, err := s.pool.Query(ctx,
 		`SELECT `+infraCols+`,
-		        (ti.infra_id IS NOT NULL) AS enabled, coalesce(ti.infra_state,''), coalesce(ti.health,''), coalesce(ti.auto,false)
+		        (ti.infra_id IS NOT NULL) AS enabled, coalesce(ti.infra_state,''), coalesce(ti.health,''), coalesce(ti.auto,false), coalesce(ti.infra_detail,'')
 		 FROM infrastructure i
 		 LEFT JOIN tenant_infrastructure ti ON ti.infra_id = i.id AND ti.tenant_slug = $1
 		 WHERE (i.owner_tenant = $1 OR (i.owner_tenant = '' AND i.id = ANY($2)))
@@ -2099,8 +2114,8 @@ func (s *Store) InfrastructureForTenant(ctx context.Context, slug string) ([]mod
 		var i model.Infrastructure
 		var praw, draw []byte
 		var enabled, auto bool
-		var infraState, health string
-		if err := rows.Scan(append(infraScanDest(&i, &praw, &draw), &enabled, &infraState, &health, &auto)...); err != nil {
+		var infraState, health, infraDetail string
+		if err := rows.Scan(append(infraScanDest(&i, &praw, &draw), &enabled, &infraState, &health, &auto, &infraDetail)...); err != nil {
 			return nil, err
 		}
 		i.BicepParams = paramsFromRaw(praw)
@@ -2111,6 +2126,7 @@ func (s *Store) InfrastructureForTenant(ctx context.Context, slug string) ([]mod
 		i.Enabled = enabled
 		if enabled {
 			i.InfraState = infraState
+			i.InfraDetail = infraDetail
 			i.Health = health
 			i.Waiting = infraState != "ready" && infraState != "failed" && infraState != "deprovisioning"
 		}

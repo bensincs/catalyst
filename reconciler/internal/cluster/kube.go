@@ -174,6 +174,7 @@ func (k *kube) reconcileApplications(ctx context.Context, apps []shared.DesiredA
 			if health, ok, _ := unstructured.NestedString(cur.Object, "status", "health", "status"); ok && health != "" {
 				st.HealthStatus = health
 			}
+			st.Detail = argoMessage(cur.Object)
 		}
 		out = append(out, st)
 	}
@@ -514,4 +515,36 @@ func splitDocs(data []byte) [][]byte {
 		}
 	}
 	return out
+}
+
+// argoMessage extracts why an Argo Application is unhappy, in one line.
+//
+// Argo records the reason in three places depending on the failure: the health
+// message (a degraded workload), the last sync result (a rejected manifest or a
+// chart that wouldn't pull), and the conditions list (comparison errors, missing
+// permissions). Take the first that says something — all of them are far more
+// use than the bare "Degraded" the console shows today.
+func argoMessage(obj map[string]any) string {
+	if m, ok, _ := unstructured.NestedString(obj, "status", "health", "message"); ok && strings.TrimSpace(m) != "" {
+		return trunc(m)
+	}
+	if m, ok, _ := unstructured.NestedString(obj, "status", "operationState", "message"); ok && strings.TrimSpace(m) != "" {
+		if phase, _, _ := unstructured.NestedString(obj, "status", "operationState", "phase"); !strings.EqualFold(phase, "Succeeded") {
+			return trunc(m)
+		}
+	}
+	conds, _, _ := unstructured.NestedSlice(obj, "status", "conditions")
+	for _, c := range conds {
+		cm, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+		typ, _ := cm["type"].(string)
+		msg, _ := cm["message"].(string)
+		// Argo suffixes error-ish condition types with "Error"/"Warning".
+		if strings.TrimSpace(msg) != "" && (strings.Contains(typ, "Error") || strings.Contains(typ, "Warning")) {
+			return trunc(typ + ": " + msg)
+		}
+	}
+	return ""
 }
