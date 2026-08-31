@@ -12,6 +12,7 @@ import {
 import { PageHeader } from "@/components/ui/page-header";
 import { Button } from "@/components/ui/button";
 import { CreateTenantButton } from "@/components/views/create-tenant-button";
+import { DeletedTenantsButton } from "@/components/views/deleted-tenants-button";
 import { StatusBadge } from "@/components/ui/status";
 import { EmptyState } from "@/components/ui/empty-state";
 import { formatCount, formatInt, formatRelative } from "@/lib/format";
@@ -20,6 +21,7 @@ import {
   type FleetStats,
   type Lifecycle,
   type TenantSummary,
+  type Tombstone,
 } from "@/lib/types";
 import styles from "./fleet-view.module.css";
 
@@ -42,10 +44,13 @@ export function FleetView({
   stats,
   tenants,
   now,
+  tombstones = [],
 }: {
   stats: FleetStats;
   tenants: TenantSummary[];
   now: number;
+  /** Deleted tenants, surfaced behind a button in the header. */
+  tombstones?: Tombstone[];
 }) {
   const router = useRouter();
   const [query, setQuery] = useState("");
@@ -98,6 +103,13 @@ export function FleetView({
         <PageHeader
           title="Fleet"
           description="Every enrolled tenant and its live state — health and usage from reconciler heartbeats."
+          // Deleting every tenant is precisely when you need to get one back.
+          actions={
+            <>
+              <DeletedTenantsButton tombstones={tombstones} />
+              <CreateTenantButton />
+            </>
+          }
         />
         <div className={styles.emptyFleet}>
           <EmptyState
@@ -115,7 +127,12 @@ export function FleetView({
       <PageHeader
         title="Fleet"
         description="Every enrolled tenant and its live state — health and usage from reconciler heartbeats."
-        actions={<CreateTenantButton />}
+        actions={
+          <>
+            <DeletedTenantsButton tombstones={tombstones} />
+            <CreateTenantButton />
+          </>
+        }
       />
 
       <section className={styles.summary} aria-label="Fleet summary">

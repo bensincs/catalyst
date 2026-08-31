@@ -1,6 +1,5 @@
 import { getFleet, getMe, getMyContext, getTombstones } from "@/lib/api";
 import { FleetView } from "@/components/views/fleet-view";
-import { DeletedTenantsPanel } from "@/components/views/deleted-tenants-panel";
 import { TenantOverview } from "@/components/views/tenant-overview";
 
 export const dynamic = "force-dynamic";
@@ -11,10 +10,12 @@ export default async function HomePage() {
   if (me.role === "platform") {
     const [fleet, tombstones] = await Promise.all([getFleet(), getTombstones()]);
     return (
-      <>
-        <FleetView stats={fleet.stats} tenants={fleet.tenants} now={Date.now()} />
-        <DeletedTenantsPanel tombstones={tombstones} />
-      </>
+      <FleetView
+        stats={fleet.stats}
+        tenants={fleet.tenants}
+        now={Date.now()}
+        tombstones={tombstones}
+      />
     );
   }
 

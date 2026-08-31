@@ -1,0 +1,100 @@
+.dialog {
+  /* Pinned to the right edge, full height — the dialog element defaults to
+     centred, so margin does the anchoring. */
+  margin: 0 0 0 auto;
+  padding: 0;
+  border: none;
+  background: transparent;
+  height: 100dvh;
+  max-height: 100dvh;
+  overflow: visible;
+}
+
+.dialog::backdrop {
+  background: var(--overlay);
+  animation: fade 180ms var(--ease-out-quart);
+}
+.dialog[open] {
+  animation: slide 240ms var(--ease-out-expo);
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  background: var(--surface-raised);
+  border-left: 1px solid var(--border);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+
+.head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-base);
+  padding: 26px 28px 20px;
+  border-bottom: 1px solid var(--border);
+}
+.headText {
+  flex: 1;
+  min-width: 0;
+}
+.title {
+  font-size: var(--text-display);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.12;
+  color: var(--text);
+}
+.description {
+  margin-top: 8px;
+  font-size: var(--text-body);
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+.close {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  flex: none;
+  border-radius: var(--radius-full);
+  color: var(--text-muted);
+  transition: background-color var(--dur-fast) var(--ease-out-quart), color var(--dur-fast) var(--ease-out-quart);
+}
+.close:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.body {
+  flex: 1;
+  padding: 24px 28px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-base);
+}
+
+@keyframes slide {
+  from {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dialog[open],
+  .dialog::backdrop {
+    animation: none;
+  }
+}
