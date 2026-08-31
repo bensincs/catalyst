@@ -128,17 +128,10 @@ func TestPlatformTenantAndMemberships(t *testing.T) {
 		}
 	}
 
-	// Configure (BYO) then stamp; now it's a target carrying its cluster mode +
-	// the bring-your-own kubeconfig the reconciler reaches the cluster with.
-	const byoKubeconfig = "apiVersion: v1\nclusters:\n- cluster:\n    server: https://byo.example:6443\n"
-	if err := st.SetFootprintConfig(ctx, tn.ID, "byo", map[string]any{"note": "arc"}, byoKubeconfig); err != nil {
+	// Configure the AKS node shape then stamp; now it's a provisioning target
+	// carrying its hosting mode, RG and node config.
+	if err := st.SetFootprintConfig(ctx, tn.ID, map[string]any{"nodeCount": 2, "nodeVmSize": "Standard_D2s_v5"}); err != nil {
 		t.Fatalf("set footprint config: %v", err)
-	}
-	// The kubeconfig is stored but never serialized — only a presence flag is.
-	if tn2, err := st.TenantBySlug(ctx, tn.ID); err != nil {
-		t.Fatalf("tenant by slug: %v", err)
-	} else if !tn2.HasBYOKubeconfig {
-		t.Fatalf("expected HasBYOKubeconfig after storing a kubeconfig")
 	}
 	if err := st.StampFootprint(ctx, tn.ID); err != nil {
 		t.Fatalf("stamp: %v", err)
@@ -151,11 +144,11 @@ func TestPlatformTenantAndMemberships(t *testing.T) {
 	for _, tg := range targets {
 		if tg.Slug == tn.ID {
 			found = true
-			if tg.HostingMode != "platform" || tg.ResourceGroup == "" || tg.ClusterMode != "byo" {
+			if tg.HostingMode != "platform" || tg.ResourceGroup == "" {
 				t.Fatalf("footprint target missing fields: %+v", tg)
 			}
-			if tg.Kubeconfig != byoKubeconfig {
-				t.Fatalf("footprint target missing byo kubeconfig: %q", tg.Kubeconfig)
+			if tg.Config["nodeVmSize"] != "Standard_D2s_v5" {
+				t.Fatalf("footprint target missing node config: %+v", tg.Config)
 			}
 		}
 	}

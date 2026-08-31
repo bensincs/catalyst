@@ -100,6 +100,9 @@ func main() {
 		slog.Info("cross-tenant provisioning disabled (set CROSS_TENANT_PROVISIONING=true)")
 	} else {
 		go prov.Run(workerCtx, time.Duration(cfg.InfraPollSeconds)*time.Second)
+		// Deleting a tenant reclaims its Azure resource groups; the provisioner
+		// owns the ARM credential, so the server borrows it.
+		srv.SetTenantTeardown(prov.TeardownTenant)
 		slog.Info("cross-tenant provisioning enabled (managed identity + Lighthouse)", "footprintRG", cfg.FootprintRG, "infraRG", cfg.InfraResourceGroup, "region", cfg.InfraRegion)
 	}
 

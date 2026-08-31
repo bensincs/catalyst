@@ -52,9 +52,7 @@ interface ApiTenant {
   enabled?: boolean;
   hostingMode?: string;
   resourceGroup?: string;
-  clusterMode?: string;
   footprintConfig?: Record<string, unknown> | null;
-  hasByoKubeconfig?: boolean;
   cluster?: ApiCluster | null;
 }
 interface ApiCluster {
@@ -236,9 +234,7 @@ function toContext(t: ApiTenant): TenantContextInfo {
     lifecycle: (t.lifecycle ?? "enrolling") as Lifecycle,
     enabled: t.enabled ?? true,
     hostingMode: (t.hostingMode as TenantContextInfo["hostingMode"]) ?? "delegated",
-    clusterMode: (t.clusterMode as TenantContextInfo["clusterMode"]) ?? "aks",
     footprintConfig: (t.footprintConfig as Record<string, unknown> | null) ?? {},
-    hasByoKubeconfig: t.hasByoKubeconfig ?? false,
     cluster: toCluster(t.cluster),
   };
 }

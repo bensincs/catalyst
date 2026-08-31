@@ -2,7 +2,6 @@ package config
 
 import (
 	"bufio"
-	"encoding/base64"
 	"os"
 	"strconv"
 	"strings"
@@ -16,12 +15,6 @@ const (
 	defaultFoundryAPIVersion = "v1"                            // Foundry Agents API (new /agents surface)
 	defaultFoundryScope      = "https://ai.azure.com/.default" // Entra resource for Foundry
 	defaultArgoCDVersion     = "v2.13.2"                       // Argo CD the reconciler bootstraps
-)
-
-// Cluster kinds — how the reconciler reaches the tenant's cluster.
-const (
-	ClusterKindAKS        = "aks"        // Cortex-provisioned AKS via ARM + AKS AAD token
-	ClusterKindKubeconfig = "kubeconfig" // bring-your-own (Arc) cluster via a supplied kubeconfig
 )
 
 type Config struct {
@@ -43,22 +36,13 @@ type Config struct {
 	// Kubernetes/GitOps (opt-in). When ClusterEnabled, the reconciler bootstraps
 	// Argo CD into the tenant's cluster and stamps Helm deployments into it.
 	//
-	// ClusterKind selects how the reconciler reaches that cluster:
-	//   • "aks"        — the tenant's Cortex-provisioned AKS cluster, reached via
-	//                    ARM (listClusterUserCredential) + an AKS AAD token, with
-	//                    Application Gateway for Containers ingress.
-	//   • "kubeconfig" — a bring-your-own cluster (e.g. Azure Arc-connected) the
-	//                    reconciler reaches directly from a supplied kubeconfig
-	//                    (Kubeconfig). No ARM, no AGC — ingress is the customer's.
+	// The cluster is always a Cortex-managed AKS cluster, reached via ARM
+	// (listClusterUserCredential) + an AKS AAD token, with Application Gateway
+	// for Containers ingress. There is no stored-credential path.
 	ClusterEnabled       bool
-	ClusterKind          string
 	ClusterName          string
 	ClusterResourceGroup string
-	// Kubeconfig is the decoded bring-your-own cluster kubeconfig (ClusterKind
-	// "kubeconfig"). Supplied base64-encoded via KUBECONFIG_BASE64 so it survives
-	// transport as a container secret without newline/escaping hazards.
-	Kubeconfig    []byte
-	ArgoCDVersion string
+	ArgoCDVersion        string
 
 	// AppsDomain, when set, is the DNS suffix for per-app hosts served by the
 	// Azure Application Gateway (<app>.<AppsDomain>). Empty ⇒ host-less Ingress.
@@ -93,16 +77,6 @@ func Load() Config {
 	if argocd == "" {
 		argocd = defaultArgoCDVersion
 	}
-	clusterKind := strings.ToLower(strings.TrimSpace(env("CLUSTER_KIND")))
-	if clusterKind != ClusterKindKubeconfig {
-		clusterKind = ClusterKindAKS
-	}
-	var kubeconfig []byte
-	if raw := strings.TrimSpace(env("KUBECONFIG_BASE64")); raw != "" {
-		if b, err := base64.StdEncoding.DecodeString(raw); err == nil {
-			kubeconfig = b
-		}
-	}
 	return Config{
 		ControlPlaneURL:    strings.TrimRight(env("CONTROL_PLANE_URL"), "/"),
 		CortexAPIScope:     env("CORTEX_API_SCOPE"),
@@ -120,10 +94,8 @@ func Load() Config {
 		PollInterval:       time.Duration(poll) * time.Second,
 
 		ClusterEnabled:       strings.EqualFold(strings.TrimSpace(env("CLUSTER_ENABLED")), "true"),
-		ClusterKind:          clusterKind,
 		ClusterName:          strings.TrimSpace(env("CLUSTER_NAME")),
 		ClusterResourceGroup: strings.TrimSpace(env("CLUSTER_RESOURCE_GROUP")),
-		Kubeconfig:           kubeconfig,
 		ArgoCDVersion:        argocd,
 
 		AppsDomain: strings.TrimSpace(env("APPS_DOMAIN")),
@@ -159,21 +131,13 @@ func (c Config) Missing() []string {
 	if c.PollInterval <= 0 {
 		missing = append(missing, "POLL_INTERVAL_SECONDS")
 	}
-	// The cluster is opt-in; if enabled, its address must be complete for the
-	// selected kind — an AKS cluster's ARM coordinates, or a BYO kubeconfig.
+	// The cluster is opt-in; if enabled, its ARM coordinates must be complete.
 	if c.ClusterEnabled {
-		switch c.ClusterKind {
-		case ClusterKindKubeconfig:
-			if len(c.Kubeconfig) == 0 {
-				missing = append(missing, "KUBECONFIG_BASE64")
-			}
-		default:
-			if strings.TrimSpace(c.ClusterName) == "" {
-				missing = append(missing, "CLUSTER_NAME")
-			}
-			if strings.TrimSpace(c.ClusterResourceGroup) == "" {
-				missing = append(missing, "CLUSTER_RESOURCE_GROUP")
-			}
+		if strings.TrimSpace(c.ClusterName) == "" {
+			missing = append(missing, "CLUSTER_NAME")
+		}
+		if strings.TrimSpace(c.ClusterResourceGroup) == "" {
+			missing = append(missing, "CLUSTER_RESOURCE_GROUP")
 		}
 	}
 	return missing

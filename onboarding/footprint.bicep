@@ -39,7 +39,7 @@ param tenantName string
 param controlPlaneUrl string = 'https://api.catalyst.msft.ae'
 
 @description('Entra scope/resource for the Cortex control-plane API.')
-param cortexApiScope string = 'api://33e1686e-d227-454a-9974-4978c567720b'
+param cortexApiScope string = 'api://1680be6b-9a92-4244-b800-4d3b902fecff'
 
 @description('Plan tier.')
 @allowed([ 'team', 'enterprise', 'sovereign' ])
@@ -83,14 +83,6 @@ param embeddingCapacity int = 30
 
 @description('Deploy an AKS cluster for the tenant so the reconciler can bootstrap Argo CD and run Helm/GitOps workloads.')
 param deployCluster bool = true
-
-@description('How the reconciler reaches the tenant cluster: "aks" (this footprint provisions it) or "kubeconfig" (bring your own — e.g. an Azure Arc-connected cluster — reached from a supplied kubeconfig).')
-@allowed([ 'aks', 'kubeconfig' ])
-param clusterKind string = 'aks'
-
-@description('Bring-your-own cluster kubeconfig, base64-encoded (clusterKind = kubeconfig). Must embed a CA + static token/client-cert credentials (kubectl config view --flatten). Held as a container secret; never logged. Empty for AKS.')
-@secure()
-param kubeconfigBase64 string = ''
 
 @description('AKS cluster name.')
 param clusterName string = 'cortex-aks'
@@ -372,6 +364,7 @@ resource aksUserAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' 
   }
 }
 
+
 // Network Contributor on the AKS node (MC_) resource group so the reconciler can
 // open the AGC association subnet's NSG for inbound frontend traffic (the add-on
 // leaves it denied). Scoped via a module because the node RG is AKS-created. The
@@ -392,15 +385,11 @@ module nodeResourceGroupRoles 'footprint-noderg.bicep' = if (deployCluster) {
 
 // --- Reconciler runtime -------------------------------------------------------
 
-// The cluster path is active when the footprint provisions an AKS cluster OR a
-// bring-your-own kubeconfig was supplied — either way the reconciler bootstraps
-// Argo CD and stamps the tenant's Helm deployments.
-var clusterEnabled = deployCluster || !empty(kubeconfigBase64)
+// The cluster path is active when the footprint provisions an AKS cluster — the
+// reconciler then bootstraps Argo CD and stamps the tenant's Helm deployments.
+var clusterEnabled = deployCluster
 
-// The reconciler's environment. Built as a variable so the bring-your-own
-// kubeconfig secret reference is appended only when one is supplied (a container
-// env secretRef to a non-existent secret is a deploy-time error).
-var reconcilerBaseEnv = [
+var reconcilerEnv = [
   { name: 'CONTROL_PLANE_URL', value: controlPlaneUrl }
   { name: 'CORTEX_API_SCOPE', value: cortexApiScope }
   // Selects this user-assigned identity when requesting a token.
@@ -417,19 +406,15 @@ var reconcilerBaseEnv = [
   { name: 'PLAN', value: plan }
   { name: 'POLL_INTERVAL_SECONDS', value: string(pollIntervalSeconds) }
   // Kubernetes/GitOps: the reconciler bootstraps Argo CD into the tenant cluster
-  // and stamps Argo Applications for the tenant's Helm deploys. CLUSTER_KIND
-  // selects how it reaches the cluster (aks = ARM + AGC; kubeconfig = BYO/Arc).
+  // and stamps Argo Applications for the tenant's Helm deploys. It reaches the
+  // cluster over ARM (listClusterUserCredential) + an AKS AAD token.
   { name: 'CLUSTER_ENABLED', value: string(clusterEnabled) }
-  { name: 'CLUSTER_KIND', value: clusterKind }
-  { name: 'CLUSTER_NAME', value: deployCluster ? clusterName : 'byo-cluster' }
+  { name: 'CLUSTER_NAME', value: clusterName }
   { name: 'CLUSTER_RESOURCE_GROUP', value: resourceGroup().name }
   { name: 'ARGOCD_VERSION', value: argocdVersion }
   { name: 'APPS_DOMAIN', value: appsDomain }
   { name: 'HELM_OCI_REGISTRY', value: helmOciRegistry }
 ]
-var reconcilerEnv = empty(kubeconfigBase64) ? reconcilerBaseEnv : concat(reconcilerBaseEnv, [
-  { name: 'KUBECONFIG_BASE64', secretRef: 'byo-kubeconfig' }
-])
 
 resource env 'Microsoft.App/managedEnvironments@2024-03-01' = if (deployReconcilerApp) {
   name: '${prefix}-recon-env'
@@ -458,18 +443,11 @@ resource reconciler 'Microsoft.App/containerApps@2024-03-01' = if (deployReconci
     managedEnvironmentId: env.id
     configuration: {
       activeRevisionsMode: 'Single'
-      // Outbound-only worker: no ingress. The only secret is the optional
-      // bring-your-own cluster kubeconfig (clusterKind = kubeconfig); AKS tenants
-      // authenticate to their cluster with the reconciler's identity (no secret).
-      // A private registry (e.g. ACR) is pulled with the reconciler's own
+      // Outbound-only worker: no ingress, and no secrets — the reconciler
+      // authenticates to its cluster and to Foundry with its own managed
+      // identity. A private registry (e.g. ACR) is pulled with that same
       // user-assigned identity; empty registryServer keeps the public-image
       // default (anonymous pull). The identity needs AcrPull on the registry.
-      secrets: empty(kubeconfigBase64) ? [] : [
-        {
-          name: 'byo-kubeconfig'
-          value: kubeconfigBase64
-        }
-      ]
       registries: empty(registryServer) ? [] : [
         {
           server: registryServer

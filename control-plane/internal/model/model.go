@@ -60,14 +60,9 @@ type Tenant struct {
 	ResourceGroup         string `json:"resourceGroup,omitempty"`
 	ReconcilerPrincipalID string `json:"-"` // pre-created reconciler MI oid (platform-hosted); internal
 
-	// Footprint shape: cluster_mode ('aks' | 'byo') + free-form config the admin
-	// sets before stamping (region, node size/count for AKS; the Arc/BYO cluster
-	// identifiers for byo).
-	ClusterMode     string         `json:"clusterMode"`
+	// Footprint shape: free-form config the admin sets before stamping (AKS node
+	// size/count).
 	FootprintConfig map[string]any `json:"footprintConfig,omitempty"`
-	// HasBYOKubeconfig reports whether a bring-your-own cluster kubeconfig is
-	// stored (cluster_mode 'byo'). The kubeconfig itself is never serialized.
-	HasBYOKubeconfig bool `json:"hasByoKubeconfig"`
 }
 
 // Agent is an enabled agent running in a tenant.

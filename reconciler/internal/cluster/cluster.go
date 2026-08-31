@@ -26,19 +26,11 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/inception42/cortex/shared"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
-)
-
-// Cluster kinds — how the reconciler reaches the tenant's cluster. Mirrors
-// config.ClusterKind*; kept local so this package doesn't import config.
-const (
-	kindAKS        = "aks"        // Cortex-provisioned AKS via ARM + AKS AAD token
-	kindKubeconfig = "kubeconfig" // bring-your-own (Arc) cluster via a supplied kubeconfig
 )
 
 const (
@@ -74,7 +66,6 @@ var (
 	prjGVR   = schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "appprojects"}
 	nsGVR    = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "namespaces"}
 	podGVR   = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"}
-	nodeGVR  = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "nodes"}
 	crdGVR   = schema.GroupVersionResource{Group: "apiextensions.k8s.io", Version: "v1", Resource: "customresourcedefinitions"}
 	depGVR   = schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
 	secGVR   = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "secrets"}
@@ -87,18 +78,10 @@ var (
 // Options is the full address + policy for one tenant's cluster. Grouping them
 // keeps the constructor stable as the platform surface grows.
 type Options struct {
-	// Kind selects how the reconciler reaches the cluster: "aks" (ARM + AKS AAD
-	// token, AGC ingress) or "kubeconfig" (a bring-your-own/Arc cluster reached
-	// directly from Kubeconfig, no ARM, no AGC).
-	Kind           string
 	SubscriptionID string
 	ResourceGroup  string
 	ClusterName    string
 	ArgoVersion    string
-	// Kubeconfig is the raw (decoded) bring-your-own cluster kubeconfig, used when
-	// Kind == "kubeconfig". Must carry embedded CA data + static (token or client
-	// certificate) credentials — exec/auth-provider plugins aren't supported.
-	Kubeconfig []byte
 	// AppsDomain is the DNS suffix for per-app hosts (<app>.<AppsDomain>). Empty
 	// ⇒ host-less Ingress (App Gateway default backend).
 	AppsDomain string
@@ -177,31 +160,22 @@ func (c *Client) Reconcile(ctx context.Context, apps []shared.DesiredApplication
 	status.Phase = shared.ClusterReady
 
 	// Bound tenant apps to their Argo project, then stamp each app's Argo
-	// Application. For an AKS cluster the reconciler also programs Application
-	// Gateway for Containers (a shared Gateway + per-app HTTPRoutes) and reports
-	// its FQDN. A bring-your-own (kubeconfig/Arc) cluster has no AGC — the customer
-	// owns ingress — so the reconciler stamps apps only and leaves the gateway be.
+	// Application. The reconciler also programs Application Gateway for Containers
+	// (a shared Gateway + per-app HTTPRoutes) and reports its FQDN.
 	k.ensureTenantProject(ctx)
-	if c.o.Kind != kindKubeconfig {
-		subnet := c.agcSubnetID(ctx, m.nodeResourceGroup)
-		c.ensureAGCSubnetNSG(ctx, subnet)
-		k.ensureGateway(ctx, subnet)
-		appStatuses := k.reconcileApplications(ctx, apps, c.o)
-		status.GatewayIP = k.gatewayAddress(ctx)
-		status.IngressInstalled = status.GatewayIP != ""
-		slog.Info("cluster: gateway reconcile", "nodeRG", m.nodeResourceGroup, "subnetFound", subnet != "", "address", status.GatewayIP)
-		if status.GatewayIP == "" {
-			k.diagnoseGateway(ctx)
-		}
-		// Each app's Azure infra is provisioned by the control plane (via Lighthouse)
-		// and its outputs are already merged into the Helm values by the time an app
-		// is served here — the reconciler just stamps the Argo CD Application.
-		return status, appStatuses
-	}
-
+	subnet := c.agcSubnetID(ctx, m.nodeResourceGroup)
+	c.ensureAGCSubnetNSG(ctx, subnet)
+	k.ensureGateway(ctx, subnet)
 	appStatuses := k.reconcileApplications(ctx, apps, c.o)
-	status.IngressInstalled = false
-	slog.Info("cluster: BYO kubeconfig reconcile", "cluster", c.o.ClusterName, "apps", len(appStatuses))
+	status.GatewayIP = k.gatewayAddress(ctx)
+	status.IngressInstalled = status.GatewayIP != ""
+	slog.Info("cluster: gateway reconcile", "nodeRG", m.nodeResourceGroup, "subnetFound", subnet != "", "address", status.GatewayIP)
+	if status.GatewayIP == "" {
+		k.diagnoseGateway(ctx)
+	}
+	// Each app's Azure infra is provisioned by the control plane (via Lighthouse)
+	// and its outputs are already merged into the Helm values by the time an app
+	// is served here — the reconciler just stamps the Argo CD Application.
 	return status, appStatuses
 }
 
@@ -215,9 +189,6 @@ type clusterMeta struct {
 }
 
 func (c *Client) getCluster(ctx context.Context) (clusterMeta, error) {
-	if c.o.Kind == kindKubeconfig {
-		return c.getClusterKubeconfig(ctx)
-	}
 	u := c.armURL("")
 	var body struct {
 		Properties struct {
@@ -340,9 +311,6 @@ func (c *Client) ensureAGCSubnetNSG(ctx context.Context, subnetID string) {
 // kubeClient lists the AAD (user) kubeconfig via ARM, then builds a kube client
 // that authenticates as this managed identity with an AKS AAD token.
 func (c *Client) kubeClient(ctx context.Context) (*kube, error) {
-	if c.o.Kind == kindKubeconfig {
-		return c.kubeClientKubeconfig()
-	}
 	// The ARM action is singular: listClusterUserCredential (the built-in AKS
 	// Cluster User Role grants exactly that). The plural form is a 404 that a
 	// scoped identity sees as a 403, so the cluster looks permanently unreachable.
@@ -381,84 +349,6 @@ func (c *Client) kubeClient(ctx context.Context) (*kube, error) {
 		return nil, err
 	}
 	return &kube{dyn: dyn, disco: disco}, nil
-}
-
-// --- Bring-your-own (kubeconfig / Arc) cluster ------------------------------
-
-// byoRESTConfig builds a verified REST config from the supplied bring-your-own
-// kubeconfig. It honors the kubeconfig's OWN embedded credentials (unlike the
-// AKS path, which mints an AAD token) and enforces the same TLS-safety floor as
-// parseKubeconfig: HTTPS, a pinned CA, no skip-verify. Exec / auth-provider
-// plugins are refused (no helper binary ships in the reconciler image), so the
-// kubeconfig must carry a static token or client certificate inline — produce
-// one with `kubectl config view --flatten --minify`.
-func (c *Client) byoRESTConfig() (*rest.Config, error) {
-	if len(c.o.Kubeconfig) == 0 {
-		return nil, errors.New("bring-your-own cluster: no kubeconfig provided")
-	}
-	cfg, err := clientcmd.RESTConfigFromKubeConfig(c.o.Kubeconfig)
-	if err != nil {
-		return nil, fmt.Errorf("parse kubeconfig: %w", err)
-	}
-	if !strings.HasPrefix(strings.ToLower(cfg.Host), "https://") {
-		return nil, fmt.Errorf("refusing non-HTTPS API server %q", cfg.Host)
-	}
-	if cfg.Insecure {
-		return nil, errors.New("kubeconfig sets insecure-skip-tls-verify — refusing")
-	}
-	if len(cfg.TLSClientConfig.CAData) == 0 {
-		return nil, errors.New("kubeconfig has no inline certificate authority — refusing unverified TLS (use kubectl config view --flatten)")
-	}
-	if cfg.ExecProvider != nil || cfg.AuthProvider != nil {
-		return nil, errors.New("kubeconfig uses an exec/auth-provider plugin — unsupported; use a static token or client-certificate kubeconfig")
-	}
-	if cfg.BearerToken == "" && len(cfg.TLSClientConfig.CertData) == 0 {
-		return nil, errors.New("kubeconfig has no inline credentials — embed a service-account token or client certificate (kubectl config view --flatten)")
-	}
-	cfg.Timeout = 60 * time.Second
-	return cfg, nil
-}
-
-// kubeClientKubeconfig builds a kube client for a bring-your-own cluster straight
-// from its kubeconfig.
-func (c *Client) kubeClientKubeconfig() (*kube, error) {
-	cfg, err := c.byoRESTConfig()
-	if err != nil {
-		return nil, err
-	}
-	dyn, err := dynamic.NewForConfig(cfg)
-	if err != nil {
-		return nil, err
-	}
-	disco, err := discovery.NewDiscoveryClientForConfig(cfg)
-	if err != nil {
-		return nil, err
-	}
-	return &kube{dyn: dyn, disco: disco}, nil
-}
-
-// getClusterKubeconfig reports a bring-your-own cluster's metadata by talking to
-// it directly: reachability + Kubernetes version from the discovery endpoint, and
-// node count from the API. There is no ARM provisioning state for a cluster Cortex
-// doesn't own, so a reachable cluster is reported "Succeeded".
-func (c *Client) getClusterKubeconfig(ctx context.Context) (clusterMeta, error) {
-	k, err := c.kubeClientKubeconfig()
-	if err != nil {
-		return clusterMeta{}, err
-	}
-	ver, err := k.disco.ServerVersion()
-	if err != nil {
-		return clusterMeta{}, fmt.Errorf("reach BYO cluster: %w", err)
-	}
-	nodeCount := 0
-	if list, err := k.dyn.Resource(nodeGVR).List(ctx, metav1.ListOptions{}); err == nil {
-		nodeCount = len(list.Items)
-	}
-	return clusterMeta{
-		provisioningState: "Succeeded",
-		k8sVersion:        ver.GitVersion,
-		nodeCount:         nodeCount,
-	}, nil
 }
 
 func (c *Client) armURL(suffix string) string {

@@ -38,12 +38,13 @@ func TestAuthorizeTenantEnforcesEnabledPerTenant(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create t1: %v", err)
 	}
-	defer st.DeleteTenant(ctx, t1.ID)
+	// Delete tombstones the slug; drop it too so the test DB stays clean.
+	defer func() { _ = st.DeleteTenant(ctx, t1.ID, "test"); _ = st.RemoveTombstone(ctx, t1.ID) }()
 	t2, err := st.CreatePlatformTenant(ctx, "ZZ Authz Two", "uksouth", "team", "zz-authz-sub")
 	if err != nil {
 		t.Fatalf("create t2: %v", err)
 	}
-	defer st.DeleteTenant(ctx, t2.ID)
+	defer func() { _ = st.DeleteTenant(ctx, t2.ID, "test"); _ = st.RemoveTombstone(ctx, t2.ID) }()
 
 	if err := st.AddMembership(ctx, t1.ID, "u@corp.com", "admin"); err != nil {
 		t.Fatalf("add m1: %v", err)

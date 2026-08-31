@@ -46,6 +46,12 @@ var seedSQL string
 
 var ErrNotFound = errors.New("not found")
 
+// ErrTenantDeleted is returned when a directory's tenant was deliberately
+// deleted by a platform admin. It's distinct from ErrNotFound so callers can
+// refuse the sign-in/sync rather than silently re-creating the tenant.
+var ErrTenantDeleted = errors.New("tenant deleted")
+
+
 type Store struct {
 	pool *pgxpool.Pool
 }
@@ -78,8 +84,7 @@ const tenantCols = `id, name, coalesce(tenant_id,''), region, plan, enrollment, 
 	subscription_id, reconciler_identity, foundry_project, reconciler_version, installed_at, enabled,
 	cluster_name, cluster_phase, cluster_k8s_version, cluster_argo_installed, cluster_node_count, cluster_detail,
 	cluster_ingress_installed, cluster_gateway_ip, cluster_ingress_issuer, infra_delegated, infra_detail, footprint_state, footprint_detail,
-	coalesce(hosting_mode,'delegated'), coalesce(resource_group,''), coalesce(reconciler_principal_id,''), coalesce(cluster_mode,'aks'), coalesce(footprint_config,'{}'),
-	(coalesce(byo_kubeconfig,'') <> '')`
+	coalesce(hosting_mode,'delegated'), coalesce(resource_group,''), coalesce(reconciler_principal_id,''), coalesce(footprint_config,'{}')`
 
 func scanTenant(row pgx.Row) (model.Tenant, error) {
 	var t model.Tenant
@@ -90,7 +95,7 @@ func scanTenant(row pgx.Row) (model.Tenant, error) {
 		&t.SubscriptionID, &t.ReconcilerIdentity, &t.FoundryProject, &t.ReconcilerVersion, &installedAt, &t.Enabled,
 		&t.Cluster.Name, &t.Cluster.Phase, &t.Cluster.K8sVersion, &t.Cluster.ArgoInstalled, &t.Cluster.NodeCount, &t.Cluster.Detail,
 		&t.Cluster.IngressInstalled, &t.Cluster.GatewayIP, &t.Cluster.IngressIssuer, &t.Cluster.InfraDelegated, &t.Cluster.InfraDetail, &t.Cluster.FootprintState, &t.Cluster.FootprintDetail,
-		&t.HostingMode, &t.ResourceGroup, &t.ReconcilerPrincipalID, &t.ClusterMode, &footprintConfig, &t.HasBYOKubeconfig)
+		&t.HostingMode, &t.ResourceGroup, &t.ReconcilerPrincipalID, &footprintConfig)
 	if installedAt != "" {
 		t.InstalledAt = &installedAt
 	}
@@ -256,6 +261,13 @@ func (s *Store) EnsureTenantForTID(ctx context.Context, tid, name string) (model
 	} else if !errors.Is(err, ErrNotFound) {
 		return model.Tenant{}, err
 	}
+	// A platform admin deleted this directory's tenant on purpose. Without this
+	// check the next discovery sweep, sign-in or heartbeat would recreate it.
+	if tombstoned, err := s.IsTombstoned(ctx, tid); err != nil {
+		return model.Tenant{}, err
+	} else if tombstoned {
+		return model.Tenant{}, ErrTenantDeleted
+	}
 	slug := "t-" + strings.ReplaceAll(tid, "-", "")[:12]
 	if name == "" {
 		name = "New tenant"
@@ -310,16 +322,9 @@ func (s *Store) CreatePlatformTenant(ctx context.Context, name, region, plan, su
 	return s.TenantBySlug(ctx, slug)
 }
 
-// SetFootprintConfig records a tenant's footprint shape (cluster mode + config)
-// before it's stamped. Platform admins call this from the footprint editor. For a
-// bring-your-own cluster, kubeconfig carries the credentials the reconciler uses
-// to reach it; it's stored in its own column (never in footprint_config, so it's
-// never serialized back). An empty kubeconfig leaves any stored one intact — a
-// config-only edit (e.g. changing a note) doesn't clear the credentials.
-func (s *Store) SetFootprintConfig(ctx context.Context, slug, clusterMode string, config map[string]any, kubeconfig string) error {
-	if clusterMode != "aks" && clusterMode != "byo" {
-		clusterMode = "aks"
-	}
+// SetFootprintConfig records a tenant's footprint config (AKS node sizing)
+// before it's stamped. Platform admins call this from the footprint editor.
+func (s *Store) SetFootprintConfig(ctx context.Context, slug string, config map[string]any) error {
 	raw := []byte("{}")
 	if len(config) > 0 {
 		if b, err := json.Marshal(config); err == nil {
@@ -327,11 +332,7 @@ func (s *Store) SetFootprintConfig(ctx context.Context, slug, clusterMode string
 		}
 	}
 	tag, err := s.pool.Exec(ctx,
-		`UPDATE tenants
-		 SET cluster_mode = $2,
-		     footprint_config = $3,
-		     byo_kubeconfig = CASE WHEN $4 <> '' THEN $4 ELSE byo_kubeconfig END
-		 WHERE id = $1`, slug, clusterMode, raw, strings.TrimSpace(kubeconfig))
+		`UPDATE tenants SET footprint_config = $2 WHERE id = $1`, slug, raw)
 	if err != nil {
 		return err
 	}
@@ -402,12 +403,131 @@ func (s *Store) SetTenantEnabled(ctx context.Context, slug string, enabled bool)
 	return nil
 }
 
-// DeleteTenant removes a tenant row and everything owned by it (agents, apps,
-// memberships, … cascade). The Azure footprint is torn down separately.
-func (s *Store) DeleteTenant(ctx context.Context, slug string) error {
-	_, err := s.pool.Exec(ctx, `DELETE FROM tenants WHERE id = $1`, slug)
-	return err
+// DeleteTenant removes a tenant and everything owned by it, then tombstones the
+// slug so discovery/sign-in can't resurrect it.
+//
+// Five tables reference a tenant by slug WITHOUT a foreign key, so they do not
+// cascade and would be left pointing at a tenant that no longer exists:
+// users.tenant_slug, and owner_tenant on catalog_agents, memory_stores,
+// applications and infrastructure. They're cleaned explicitly here. The FK
+// tables (agents, tenant_stores, tenant_deployments, tenant_infrastructure,
+// memberships) cascade on their own.
+//
+// Azure teardown is the caller's job and happens first — once the
+// tenant_infrastructure rows are gone, the only record of what to deprovision is
+// gone with them.
+func (s *Store) DeleteTenant(ctx context.Context, slug, deletedBy string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Capture identity for the tombstone before the row disappears.
+	var tenantID *string
+	var name string
+	if err := tx.QueryRow(ctx,
+		`SELECT tenant_id, name FROM tenants WHERE id = $1`, slug).Scan(&tenantID, &name); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return err
+	}
+
+	// Tenant-authored catalog content and any infrastructure definitions the
+	// tenant owned. Platform-authored rows (owner_tenant = '') are untouched.
+	for _, q := range []string{
+		`DELETE FROM catalog_agents WHERE owner_tenant = $1`,
+		`DELETE FROM memory_stores  WHERE owner_tenant = $1`,
+		`DELETE FROM applications   WHERE owner_tenant = $1`,
+		`DELETE FROM infrastructure WHERE owner_tenant = $1`,
+	} {
+		if _, err := tx.Exec(ctx, q, slug); err != nil {
+			return err
+		}
+	}
+	// Users keep their account but lose the tenant association.
+	if _, err := tx.Exec(ctx, `UPDATE users SET tenant_slug = NULL WHERE tenant_slug = $1`, slug); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM tenants WHERE id = $1`, slug); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO tenant_tombstones (slug, tenant_id, name, deleted_by)
+		 VALUES ($1,$2,$3,$4)
+		 ON CONFLICT (slug) DO UPDATE SET tenant_id = EXCLUDED.tenant_id,
+		                                  name       = EXCLUDED.name,
+		                                  deleted_by = EXCLUDED.deleted_by,
+		                                  deleted_at = now()`,
+		slug, tenantID, name, deletedBy); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
+
+// IsTombstoned reports whether a directory id belongs to a deliberately deleted
+// tenant. Empty tid ⇒ false (platform-hosted tenants have no directory).
+func (s *Store) IsTombstoned(ctx context.Context, tid string) (bool, error) {
+	tid = strings.TrimSpace(tid)
+	if tid == "" {
+		return false, nil
+	}
+	var n int
+	if err := s.pool.QueryRow(ctx,
+		`SELECT count(*) FROM tenant_tombstones WHERE tenant_id = $1`, tid).Scan(&n); err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+// Tombstone is a deleted tenant, surfaced so an admin can see why a delegated
+// subscription isn't reappearing — and restore it.
+type Tombstone struct {
+	Slug      string  `json:"slug"`
+	TenantID  string  `json:"tenantId,omitempty"`
+	Name      string  `json:"name"`
+	DeletedBy string  `json:"deletedBy,omitempty"`
+	DeletedAt *string `json:"deletedAt,omitempty"`
+}
+
+// Tombstones lists deleted tenants, newest first.
+func (s *Store) Tombstones(ctx context.Context) ([]Tombstone, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT slug, coalesce(tenant_id,''), name, deleted_by, to_char(deleted_at,'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+		 FROM tenant_tombstones ORDER BY deleted_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Tombstone{}
+	for rows.Next() {
+		var t Tombstone
+		var at string
+		if err := rows.Scan(&t.Slug, &t.TenantID, &t.Name, &t.DeletedBy, &at); err != nil {
+			return nil, err
+		}
+		if at != "" {
+			t.DeletedAt = &at
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// RemoveTombstone lifts a deletion, letting the tenant be discovered/onboarded
+// again on the next sweep or sign-in.
+func (s *Store) RemoveTombstone(ctx context.Context, slug string) error {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM tenant_tombstones WHERE slug = $1`, slug)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 
 // RenameTenant sets a tenant's display name (platform admins).
 func (s *Store) RenameTenant(ctx context.Context, slug, name string) error {
@@ -970,7 +1090,7 @@ func (s *Store) TenantsRegistry(ctx context.Context) ([]model.TenantRegistryRow,
 			&r.SubscriptionID, &r.ReconcilerIdentity, &r.FoundryProject, &r.ReconcilerVersion, &installedAt, &r.Enabled,
 			&r.Cluster.Name, &r.Cluster.Phase, &r.Cluster.K8sVersion, &r.Cluster.ArgoInstalled, &r.Cluster.NodeCount, &r.Cluster.Detail,
 			&r.Cluster.IngressInstalled, &r.Cluster.GatewayIP, &r.Cluster.IngressIssuer, &r.Cluster.InfraDelegated, &r.Cluster.InfraDetail, &r.Cluster.FootprintState, &r.Cluster.FootprintDetail,
-			&r.HostingMode, &r.ResourceGroup, &r.ReconcilerPrincipalID, &r.ClusterMode, &footprintConfig, &r.HasBYOKubeconfig,
+			&r.HostingMode, &r.ResourceGroup, &r.ReconcilerPrincipalID, &footprintConfig,
 			&r.EntitledAgents, &r.EntitledStores, &r.EntitledDeployments, &r.EntitledInfrastructure); err != nil {
 			return nil, err
 		}
@@ -1405,9 +1525,7 @@ type FootprintTarget struct {
 	ResourceGroup         string // per-tenant RG (platform-hosted); '' ⇒ use the config default
 	Region                string // per-tenant region; '' ⇒ use the config default
 	ReconcilerPrincipalID string // pre-created reconciler MI oid (platform-hosted)
-	ClusterMode           string // 'aks' | 'byo'
 	Config                map[string]any
-	Kubeconfig            string // bring-your-own cluster kubeconfig (cluster_mode 'byo'); raw, injected into the footprint as a secret
 }
 
 // FootprintTargets returns enabled tenants whose footprint the control plane
@@ -1419,7 +1537,7 @@ func (s *Store) FootprintTargets(ctx context.Context) ([]FootprintTarget, error)
 	rows, err := s.pool.Query(ctx,
 		`SELECT id, coalesce(tenant_id,''), coalesce(subscription_id,''), name, coalesce(footprint_state,''), coalesce(footprint_reprovision,false),
 		        coalesce(hosting_mode,'delegated'), coalesce(resource_group,''), region, coalesce(reconciler_principal_id,''),
-		        coalesce(cluster_mode,'aks'), coalesce(footprint_config,'{}'), coalesce(byo_kubeconfig,'')
+		        coalesce(footprint_config,'{}')
 		 FROM tenants
 		 WHERE enabled = true AND coalesce(subscription_id,'') <> ''
 		   AND (footprint_reprovision = true
@@ -1433,7 +1551,7 @@ func (s *Store) FootprintTargets(ctx context.Context) ([]FootprintTarget, error)
 		var t FootprintTarget
 		var config []byte
 		if err := rows.Scan(&t.Slug, &t.TenantID, &t.SubscriptionID, &t.Name, &t.State, &t.Reprovision,
-			&t.HostingMode, &t.ResourceGroup, &t.Region, &t.ReconcilerPrincipalID, &t.ClusterMode, &config, &t.Kubeconfig); err != nil {
+			&t.HostingMode, &t.ResourceGroup, &t.Region, &t.ReconcilerPrincipalID, &config); err != nil {
 			return nil, err
 		}
 		if len(config) > 0 {

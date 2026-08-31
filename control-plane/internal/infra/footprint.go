@@ -3,8 +3,8 @@ package infra
 import (
 	"context"
 	_ "embed"
-	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -68,11 +68,21 @@ func (p *Provisioner) registerProviders(ctx context.Context, sub string, namespa
 
 // footprintFeatures are the preview feature flags the footprint's AKS add-ons
 // need (Application Gateway for Containers + its managed Gateway API). They must
-// be registered before Microsoft.ContainerService is (re)registered to take
-// effect, so registerFeatures runs first in the footprint sweep.
+// be registered before the owning provider is (re)registered to take effect, so
+// registerFeatures runs first in the footprint sweep.
+//
+// AllowBringYourOwnPublicIpAddress is not optional despite the name: without it
+// the cluster's frontend public IP write fails with
+//
+//	SubscriptionNotRegisteredForFeature … Microsoft.Network/AllowBringYourOwnPublicIpAddress
+//
+// and AKS retries that PUT forever — the cluster sits in "Creating" with an
+// empty node resource group and never surfaces an error. Seen in the wild as a
+// 70-minute hang before the feature was registered by hand.
 var footprintFeatures = []struct{ ns, name string }{
 	{"Microsoft.ContainerService", "ManagedGatewayAPIPreview"},
 	{"Microsoft.ContainerService", "ApplicationLoadBalancerPreview"},
+	{"Microsoft.Network", "AllowBringYourOwnPublicIpAddress"},
 }
 
 // registerFeatures registers the preview features (idempotent, best-effort).
@@ -93,6 +103,10 @@ func (p *Provisioner) registerFeatures(ctx context.Context, sub string) {
 // Lighthouse and registers each as a (disabled) tenant, recording its
 // subscription + that the delegation is reachable. A platform admin still has to
 // enable a tenant before its footprint is provisioned.
+//
+// Deliberately-deleted tenants are skipped: RecordDelegatedTenant returns
+// ErrTenantDeleted for a tombstoned directory. Without that the delegation —
+// which lives in Azure, not here — would recreate the tenant on the next sweep.
 func (p *Provisioner) discover(ctx context.Context) {
 	subs, err := p.listManagedSubscriptions(ctx)
 	if err != nil {
@@ -101,6 +115,9 @@ func (p *Provisioner) discover(ctx context.Context) {
 	}
 	for _, s := range subs {
 		slug, err := p.store.RecordDelegatedTenant(ctx, s.tenantID, s.name, s.subscriptionID)
+		if errors.Is(err, store.ErrTenantDeleted) {
+			continue // tombstoned; leave it deleted until an admin restores it
+		}
 		if err != nil {
 			slog.Warn("provision: record delegated tenant failed", "sub", s.subscriptionID, "err", trunc(err.Error()))
 			continue
@@ -266,6 +283,42 @@ func (p *Provisioner) footprintDeploymentURL(sub, rg string) string {
 		sub, rg, footprintName, infraAPIVersion)
 }
 
+// TeardownTenant deletes the Azure resource groups a tenant owns: its footprint
+// RG (reconciler, Foundry, AKS) and its application-infra RG. Deleting the RGs is
+// the only reliable way to reclaim everything — the footprint deployment's
+// outputResources miss anything AKS created on the side (the MC_ node RG, the
+// AGC, public IPs), and those keep billing.
+//
+// Both deletes are fire-and-forget: ARM returns 202 and reclaims asynchronously.
+// A missing RG is success, so this is safe to retry.
+func (p *Provisioner) TeardownTenant(ctx context.Context, sub, hostingMode, tenantRG string) error {
+	if strings.TrimSpace(sub) == "" {
+		return nil // nothing was ever provisioned
+	}
+	rgs := []string{
+		firstNonEmpty(tenantRG, p.footprintRG),
+		p.appInfraRGFor(hostingMode, tenantRG),
+	}
+	var firstErr error
+	seen := map[string]bool{}
+	for _, rg := range rgs {
+		if rg == "" || seen[rg] {
+			continue
+		}
+		seen[rg] = true
+		url := fmt.Sprintf("https://management.azure.com/subscriptions/%s/resourcegroups/%s?api-version=%s", sub, rg, rgAPIVersion)
+		if err := p.armDelete(ctx, url); err != nil {
+			slog.Warn("teardown: delete resource group failed", "sub", sub, "rg", rg, "err", trunc(err.Error()))
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		slog.Info("teardown: resource group deletion accepted", "sub", sub, "rg", rg)
+	}
+	return firstErr
+}
+
 // createResourceGroup PUTs a resource group (idempotent) into a subscription.
 func (p *Provisioner) createResourceGroup(ctx context.Context, sub, rg, region string) error {
 	if region == "" {
@@ -278,17 +331,15 @@ func (p *Provisioner) createResourceGroup(ctx context.Context, sub, rg, region s
 
 // submitFootprint deploys the footprint template with the platform's parameters.
 // For platform-hosted tenants it passes the pre-created reconciler identity and
-// flags the deployment same-tenant (isDelegated=false). cluster_mode drives
-// whether an AKS cluster is provisioned ('aks') or skipped ('byo' — bring your
-// own; the footprint deploys only the reconciler + Foundry). The cluster + Foundry
-// deploy in the tenant's region; footprint_config supplies only optional AKS node
+// flags the deployment same-tenant (isDelegated=false). The Foundry project
+// deploys in the tenant's region; footprint_config supplies optional AKS node
 // sizing (nodeCount, nodeVmSize).
+//
 func (p *Provisioner) submitFootprint(ctx context.Context, sub, rg string, t store.FootprintTarget, region, reconcilerIdentityResourceID string, isDelegated bool) error {
 	var template map[string]any
 	if err := json.Unmarshal(footprintTemplate, &template); err != nil {
 		return fmt.Errorf("footprint template invalid: %w", err)
 	}
-	deployCluster := !strings.EqualFold(t.ClusterMode, "byo")
 	params := map[string]any{
 		"tenantName":      map[string]any{"value": firstNonEmpty(t.Name, "Cortex tenant")},
 		"controlPlaneUrl": map[string]any{"value": p.controlPlaneURL},
@@ -296,17 +347,7 @@ func (p *Provisioner) submitFootprint(ctx context.Context, sub, rg string, t sto
 		"reconcilerImage": map[string]any{"value": p.reconcilerImage},
 		"isDelegated":     map[string]any{"value": isDelegated},
 		"tenantSlug":      map[string]any{"value": t.Slug},
-		"deployCluster":   map[string]any{"value": deployCluster},
-	}
-	// Bring-your-own cluster: the reconciler reaches it directly from the supplied
-	// kubeconfig (base64-encoded for safe transport as a container secret). Without
-	// a kubeconfig the footprint still deploys (reconciler + Foundry only); the
-	// reconciler runs Foundry-only until one is provided.
-	if !deployCluster {
-		params["clusterKind"] = map[string]any{"value": "kubeconfig"}
-		if kc := strings.TrimSpace(t.Kubeconfig); kc != "" {
-			params["kubeconfigBase64"] = map[string]any{"value": base64.StdEncoding.EncodeToString([]byte(kc))}
-		}
+		"deployCluster":   map[string]any{"value": true},
 	}
 	// The cluster + Foundry follow the tenant's region.
 	if region != "" {
@@ -317,13 +358,11 @@ func (p *Provisioner) submitFootprint(ctx context.Context, sub, rg string, t sto
 	}
 	// Optional AKS node sizing from the admin-set footprint config (region is NOT
 	// a footprint field — it follows the tenant).
-	if deployCluster {
-		if v := configString(t.Config, "nodeVmSize"); v != "" {
-			params["nodeVmSize"] = map[string]any{"value": v}
-		}
-		if n := configInt(t.Config, "nodeCount"); n > 0 {
-			params["nodeCount"] = map[string]any{"value": n}
-		}
+	if v := configString(t.Config, "nodeVmSize"); v != "" {
+		params["nodeVmSize"] = map[string]any{"value": v}
+	}
+	if n := configInt(t.Config, "nodeCount"); n > 0 {
+		params["nodeCount"] = map[string]any{"value": n}
 	}
 	payload, err := json.Marshal(map[string]any{
 		"properties": map[string]any{"mode": "Incremental", "template": template, "parameters": params},

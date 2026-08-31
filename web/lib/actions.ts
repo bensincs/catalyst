@@ -220,14 +220,13 @@ export async function renameTenant(slug: string, name: string): Promise<ActionRe
   );
 }
 
-// Save a tenant's footprint shape (cluster mode + config) before stamping.
+// Save a tenant's footprint config (AKS node shape) before stamping.
 export async function saveFootprintConfig(
   slug: string,
-  clusterMode: string,
   config: Record<string, unknown>,
 ): Promise<ActionResult> {
   return run(
-    () => apiSend("PATCH", `/api/tenants/${encodeURIComponent(slug)}/footprint`, { clusterMode, config }),
+    () => apiSend("PATCH", `/api/tenants/${encodeURIComponent(slug)}/footprint`, { config }),
     [`/tenants/${slug}`],
   );
 }
@@ -240,6 +239,27 @@ export async function stampFootprint(slug: string): Promise<ActionResult> {
     [`/tenants/${slug}`, "/"],
   );
 }
+
+// Delete a tenant: tears down its Azure resource groups, removes its Cortex
+// records and tombstones the slug so Lighthouse discovery can't recreate it.
+// purgeAzure=false keeps the Azure resources and removes only the records.
+// Platform admins only.
+export async function deleteTenant(slug: string, purgeAzure = true): Promise<ActionResult> {
+  const q = purgeAzure ? "" : "?purgeAzure=false";
+  return run(
+    () => apiSend("DELETE", `/api/tenants/${encodeURIComponent(slug)}${q}`),
+    ["/", "/tenants"],
+  );
+}
+
+// Lift a deletion so the tenant can be discovered/onboarded again.
+export async function restoreTenant(slug: string): Promise<ActionResult> {
+  return run(
+    () => apiSend("DELETE", `/api/tenant-tombstones/${encodeURIComponent(slug)}`),
+    ["/", "/tenants"],
+  );
+}
+
 
 /* ── Agents ───────────────────────────────────────────────────────────────── */
 

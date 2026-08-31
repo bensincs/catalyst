@@ -442,21 +442,17 @@ CREATE TABLE IF NOT EXISTS memberships (
 CREATE INDEX IF NOT EXISTS memberships_oid_idx   ON memberships(oid);
 CREATE INDEX IF NOT EXISTS memberships_email_idx ON memberships(lower(email));
 
--- ── Footprint: cluster mode + deferred, configurable stamping ───────────────
+-- ── Footprint: deferred, configurable stamping ─────────────────────────────
 -- A tenant's footprint isn't auto-stamped for platform-created tenants: it starts
--- as 'draft' so a platform admin can configure it (cluster_mode + footprint_config)
--- and then explicitly stamp it. cluster_mode is 'aks' (Cortex provisions an AKS
--- cluster) or 'byo' (bring your own — e.g. an Azure Arc-connected cluster; Cortex
--- deploys only the reconciler + Foundry and wires them to the existing cluster).
-ALTER TABLE tenants ADD COLUMN IF NOT EXISTS cluster_mode     text  NOT NULL DEFAULT 'aks';
+-- as 'draft' so a platform admin can configure it (footprint_config) and then
+-- explicitly stamp it.
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS footprint_config jsonb NOT NULL DEFAULT '{}';
 
--- Bring-your-own (cluster_mode = 'byo') cluster kubeconfig: the reconciler reaches
--- the customer's (e.g. Arc-connected) cluster directly with these credentials.
--- Held in its own column (never in footprint_config) so it's never serialized to
--- the console API — only a presence flag is; the control plane base64-encodes it
--- into the footprint deployment as a container secret.
-ALTER TABLE tenants ADD COLUMN IF NOT EXISTS byo_kubeconfig text NOT NULL DEFAULT '';
+-- Bring-your-own (Arc) clusters are gone: every tenant cluster is an AKS cluster
+-- Cortex provisions or manages, reached over ARM + Entra (never a stored
+-- kubeconfig). Drop the columns that backed the removed 'byo' cluster mode.
+ALTER TABLE tenants DROP COLUMN IF EXISTS cluster_mode;
+ALTER TABLE tenants DROP COLUMN IF EXISTS byo_kubeconfig;
 
 -- Migrate memberships from the original email-only shape (PK on email) to a
 -- generic principal key, so a user can be assigned by object id too. Idempotent:
@@ -478,4 +474,26 @@ BEGIN
   END IF;
 END $$;
 
+-- ── Tenant tombstones ──────────────────────────────────────────────────────
+-- A deleted tenant would otherwise come straight back: the provisioner's
+-- discover() sweep re-registers every Lighthouse-delegated subscription every
+-- ~30s, and EnsureTenantForTID derives the slug deterministically from the Entra
+-- directory id — so the row reappears with the SAME slug, and any sign-in or
+-- reconciler heartbeat from that directory revives it too. The Lighthouse
+-- delegation lives in Azure, not here, so deleting the row cannot undo it.
+--
+-- A tombstone records "a platform admin deleted this on purpose". Both the
+-- discovery sweep and the just-in-time tenant creation consult it and refuse to
+-- resurrect. Removing the tombstone (restore) lets the tenant be onboarded again.
+CREATE TABLE IF NOT EXISTS tenant_tombstones (
+  slug       text PRIMARY KEY,
+  tenant_id  text,                       -- Entra directory id, when the tenant had one
+  name       text NOT NULL DEFAULT '',   -- last known display name, for the console
+  deleted_by text NOT NULL DEFAULT '',
+  deleted_at timestamptz NOT NULL DEFAULT now()
+);
 
+-- Looked up by directory id on every EnsureTenantForTID, so index it. Partial:
+-- platform-hosted tenants have no directory id.
+CREATE INDEX IF NOT EXISTS tenant_tombstones_tid_idx
+  ON tenant_tombstones (tenant_id) WHERE tenant_id IS NOT NULL;

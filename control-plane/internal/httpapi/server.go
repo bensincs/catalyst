@@ -62,6 +62,18 @@ type Server struct {
 	entraIssuerHost string // Entra issuer host (cloud-specific), for per-tenant issuers
 	platformTID     string // the platform's own directory (ingress issuer for platform-hosted tenants)
 	platformSub     string // the platform's own subscription (where platform-hosted tenants are created)
+
+	// tenantTeardown deletes a tenant's Azure resource groups. Injected by main
+	// from the infra provisioner (which owns the ARM credential); nil when
+	// cross-tenant provisioning is off, in which case deleting a tenant removes
+	// only its control-plane records.
+	tenantTeardown func(ctx context.Context, sub, hostingMode, tenantRG string) error
+}
+
+// SetTenantTeardown wires the Azure teardown used when a tenant is deleted. The
+// provisioner is constructed after the server, so this can't be a constructor arg.
+func (s *Server) SetTenantTeardown(fn func(ctx context.Context, sub, hostingMode, tenantRG string) error) {
+	s.tenantTeardown = fn
 }
 
 func NewServer(st *store.Store, a *auth.Authenticator, recon *auth.ReconAuthenticator, corsOrigin, entraClientID, entraIssuerHost, platformTID, platformSub string) *Server {
@@ -129,6 +141,11 @@ func (s *Server) Router() http.Handler {
 			r.Patch("/tenants/{slug}/enabled", s.handleSetTenantEnabled)
 			r.Patch("/tenants/{slug}/name", s.handleRenameTenant)
 			r.Post("/tenants/{slug}/reprovision", s.handleReprovisionFootprint)
+			r.Delete("/tenants/{slug}", s.handleDeleteTenant)
+			// Deleted tenants: listed so an admin can see why a delegated
+			// subscription isn't reappearing, and lift the deletion.
+			r.Get("/tenant-tombstones", s.handleListTombstones)
+			r.Delete("/tenant-tombstones/{slug}", s.handleRestoreTenant)
 			// Footprint editor: configure the cluster shape, then stamp it.
 			r.Patch("/tenants/{slug}/footprint", s.handleSetFootprintConfig)
 			r.Post("/tenants/{slug}/footprint/stamp", s.handleStampFootprint)
@@ -198,11 +215,15 @@ func (s *Server) accessibleTenants(ctx context.Context, id model.Identity) ([]mo
 	// directory's delegated tenant — JIT-create it so it surfaces for approval.
 	if !strings.EqualFold(id.TID, s.platformTID) {
 		t, err := s.store.EnsureTenantForTID(ctx, id.TID, orgNameFromEmail(id.Email))
-		if err != nil {
+		// A deleted tenant isn't an error here — the caller simply owns no
+		// directory tenant. Any explicit memberships below still apply.
+		if err != nil && !errors.Is(err, store.ErrTenantDeleted) {
 			return nil, nil, err
 		}
-		seen[t.ID] = true
-		out = append(out, t)
+		if err == nil {
+			seen[t.ID] = true
+			out = append(out, t)
+		}
 	}
 	members, err := s.store.MembershipTenants(ctx, id.OID, id.Email)
 	if err != nil {
@@ -247,6 +268,16 @@ func (s *Server) tenantGate(next http.Handler) http.Handler {
 		// must be enabled. JIT-create it so it surfaces for approval.
 		if !strings.EqualFold(id.TID, s.platformTID) {
 			t, err := s.store.EnsureTenantForTID(r.Context(), id.TID, orgNameFromEmail(id.Email))
+			if errors.Is(err, store.ErrTenantDeleted) {
+				// Deleted on purpose. Fall through to memberships rather than
+				// silently re-creating the tenant this caller just lost.
+				if member, _ := s.store.HasEnabledMembership(r.Context(), id.OID, id.Email); member {
+					next.ServeHTTP(w, r)
+					return
+				}
+				writeJSON(w, http.StatusForbidden, map[string]string{"error": "tenant deleted", "code": "tenant_deleted"})
+				return
+			}
 			if err != nil {
 				s.fail(w, r, err)
 				return
@@ -302,6 +333,12 @@ func (s *Server) reconGate(next http.Handler) http.Handler {
 			}
 			// Delegated: the tenant is the token's own directory.
 			t, err = s.store.EnsureTenantForTID(r.Context(), id.TID, "")
+		}
+		if errors.Is(err, store.ErrTenantDeleted) {
+			// The tenant was deleted while its reconciler was still running.
+			// Refuse the sync so it stops, rather than resurrecting the tenant.
+			writeErr(w, http.StatusForbidden, "tenant deleted")
+			return
 		}
 		if err != nil {
 			s.fail(w, r, err)
@@ -750,6 +787,98 @@ func (s *Server) handleRenameTenant(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "renamed"})
 }
 
+// handleDeleteTenant removes a tenant, tears down its Azure resource groups and
+// tombstones the slug so discovery can't bring it back (platform only).
+//
+// Order matters: Azure first. The tenant_infrastructure rows are the only record
+// of what was provisioned and they cascade away with the tenant, so deleting the
+// row first would strand live, billing resources with nothing pointing at them.
+//
+// ?purgeAzure=false keeps the Azure resources and removes only the Cortex
+// records — for when the subscription is being handed back intact.
+func (s *Server) handleDeleteTenant(w http.ResponseWriter, r *http.Request) {
+	id, _ := auth.IdentityFrom(r.Context())
+	if !s.requirePlatform(w, id) {
+		return
+	}
+	slug := chi.URLParam(r, "slug")
+	t, err := s.store.TenantBySlug(r.Context(), slug)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "tenant not found")
+			return
+		}
+		s.fail(w, r, err)
+		return
+	}
+
+	purge := r.URL.Query().Get("purgeAzure") != "false"
+	azureTornDown := false
+	if purge && s.tenantTeardown != nil {
+		if err := s.tenantTeardown(r.Context(), t.SubscriptionID, t.HostingMode, t.ResourceGroup); err != nil {
+			// Refuse to delete the records while their Azure counterparts may
+			// still exist — otherwise the resources are orphaned and unbillable
+			// to anyone. The admin can retry, or pass purgeAzure=false.
+			writeErr(w, http.StatusBadGateway,
+				"couldn't delete the tenant's Azure resource groups: "+err.Error()+
+					" — retry, or use ?purgeAzure=false to remove only the Cortex records")
+			return
+		}
+		azureTornDown = true
+	}
+
+	who := id.Email
+	if who == "" {
+		who = id.OID
+	}
+	if err := s.store.DeleteTenant(r.Context(), slug, who); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "tenant not found")
+			return
+		}
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":        "deleted",
+		"azureTornDown": azureTornDown,
+	})
+}
+
+// handleListTombstones lists deleted tenants (platform only).
+func (s *Server) handleListTombstones(w http.ResponseWriter, r *http.Request) {
+	id, _ := auth.IdentityFrom(r.Context())
+	if !s.requirePlatform(w, id) {
+		return
+	}
+	ts, err := s.store.Tombstones(r.Context())
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"tombstones": ts})
+}
+
+// handleRestoreTenant lifts a deletion so the tenant can be discovered or signed
+// into again (platform only). It does not restore any data — a delegated tenant
+// simply reappears, disabled, on the next sweep.
+func (s *Server) handleRestoreTenant(w http.ResponseWriter, r *http.Request) {
+	id, _ := auth.IdentityFrom(r.Context())
+	if !s.requirePlatform(w, id) {
+		return
+	}
+	if err := s.store.RemoveTombstone(r.Context(), chi.URLParam(r, "slug")); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "no such deleted tenant")
+			return
+		}
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "restored"})
+}
+
+
 // handleSearchUsers returns previously-signed-in users matching a query, for the
 // members type-ahead (platform only).
 func (s *Server) handleSearchUsers(w http.ResponseWriter, r *http.Request) {
@@ -765,35 +894,20 @@ func (s *Server) handleSearchUsers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"users": users})
 }
 
-// handleSetFootprintConfig records a tenant's footprint shape — cluster mode
-// (aks|byo) + config — before it's stamped (platform only).
+// handleSetFootprintConfig records a tenant's footprint config (AKS node sizing)
+// before it's stamped (platform only).
 func (s *Server) handleSetFootprintConfig(w http.ResponseWriter, r *http.Request) {
 	id, _ := auth.IdentityFrom(r.Context())
 	if !s.requirePlatform(w, id) {
 		return
 	}
 	var body struct {
-		ClusterMode string         `json:"clusterMode"`
-		Config      map[string]any `json:"config"`
+		Config map[string]any `json:"config"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
 	}
-	// The bring-your-own cluster kubeconfig rides in the config map from the editor
-	// but is persisted separately (its own column, never serialized back), so pull
-	// it out here. A blank value leaves any stored kubeconfig intact.
-	kubeconfig := ""
-	if body.Config != nil {
-		if v, ok := body.Config["kubeconfig"].(string); ok {
-			kubeconfig = strings.TrimSpace(v)
-			delete(body.Config, "kubeconfig")
-		}
-	}
-	if kubeconfig != "" && !looksLikeKubeconfig(kubeconfig) {
-		writeErr(w, http.StatusBadRequest, "that doesn't look like a kubeconfig — expected YAML with clusters/server and inline credentials (kubectl config view --flatten)")
-		return
-	}
-	if err := s.store.SetFootprintConfig(r.Context(), chi.URLParam(r, "slug"), body.ClusterMode, body.Config, kubeconfig); err != nil {
+	if err := s.store.SetFootprintConfig(r.Context(), chi.URLParam(r, "slug"), body.Config); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			writeErr(w, http.StatusNotFound, "tenant not found")
 			return
@@ -804,14 +918,6 @@ func (s *Server) handleSetFootprintConfig(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, map[string]string{"status": "saved"})
 }
 
-// looksLikeKubeconfig is a light sanity check so an obviously-wrong paste is
-// rejected at save time rather than surfacing as an unreachable cluster later. It
-// deliberately doesn't fully parse (the reconciler enforces the real constraints:
-// HTTPS, inline CA, static credentials).
-func looksLikeKubeconfig(s string) bool {
-	return strings.Contains(s, "clusters") && strings.Contains(s, "server")
-}
-
 // handleStampFootprint queues a tenant's footprint for provisioning — the
 // deferred "stamp" a platform admin presses after configuring it (platform only).
 func (s *Server) handleStampFootprint(w http.ResponseWriter, r *http.Request) {
@@ -820,15 +926,6 @@ func (s *Server) handleStampFootprint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slug := chi.URLParam(r, "slug")
-	// A bring-your-own cluster can't be stamped without the kubeconfig the
-	// reconciler needs to reach it — fail clearly instead of deploying a
-	// reconciler that reports the cluster unreachable.
-	if t, err := s.store.TenantBySlug(r.Context(), slug); err == nil {
-		if t.ClusterMode == "byo" && !t.HasBYOKubeconfig {
-			writeErr(w, http.StatusBadRequest, "bring-your-own cluster requires a kubeconfig — add one before stamping")
-			return
-		}
-	}
 	if err := s.store.StampFootprint(r.Context(), slug); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			writeErr(w, http.StatusNotFound, "tenant not found or has no subscription")
