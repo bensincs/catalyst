@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -99,7 +100,20 @@ func (s *Server) Router() http.Handler {
 	r.Use(middleware.Recoverer)
 	r.Use(s.cors)
 
-	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+	// Health must include the database. Every route except this one needs it, so
+	// a bare 200 here reports "healthy" while the API can serve nothing — which
+	// is exactly what happened when the Postgres server was stopped underneath
+	// it: healthz stayed green while every real request hung until timeout.
+	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+		defer cancel()
+		if err := s.store.Ping(ctx); err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+				"status": "degraded",
+				"error":  "database unreachable",
+			})
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 

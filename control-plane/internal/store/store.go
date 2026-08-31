@@ -69,6 +69,11 @@ func New(ctx context.Context, dsn string) (*Store, error) {
 
 func (s *Store) Close() { s.pool.Close() }
 
+// Ping checks the database is actually reachable. Used by the health endpoint:
+// the API is useless without it, so reporting healthy while it is unreachable is
+// worse than reporting nothing.
+func (s *Store) Ping(ctx context.Context) error { return s.pool.Ping(ctx) }
+
 // migrationLockID namespaces the advisory lock Migrate serialises on. Arbitrary
 // but fixed — every process migrating this database must use the same value.
 const migrationLockID int64 = 8265719004321
