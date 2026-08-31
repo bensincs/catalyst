@@ -69,8 +69,39 @@ func New(ctx context.Context, dsn string) (*Store, error) {
 
 func (s *Store) Close() { s.pool.Close() }
 
+// migrationLockID namespaces the advisory lock Migrate serialises on. Arbitrary
+// but fixed — every process migrating this database must use the same value.
+const migrationLockID int64 = 8265719004321
+
+// Migrate applies the embedded schema. Idempotent, and safe to run concurrently.
+//
+// CREATE TABLE IF NOT EXISTS is NOT atomic against another session creating the
+// same table: both see it missing, both attempt it, and the loser fails with
+//
+//	duplicate key value violates unique constraint "pg_type_typname_nsp_index"
+//
+// which is exactly what happens when two processes migrate at once — parallel
+// test packages sharing one database, or two API replicas booting together (the
+// container app runs 1-3). Take a session-level advisory lock so migrations
+// queue behind each other instead of racing.
 func (s *Store) Migrate(ctx context.Context) error {
-	_, err := s.pool.Exec(ctx, schemaSQL)
+	// The lock is per-connection, so the schema must run on the same one.
+	conn, err := s.pool.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Release()
+
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, migrationLockID); err != nil {
+		return err
+	}
+	defer func() {
+		// Release even if ctx is already done, else the lock is held until the
+		// connection is reaped.
+		_, _ = conn.Exec(context.WithoutCancel(ctx), `SELECT pg_advisory_unlock($1)`, migrationLockID)
+	}()
+
+	_, err = conn.Exec(ctx, schemaSQL)
 	return err
 }
 
