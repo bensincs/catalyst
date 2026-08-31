@@ -2,7 +2,7 @@
 
 import { useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { AlertTriangle, Rocket, Plus, Trash2, Pencil, Power, GitBranch } from "lucide-react";
+import { AlertTriangle, ExternalLink, Rocket, Plus, Trash2, Pencil, Power, GitBranch } from "lucide-react";
 import { PageHeader } from "@/components/ui/page-header";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -37,10 +37,14 @@ export function DeploymentsView({
   role,
   applications,
   cluster,
+  appsDomain,
 }: {
   role: Role;
   applications: Application[];
   cluster?: ClusterInfo;
+  /** The tenant's delegated domain. Apps are published at
+   *  <hostname>.<appsDomain>; without one nothing is reachable. */
+  appsDomain?: string;
 }) {
   const router = useRouter();
   const { toast } = useToast();
@@ -130,6 +134,31 @@ export function DeploymentsView({
                   {a.description && <p className={styles.rowDesc}>{a.description}</p>}
                   {/* Argo's reason, when it has one — otherwise the row just
                       reads "Degraded" and the cause needs cluster access. */}
+                  {/* The address the app actually answers on. Without this the
+                      row says "live" and gives no way to reach it. */}
+                  {!platform && a.enabled && a.exposeService && appsDomain && (
+                    <p className={styles.rowDesc} style={{ marginTop: 4 }}>
+                      <a
+                        href={`https://${(a.hostname || a.name).toLowerCase()}.${appsDomain}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+                      >
+                        <ExternalLink size={13} aria-hidden />
+                        {(a.hostname || a.name).toLowerCase()}.{appsDomain}
+                      </a>
+                      {a.authRequired ? (
+                        <span style={{ marginLeft: 8, color: "var(--text-secondary)", fontSize: 12 }}>
+                          · requires sign-in
+                        </span>
+                      ) : null}
+                    </p>
+                  )}
+                  {!platform && a.enabled && a.exposeService && !appsDomain && (
+                    <p className={styles.rowDesc} style={{ marginTop: 4, color: "var(--text-secondary)" }}>
+                      Not reachable — no domain is delegated for this tenant yet.
+                    </p>
+                  )}
                   {!platform && a.enabled && a.detail && (
                     <p className={styles.rowError}>
                       <AlertTriangle size={14} aria-hidden />

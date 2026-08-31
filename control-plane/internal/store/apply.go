@@ -37,10 +37,11 @@ func insertInfrastructure(ctx context.Context, q querier, i model.Infrastructure
 
 func insertApplication(ctx context.Context, q querier, a model.Application, createdBy string) error {
 	_, err := q.Exec(ctx,
-		`INSERT INTO applications (id, name, description, owner_tenant, namespace, repo_url, chart, target_revision, values, expose_service, expose_port, wiring, dependencies, created_by)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+		`INSERT INTO applications (id, name, description, owner_tenant, namespace, repo_url, chart, target_revision, values, expose_service, expose_port, hostname, oidc_scope, auth_required, wiring, dependencies, created_by)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
 		a.ID, a.Name, a.Description, a.Owner, a.Namespace, a.RepoURL, a.Chart, a.TargetRevision, a.Values,
-		a.ExposeService, a.ExposePort, wiringJSON(a.Wiring), depsJSON(a.Dependencies), createdBy)
+		a.ExposeService, a.ExposePort, a.Hostname, a.OIDCScope, a.AuthRequired,
+		wiringJSON(a.Wiring), depsJSON(a.Dependencies), createdBy)
 	return err
 }
 

@@ -511,3 +511,47 @@ CREATE TABLE IF NOT EXISTS tenant_tombstones (
 -- platform-hosted tenants have no directory id.
 CREATE INDEX IF NOT EXISTS tenant_tombstones_tid_idx
   ON tenant_tombstones (tenant_id) WHERE tenant_id IS NOT NULL;
+
+-- ── Tenant ingress: delegated DNS zone, wildcard TLS, app OIDC ──────────────
+-- Apps are only reachable on a domain the tenant delegates to us. The customer
+-- sets NS records once; from then on the control plane owns the zone and does
+-- every DNS and certificate operation itself.
+--
+-- Deliberately control-plane-side: the zone lives in the PLATFORM subscription,
+-- where the control-plane identity already holds Contributor. A tenant cluster
+-- therefore needs no DNS credential and no DNS awareness, which is what makes
+-- this behave identically for Lighthouse-delegated and platform-hosted tenants
+-- (a delegated cluster sits in the customer's directory and could not be granted
+-- rights on our zone — the same cross-directory wall that rules out shared
+-- clusters).
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS apps_domain     text NOT NULL DEFAULT '';
+-- '' | pending (zone created, NS not yet observed) | verified | failed
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS dns_state       text NOT NULL DEFAULT '';
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS dns_detail      text NOT NULL DEFAULT '';
+-- The nameservers Azure assigned the zone — what the customer must set at their
+-- registrar, and what delegation is verified against.
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS dns_nameservers text[] NOT NULL DEFAULT '{}';
+
+-- Wildcard certificate for *.<apps_domain>, obtained by the control plane over
+-- ACME DNS-01 (possible only because we hold the zone) and shipped to the
+-- cluster on /recon/sync. One cert per tenant covers every app, so adding an app
+-- needs no DNS record and no certificate.
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS tls_cert        text NOT NULL DEFAULT '';
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS tls_key         text NOT NULL DEFAULT '';
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS tls_expires_at  timestamptz;
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS tls_detail      text NOT NULL DEFAULT '';
+-- The ACME account key, so renewals reuse one registration per tenant.
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS acme_account_key text NOT NULL DEFAULT '';
+
+-- The customer's OIDC application, used to put every exposed app behind a login.
+-- One app registration per tenant; each app names its own scope on it.
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS oidc_issuer        text NOT NULL DEFAULT '';
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS oidc_client_id     text NOT NULL DEFAULT '';
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS oidc_client_secret text NOT NULL DEFAULT '';
+
+-- Per-app publishing: the label under the tenant's domain (<hostname>.<domain>),
+-- the scope on the tenant's app registration this app requires, and whether the
+-- gateway puts it behind a login at all.
+ALTER TABLE applications ADD COLUMN IF NOT EXISTS hostname      text NOT NULL DEFAULT '';
+ALTER TABLE applications ADD COLUMN IF NOT EXISTS oidc_scope    text NOT NULL DEFAULT '';
+ALTER TABLE applications ADD COLUMN IF NOT EXISTS auth_required boolean NOT NULL DEFAULT false;

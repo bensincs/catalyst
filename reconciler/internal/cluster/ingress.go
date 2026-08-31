@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"github.com/inception42/cortex/shared"
 )
 
 // Tenant Helm apps are bounded to an Argo project and exposed through Application
@@ -29,6 +31,21 @@ func sysLabels(extra map[string]any) map[string]any {
 		m[k] = v
 	}
 	return m
+}
+
+// appHostFor is the public host an app is published at, within the tenant's
+// delegated domain: <hostname>.<appsDomain>, defaulting the label to the app's
+// own name. Empty when no domain is configured — apps are published only on a
+// domain the tenant delegated, so there is nothing to route to otherwise.
+func appHostFor(a shared.DesiredApplication, name string, ing *shared.IngressConfig) string {
+	if ing == nil || strings.TrimSpace(ing.AppsDomain) == "" {
+		return ""
+	}
+	label := strings.ToLower(strings.TrimSpace(a.Hostname))
+	if label == "" {
+		label = name
+	}
+	return label + "." + strings.TrimSpace(ing.AppsDomain)
 }
 
 // appHost is the per-app public host (<app>.<AppsDomain>) used as the HTTPRoute

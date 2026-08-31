@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"encoding/base64"
 	"strings"
 	"testing"
 
@@ -80,7 +81,7 @@ func TestAppRouteDefaultsPortAndHostless(t *testing.T) {
 }
 
 func TestGatewayBindsToALB(t *testing.T) {
-	gw := gateway()
+	gw := gateway("", false)
 	if got, _, _ := unstructured.NestedString(gw.Object, "spec", "gatewayClassName"); got != gatewayClass {
 		t.Fatalf("gatewayClassName = %q", got)
 	}
@@ -92,6 +93,67 @@ func TestGatewayBindsToALB(t *testing.T) {
 	assoc, _, _ := unstructured.NestedSlice(alb.Object, "spec", "associations")
 	if len(assoc) != 1 || assoc[0] != "/subscriptions/s/…/subnets/aks-appgateway" {
 		t.Fatalf("associations = %v", assoc)
+	}
+
+	// Without a certificate there must be exactly one listener: an HTTPS listener
+	// referencing a Secret that doesn't exist is rejected outright by AGC, which
+	// would take the whole gateway down rather than just TLS.
+	ls, _, _ := unstructured.NestedSlice(gw.Object, "spec", "listeners")
+	if len(ls) != 1 {
+		t.Fatalf("expected only the HTTP listener before a cert exists, got %d", len(ls))
+	}
+
+	// With one, the wildcard HTTPS listener appears alongside it.
+	gw = gateway("apps.contoso.com", true)
+	ls, _, _ = unstructured.NestedSlice(gw.Object, "spec", "listeners")
+	if len(ls) != 2 {
+		t.Fatalf("expected http + https listeners, got %d", len(ls))
+	}
+	https, _ := ls[1].(map[string]any)
+	if https["hostname"] != "*.apps.contoso.com" || https["port"] != int64(443) {
+		t.Fatalf("https listener = %v", https)
+	}
+}
+
+func TestAppHostFor(t *testing.T) {
+	ing := &shared.IngressConfig{AppsDomain: "apps.contoso.com"}
+	// An explicit label wins; otherwise the app's own name is used.
+	if got := appHostFor(shared.DesiredApplication{Hostname: "shop"}, "todo", ing); got != "shop.apps.contoso.com" {
+		t.Fatalf("explicit hostname = %q", got)
+	}
+	if got := appHostFor(shared.DesiredApplication{}, "todo", ing); got != "todo.apps.contoso.com" {
+		t.Fatalf("defaulted hostname = %q", got)
+	}
+	// No delegated domain ⇒ nothing is published. This is the designed state,
+	// not an error: apps are only reachable on a domain the tenant delegated.
+	if got := appHostFor(shared.DesiredApplication{}, "todo", nil); got != "" {
+		t.Fatalf("expected no host without a domain, got %q", got)
+	}
+}
+
+func TestCookieSecretIsStableAndSized(t *testing.T) {
+	// Must not change between reconciles — a rotating cookie key would sign every
+	// user out on every sweep.
+	a := cookieSecretFor("t-abc", "todo", "s3cret")
+	if a != cookieSecretFor("t-abc", "todo", "s3cret") {
+		t.Fatal("cookie secret is not deterministic")
+	}
+	// ...but must change when the client secret is rotated.
+	if a == cookieSecretFor("t-abc", "todo", "rotated") {
+		t.Fatal("cookie secret must change with the client secret")
+	}
+	// oauth2-proxy requires exactly 16, 24 or 32 bytes.
+	if dec, err := base64.URLEncoding.WithPadding(base64.NoPadding).DecodeString(a); err != nil || len(dec) != 32 {
+		t.Fatalf("cookie secret must decode to 32 bytes, got %d (%v)", len(dec), err)
+	}
+}
+
+func TestAuthRedirectURL(t *testing.T) {
+	// Must be HTTPS and match the app's own host — oauth2-proxy rejects a
+	// mismatch, and this is the value the customer registers on their app
+	// registration.
+	if got := authRedirectURL("todo.apps.contoso.com"); got != "https://todo.apps.contoso.com/oauth2/callback" {
+		t.Fatalf("redirect url = %q", got)
 	}
 }
 

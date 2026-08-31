@@ -43,6 +43,9 @@ const (
 	argoNamespace   = "argocd"
 	fieldManager    = "cortex-reconciler"
 	argoManifestFmt = "https://raw.githubusercontent.com/argoproj/argo-cd/%s/manifests/install.yaml"
+	// oauth2ProxyImage fronts apps that require a login. Pinned: the edge auth
+	// component is not something to float on :latest.
+	oauth2ProxyImage = "quay.io/oauth2-proxy/oauth2-proxy:v7.15.0"
 	// agcNSGRule opens the AGC subnet's NSG for inbound client traffic to the
 	// frontend. The AKS add-on's subnet NSG only has the default rules (ending in
 	// DenyAllInBound), which drops client SYNs to the AGC data-path proxies that
@@ -69,6 +72,7 @@ var (
 	crdGVR   = schema.GroupVersionResource{Group: "apiextensions.k8s.io", Version: "v1", Resource: "customresourcedefinitions"}
 	depGVR   = schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
 	secGVR   = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "secrets"}
+	svcGVR   = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "services"}
 	ingGVR   = schema.GroupVersionResource{Group: "networking.k8s.io", Version: "v1", Resource: "ingresses"} // legacy AGIC cleanup
 	albGVR   = schema.GroupVersionResource{Group: "alb.networking.azure.io", Version: "v1", Resource: "applicationloadbalancer"} // CRD plural is non-standard (no trailing s)
 	gwGVR    = schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "gateways"}
@@ -78,6 +82,8 @@ var (
 // Options is the full address + policy for one tenant's cluster. Grouping them
 // keeps the constructor stable as the platform surface grows.
 type Options struct {
+	// TenantSlug identifies the tenant, used to derive stable per-app secrets.
+	TenantSlug     string
 	SubscriptionID string
 	ResourceGroup  string
 	ClusterName    string
@@ -116,7 +122,7 @@ func New(cred azcore.TokenCredential, o Options) *Client {
 // stamped as Argo Applications, then returns cluster + per-app status. Apps are
 // exposed through the AKS-managed Azure Application Gateway (AGIC) — the edge no
 // longer enforces identity, so the auth policy is accepted but ignored.
-func (c *Client) Reconcile(ctx context.Context, apps []shared.DesiredApplication, _ *shared.IngressAuth) (shared.ClusterStatus, []shared.ApplicationStatus) {
+func (c *Client) Reconcile(ctx context.Context, apps []shared.DesiredApplication, _ *shared.IngressAuth, ing *shared.IngressConfig) (shared.ClusterStatus, []shared.ApplicationStatus) {
 	status := shared.ClusterStatus{Name: c.o.ClusterName, Phase: shared.ClusterProvisioning}
 
 	m, err := c.getCluster(ctx)
@@ -165,8 +171,24 @@ func (c *Client) Reconcile(ctx context.Context, apps []shared.DesiredApplication
 	k.ensureTenantProject(ctx)
 	subnet := c.agcSubnetID(ctx, m.nodeResourceGroup)
 	c.ensureAGCSubnetNSG(ctx, subnet)
-	k.ensureGateway(ctx, subnet)
-	appStatuses := k.reconcileApplications(ctx, apps, c.o)
+
+	// The wildcard certificate arrives from the control plane, which owns the
+	// DNS zone and did the ACME exchange. Write it before the Gateway, so the
+	// HTTPS listener never references a Secret that isn't there yet.
+	domain := ""
+	if ing != nil {
+		domain = ing.AppsDomain
+	}
+	tlsReady := ing.TLSReady()
+	if tlsReady {
+		k.ensureWildcardTLS(ctx, ing.TLSCert, ing.TLSKey)
+	}
+	k.ensureGateway(ctx, subnet, domain, tlsReady)
+
+	appStatuses := k.reconcileApplications(ctx, apps, c.o, ing)
+	if ing.OIDCReady() {
+		status.IngressIssuer = ing.OIDCIssuer
+	}
 	status.GatewayIP = k.gatewayAddress(ctx)
 	status.IngressInstalled = status.GatewayIP != ""
 	slog.Info("cluster: gateway reconcile", "nodeRG", m.nodeResourceGroup, "subnetFound", subnet != "", "address", status.GatewayIP)

@@ -135,10 +135,11 @@ func (k *kube) restMapper() (meta.RESTMapper, error) {
 // reports each app's status. The Ingress routes the app's host to the Helm
 // release's Service (release name : 80) so the Azure Application Gateway serves
 // it publicly.
-func (k *kube) reconcileApplications(ctx context.Context, apps []shared.DesiredApplication, o Options) []shared.ApplicationStatus {
+func (k *kube) reconcileApplications(ctx context.Context, apps []shared.DesiredApplication, o Options, ing *shared.IngressConfig) []shared.ApplicationStatus {
 	out := make([]shared.ApplicationStatus, 0, len(apps))
 	desired := map[string]bool{}
 	exposed := map[string]bool{}     // app names that publish a gateway Ingress
+	authed := map[string]bool{}      // oauth2-proxy object names still wanted
 	ociRepos := map[string]string{} // Argo repo-secret name → OCI registry URL
 	ri := k.dyn.Resource(appGVR).Namespace(argoNamespace)
 
@@ -155,11 +156,41 @@ func (k *kube) reconcileApplications(ctx context.Context, apps []shared.DesiredA
 		// route to (charts name it unpredictably); empty ⇒ cluster-internal. AGC
 		// routes via the Service, so this works with CNI Overlay.
 		if svc := strings.TrimSpace(a.ExposeService); svc != "" {
-			route := appRoute(name, a.Namespace, a.ID, appHost(name, o.AppsDomain), svc, a.ExposePort)
-			if _, err := k.dyn.Resource(routeGVR).Namespace(a.Namespace).Apply(ctx, name, route, ssaOpts); err != nil {
-				slog.Warn("cluster: apply HTTPRoute failed", "app", name, "err", trunc(err.Error()))
+			// Apps are published only on the tenant's delegated domain. Without
+			// one there is no host to route, so nothing is exposed — that is the
+			// intended behaviour, not a failure.
+			host := appHostFor(a, name, ing)
+			if host != "" {
+				backend, backendPort := svc, a.ExposePort
+
+				// A protected app is fronted by its own oauth2-proxy, so the route
+				// targets that instead. AGC can't authenticate and has no
+				// ext_authz, so the proxy has to be in the path.
+				if a.AuthRequired && ing.OIDCReady() {
+					an := authName(name)
+					cookie := cookieSecretFor(o.TenantSlug, a.ID, ing.OIDCClientSecret)
+					si := k.dyn.Resource(secGVR).Namespace(a.Namespace)
+					if _, err := si.Apply(ctx, an, authSecret(an, a.Namespace, a.ID, ing.OIDCClientSecret, cookie), ssaOpts); err != nil {
+						slog.Warn("cluster: apply auth secret failed", "app", name, "err", trunc(err.Error()))
+					}
+					if _, err := k.dyn.Resource(depGVR).Namespace(a.Namespace).
+						Apply(ctx, an, authDeployment(an, a.Namespace, a, ing, host), ssaOpts); err != nil {
+						slog.Warn("cluster: apply oauth2-proxy failed", "app", name, "err", trunc(err.Error()))
+					}
+					if _, err := k.dyn.Resource(svcGVR).Namespace(a.Namespace).
+						Apply(ctx, an, authService(an, a.Namespace, a.ID), ssaOpts); err != nil {
+						slog.Warn("cluster: apply auth service failed", "app", name, "err", trunc(err.Error()))
+					}
+					backend, backendPort = an, 80
+					authed[an] = true
+				}
+
+				route := appRoute(name, a.Namespace, a.ID, host, backend, backendPort)
+				if _, err := k.dyn.Resource(routeGVR).Namespace(a.Namespace).Apply(ctx, name, route, ssaOpts); err != nil {
+					slog.Warn("cluster: apply HTTPRoute failed", "app", name, "err", trunc(err.Error()))
+				}
+				exposed[name] = true
 			}
-			exposed[name] = true
 		}
 		st := shared.ApplicationStatus{ID: a.ID, SyncStatus: "pending", HealthStatus: "pending"}
 		if _, err := ri.Apply(ctx, name, buildApplication(a, name), metav1.ApplyOptions{FieldManager: fieldManager, Force: true}); err != nil {
@@ -198,6 +229,26 @@ func (k *kube) reconcileApplications(ctx context.Context, apps []shared.DesiredA
 			}
 		}
 	}
+	// GC oauth2-proxy objects for apps that no longer require auth, no longer
+	// expose a Service, or are gone entirely. Without this, turning auth off
+	// would leave the proxy running and the app would stay behind a login even
+	// though the route now bypasses it.
+	for _, gvr := range []schema.GroupVersionResource{depGVR, svcGVR, secGVR} {
+		list, err := k.dyn.Resource(gvr).List(ctx, managed)
+		if err != nil {
+			continue
+		}
+		for i := range list.Items {
+			n := list.Items[i].GetName()
+			// Only ever consider objects this reconciler created as an app's
+			// proxy — never a chart's own Deployment or Service.
+			if !strings.HasSuffix(n, "-auth") || authed[n] {
+				continue
+			}
+			_ = k.dyn.Resource(gvr).Namespace(list.Items[i].GetNamespace()).Delete(ctx, n, metav1.DeleteOptions{})
+		}
+	}
+
 	// Remove any leftover AGIC Ingresses from the pre-AGC reconciler.
 	if list, err := k.dyn.Resource(ingGVR).List(ctx, managed); err == nil {
 		for i := range list.Items {
@@ -247,7 +298,18 @@ func (k *kube) reconcileHelmOCIRepos(ctx context.Context, o Options, repos map[s
 // the add-on's AGC subnet. No-op on the ALB until the subnet is discoverable (the
 // add-on is still provisioning) — the Gateway is still stamped so routes can
 // attach once the ALB is ready.
-func (k *kube) ensureGateway(ctx context.Context, subnetID string) {
+// ensureWildcardTLS writes the certificate the control plane obtained for the
+// tenant's domain. The reconciler performs no ACME and holds no DNS credential —
+// it only materialises what it was handed, which is what lets a delegated
+// tenant's cluster (in the customer's directory) behave like a hosted one.
+func (k *kube) ensureWildcardTLS(ctx context.Context, certPEM, keyPEM string) {
+	if _, err := k.dyn.Resource(secGVR).Namespace(gatewayNS).
+		Apply(ctx, tlsSecretName, wildcardTLSSecret(certPEM, keyPEM), ssaOpts); err != nil {
+		slog.Warn("cluster: apply wildcard TLS secret failed", "err", trunc(err.Error()))
+	}
+}
+
+func (k *kube) ensureGateway(ctx context.Context, subnetID, domain string, tls bool) {
 	ns := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "v1",
 		"kind":       "Namespace",
@@ -260,7 +322,7 @@ func (k *kube) ensureGateway(ctx context.Context, subnetID string) {
 			k.diagnoseALB(ctx) // surface why the AGC ALB controller CRDs are missing
 		}
 	}
-	if _, err := k.dyn.Resource(gwGVR).Namespace(gatewayNS).Apply(ctx, gatewayName, gateway(), ssaOpts); err != nil {
+	if _, err := k.dyn.Resource(gwGVR).Namespace(gatewayNS).Apply(ctx, gatewayName, gateway(domain, tls), ssaOpts); err != nil {
 		slog.Warn("cluster: apply Gateway failed", "err", trunc(err.Error()))
 	}
 }

@@ -79,6 +79,9 @@ type appInput struct {
 	Values         string             `json:"values"`
 	ExposeService  string             `json:"exposeService"`
 	ExposePort     int                `json:"exposePort"`
+	Hostname       string             `json:"hostname"`
+	OIDCScope      string             `json:"oidcScope"`
+	AuthRequired   bool               `json:"authRequired"`
 	Wiring         []shared.WireLink  `json:"wiring"`
 	Dependencies   []model.Dependency `json:"dependencies"`
 }
@@ -114,8 +117,12 @@ func (in appInput) build(id, owner string) model.Application {
 		Values:         in.Values,
 		ExposeService:  strings.TrimSpace(in.ExposeService),
 		ExposePort:     port,
-		Wiring:         in.Wiring,
-		Dependencies:   in.Dependencies,
+		// Empty hostname ⇒ the app id, so the common case needs no decision.
+		Hostname:     strings.ToLower(strings.TrimSpace(in.Hostname)),
+		OIDCScope:    strings.TrimSpace(in.OIDCScope),
+		AuthRequired: in.AuthRequired,
+		Wiring:       in.Wiring,
+		Dependencies: in.Dependencies,
 	}
 }
 

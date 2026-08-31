@@ -206,6 +206,9 @@ export interface Application {
   values?: string;
   exposeService: string; // in-cluster Service the gateway routes to ("" = internal)
   exposePort: number; // Service port (default 80)
+  hostname?: string; // label under the tenant's domain; blank ⇒ the app's name
+  oidcScope?: string; // scope on the tenant's app registration this app needs
+  authRequired?: boolean; // put the app behind the tenant's OIDC application
   wiring: WireLink[]; // infrastructure output → Helm values path
   dependencies: Dependency[]; // typed dependencies that must converge first
   createdAt: string;
@@ -221,6 +224,23 @@ export interface Application {
   detail?: string; // Argo's reason it's unhealthy or out of sync
   healthStatus?: string; // Argo health when enabled
   waiting?: boolean; // enabled but held until dependencies converge
+}
+
+/** A tenant's published-apps configuration: the domain they delegated to us,
+ *  its delegation state, the wildcard certificate we hold for it, and the OIDC
+ *  application that guards the apps. Secrets are never returned — only whether
+ *  they are set. */
+export interface TenantIngress {
+  appsDomain?: string;
+  dnsState?: "" | "pending" | "verified" | "failed" | string;
+  dnsDetail?: string;
+  dnsNameservers?: string[];
+  tlsReady: boolean;
+  tlsExpiresAt?: string;
+  tlsDetail?: string;
+  oidcIssuer?: string;
+  oidcClientId?: string;
+  oidcSecretSet: boolean;
 }
 
 export interface TenantContextInfo {
@@ -240,6 +260,7 @@ export interface TenantContextInfo {
   enabled: boolean;
   hostingMode: "delegated" | "platform";
   footprintConfig: Record<string, unknown>;
+  ingress: TenantIngress;
   cluster: ClusterInfo;
 }
 

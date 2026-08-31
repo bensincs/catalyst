@@ -10,8 +10,13 @@ export default async function DeploymentsPage() {
 
   // Tenants also see their own cluster status; the platform view is the catalog.
   let cluster: ClusterInfo | undefined;
+  let appsDomain: string | undefined;
   if (me.role === "tenant") {
-    cluster = (await getMyContext()).tenant.cluster;
+    const ctx = await getMyContext();
+    cluster = ctx.tenant.cluster;
+    appsDomain = ctx.tenant.ingress?.appsDomain;
   }
-  return <DeploymentsView role={me.role} applications={apps} cluster={cluster} />;
+  return (
+    <DeploymentsView role={me.role} applications={apps} cluster={cluster} appsDomain={appsDomain} />
+  );
 }

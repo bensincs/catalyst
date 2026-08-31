@@ -24,6 +24,7 @@ import type {
   TenantContextInfo,
   TenantRegistryRow,
   TenantSummary,
+  TenantIngress,
   Tombstone,
 } from "@/lib/types";
 
@@ -54,6 +55,7 @@ interface ApiTenant {
   hostingMode?: string;
   resourceGroup?: string;
   footprintConfig?: Record<string, unknown> | null;
+  ingress?: TenantIngress | null;
   cluster?: ApiCluster | null;
 }
 interface ApiCluster {
@@ -250,6 +252,7 @@ function toContext(t: ApiTenant): TenantContextInfo {
     enabled: t.enabled ?? true,
     hostingMode: (t.hostingMode as TenantContextInfo["hostingMode"]) ?? "delegated",
     footprintConfig: (t.footprintConfig as Record<string, unknown> | null) ?? {},
+    ingress: t.ingress ?? { tlsReady: false, oidcSecretSet: false },
     cluster: toCluster(t.cluster),
   };
 }
@@ -300,6 +303,9 @@ function toApplication(a: ApiApplication): Application {
     values: a.values,
     exposeService: a.exposeService ?? "",
     exposePort: a.exposePort ?? 80,
+    hostname: a.hostname || undefined,
+    oidcScope: a.oidcScope || undefined,
+    authRequired: Boolean(a.authRequired),
     wiring: a.wiring ?? [],
     dependencies: a.dependencies ?? [],
     createdAt: a.createdAt,
@@ -539,6 +545,9 @@ interface ApiApplication {
   values?: string;
   exposeService?: string;
   exposePort?: number;
+  hostname?: string;
+  oidcScope?: string;
+  authRequired?: boolean;
   wiring?: WireLink[] | null;
   dependencies?: Dependency[] | null;
   createdAt: string;

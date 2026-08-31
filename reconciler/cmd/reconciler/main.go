@@ -39,6 +39,7 @@ func main() {
 	var clusterClient *cluster.Client
 	if cfg.ClusterEnabled {
 		clusterClient = cluster.New(cred, cluster.Options{
+			TenantSlug:      cfg.TenantSlug,
 			SubscriptionID:  cfg.SubscriptionID,
 			ResourceGroup:   cfg.ClusterResourceGroup,
 			ClusterName:     cfg.ClusterName,

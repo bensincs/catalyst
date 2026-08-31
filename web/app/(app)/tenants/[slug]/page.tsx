@@ -4,6 +4,7 @@ import { TenantOverview } from "@/components/views/tenant-overview";
 import { TenantAccessPanel } from "@/components/views/tenant-access-panel";
 import { TenantRenamePanel } from "@/components/views/tenant-rename-panel";
 import { FootprintPanel } from "@/components/views/footprint-panel";
+import { IngressPanel } from "@/components/views/ingress-panel";
 import { TenantMembersPanel } from "@/components/views/tenant-members-panel";
 import { EntitlementsPanel } from "@/components/views/entitlements-panel";
 import { DangerZonePanel } from "@/components/views/danger-zone-panel";
@@ -38,6 +39,7 @@ export default async function TenantDrillInPage({
           {platformHosted ? (
             <TenantMembersPanel slug={slug} name={ctx.tenant.name} members={members} />
           ) : null}
+          <IngressPanel slug={slug} name={ctx.tenant.name} ingress={ctx.tenant.ingress} />
           {ctx.tenant.cluster.infraDelegated ? (
             <FootprintPanel
               slug={slug}

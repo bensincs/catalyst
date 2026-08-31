@@ -115,18 +115,29 @@ const tenantCols = `id, name, coalesce(tenant_id,''), region, plan, enrollment, 
 	subscription_id, reconciler_identity, foundry_project, reconciler_version, installed_at, enabled,
 	cluster_name, cluster_phase, cluster_k8s_version, cluster_argo_installed, cluster_node_count, cluster_detail,
 	cluster_ingress_installed, cluster_gateway_ip, cluster_ingress_issuer, infra_delegated, infra_detail, footprint_state, footprint_detail,
-	coalesce(hosting_mode,'delegated'), coalesce(resource_group,''), coalesce(reconciler_principal_id,''), coalesce(footprint_config,'{}')`
+	coalesce(hosting_mode,'delegated'), coalesce(resource_group,''), coalesce(reconciler_principal_id,''), coalesce(footprint_config,'{}'),
+	coalesce(apps_domain,''), coalesce(dns_state,''), coalesce(dns_detail,''), coalesce(dns_nameservers,'{}'),
+	(coalesce(tls_cert,'') <> '' AND coalesce(tls_key,'') <> ''), tls_expires_at, coalesce(tls_detail,''),
+	coalesce(oidc_issuer,''), coalesce(oidc_client_id,''), (coalesce(oidc_client_secret,'') <> '')`
 
 func scanTenant(row pgx.Row) (model.Tenant, error) {
 	var t model.Tenant
 	var installedAt string
 	var footprintConfig []byte
+	var tlsExpires *time.Time
 	err := row.Scan(&t.ID, &t.Name, &t.TenantID, &t.Region, &t.Plan, &t.Enrollment,
 		&t.Version, &t.AgentCount, &t.ReconcilingCount, &t.MonthlyCalls, &t.Drift, &t.LastHeartbeat,
 		&t.SubscriptionID, &t.ReconcilerIdentity, &t.FoundryProject, &t.ReconcilerVersion, &installedAt, &t.Enabled,
 		&t.Cluster.Name, &t.Cluster.Phase, &t.Cluster.K8sVersion, &t.Cluster.ArgoInstalled, &t.Cluster.NodeCount, &t.Cluster.Detail,
 		&t.Cluster.IngressInstalled, &t.Cluster.GatewayIP, &t.Cluster.IngressIssuer, &t.Cluster.InfraDelegated, &t.Cluster.InfraDetail, &t.Cluster.FootprintState, &t.Cluster.FootprintDetail,
-		&t.HostingMode, &t.ResourceGroup, &t.ReconcilerPrincipalID, &footprintConfig)
+		&t.HostingMode, &t.ResourceGroup, &t.ReconcilerPrincipalID, &footprintConfig,
+		&t.Ingress.AppsDomain, &t.Ingress.DNSState, &t.Ingress.DNSDetail, &t.Ingress.DNSNameservers,
+		&t.Ingress.TLSReady, &tlsExpires, &t.Ingress.TLSDetail,
+		&t.Ingress.OIDCIssuer, &t.Ingress.OIDCClientID, &t.Ingress.OIDCSecretSet)
+	if tlsExpires != nil {
+		v := tlsExpires.UTC().Format(time.RFC3339)
+		t.Ingress.TLSExpiresAt = &v
+	}
 	if installedAt != "" {
 		t.InstalledAt = &installedAt
 	}
@@ -1116,12 +1127,16 @@ func (s *Store) TenantsRegistry(ctx context.Context) ([]model.TenantRegistryRow,
 		var r model.TenantRegistryRow
 		var installedAt string
 		var footprintConfig []byte
+		var rowTLSExpires *time.Time
 		if err := rows.Scan(&r.ID, &r.Name, &r.TenantID, &r.Region, &r.Plan, &r.Enrollment,
 			&r.Version, &r.AgentCount, &r.ReconcilingCount, &r.MonthlyCalls, &r.Drift, &r.LastHeartbeat,
 			&r.SubscriptionID, &r.ReconcilerIdentity, &r.FoundryProject, &r.ReconcilerVersion, &installedAt, &r.Enabled,
 			&r.Cluster.Name, &r.Cluster.Phase, &r.Cluster.K8sVersion, &r.Cluster.ArgoInstalled, &r.Cluster.NodeCount, &r.Cluster.Detail,
 			&r.Cluster.IngressInstalled, &r.Cluster.GatewayIP, &r.Cluster.IngressIssuer, &r.Cluster.InfraDelegated, &r.Cluster.InfraDetail, &r.Cluster.FootprintState, &r.Cluster.FootprintDetail,
 			&r.HostingMode, &r.ResourceGroup, &r.ReconcilerPrincipalID, &footprintConfig,
+			&r.Ingress.AppsDomain, &r.Ingress.DNSState, &r.Ingress.DNSDetail, &r.Ingress.DNSNameservers,
+			&r.Ingress.TLSReady, &rowTLSExpires, &r.Ingress.TLSDetail,
+			&r.Ingress.OIDCIssuer, &r.Ingress.OIDCClientID, &r.Ingress.OIDCSecretSet,
 			&r.EntitledAgents, &r.EntitledStores, &r.EntitledDeployments, &r.EntitledInfrastructure); err != nil {
 			return nil, err
 		}
@@ -1324,7 +1339,9 @@ func (s *Store) SyncDesired(ctx context.Context, t model.Tenant) (shared.Desired
 	// must be enabled + 'ready', an application dep enabled + (transitively) ready,
 	// an agent dep 'live'. App→app order is then enforced via Argo sync-waves.
 	arows, err := s.pool.Query(ctx,
-		`SELECT a.id, a.name, a.namespace, a.repo_url, a.chart, a.target_revision, a.values, a.expose_service, a.expose_port, a.wiring, a.dependencies
+		`SELECT a.id, a.name, a.namespace, a.repo_url, a.chart, a.target_revision, a.values, a.expose_service, a.expose_port,
+		        coalesce(a.hostname,''), coalesce(a.oidc_scope,''), coalesce(a.auth_required,false),
+		        a.wiring, a.dependencies
 		 FROM applications a JOIN tenant_deployments td ON td.app_id = a.id AND td.tenant_slug = $1
 		 ORDER BY td.sort_order`, t.ID)
 	if err != nil {
@@ -1341,7 +1358,8 @@ func (s *Store) SyncDesired(ctx context.Context, t model.Tenant) (shared.Desired
 	for arows.Next() {
 		var da shared.DesiredApplication
 		var wraw, draw []byte
-		if err := arows.Scan(&da.ID, &da.Name, &da.Namespace, &da.RepoURL, &da.Chart, &da.TargetRevision, &da.Values, &da.ExposeService, &da.ExposePort, &wraw, &draw); err != nil {
+		if err := arows.Scan(&da.ID, &da.Name, &da.Namespace, &da.RepoURL, &da.Chart, &da.TargetRevision, &da.Values, &da.ExposeService, &da.ExposePort,
+			&da.Hostname, &da.OIDCScope, &da.AuthRequired, &wraw, &draw); err != nil {
 			return out, err
 		}
 		apps = append(apps, appInfo{da: da, wiring: wiringFromRaw(wraw), deps: depsFromRaw(draw)})
@@ -1455,6 +1473,21 @@ func (s *Store) SyncDesired(ctx context.Context, t model.Tenant) (shared.Desired
 	}
 	// Order the deployable apps so their app→app dependencies converge first.
 	assignWaves(out.Applications)
+
+	// Ingress: the delegated domain, the wildcard certificate the control plane
+	// obtained for it, and the customer's OIDC application. Omitted entirely when
+	// no domain is configured — apps are then unpublished, which is the only
+	// state in which they are unreachable by design.
+	if domain, cert, key, issuer, clientID, secret, err := s.ingressConfigFor(ctx, t.ID); err == nil && domain != "" {
+		out.Ingress = &shared.IngressConfig{
+			AppsDomain:       domain,
+			TLSCert:          cert,
+			TLSKey:           key,
+			OIDCIssuer:       issuer,
+			OIDCClientID:     clientID,
+			OIDCClientSecret: secret,
+		}
+	}
 	return out, nil
 }
 
@@ -1755,13 +1788,17 @@ func (s *Store) ApplyHeartbeat(ctx context.Context, t model.Tenant, hb shared.He
 var ErrDeploymentNotAccessible = errors.New("deployment not accessible to tenant")
 
 const applicationCols = `a.id, a.name, a.description, a.owner_tenant, a.namespace,
-	a.repo_url, a.chart, a.target_revision, a.values, a.expose_service, a.expose_port, a.wiring, a.dependencies, a.created_by, a.created_at`
+	a.repo_url, a.chart, a.target_revision, a.values, a.expose_service, a.expose_port,
+	coalesce(a.hostname,''), coalesce(a.oidc_scope,''), coalesce(a.auth_required,false),
+	a.wiring, a.dependencies, a.created_by, a.created_at`
 
 // appScanDest scans the fixed columns; wiring + dependencies (jsonb) are captured
 // raw and unmarshalled by the caller (wiringFromRaw / depsFromRaw).
 func appScanDest(a *model.Application, wiringRaw, depsRaw *[]byte) []any {
 	return []any{&a.ID, &a.Name, &a.Description, &a.Owner, &a.Namespace,
-		&a.RepoURL, &a.Chart, &a.TargetRevision, &a.Values, &a.ExposeService, &a.ExposePort, wiringRaw, depsRaw, &a.CreatedBy, &a.CreatedAt}
+		&a.RepoURL, &a.Chart, &a.TargetRevision, &a.Values, &a.ExposeService, &a.ExposePort,
+		&a.Hostname, &a.OIDCScope, &a.AuthRequired,
+		wiringRaw, depsRaw, &a.CreatedBy, &a.CreatedAt}
 }
 
 func paramsFromRaw(raw []byte) map[string]any {
@@ -1960,10 +1997,12 @@ func (s *Store) UpdateApplication(ctx context.Context, a model.Application) erro
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE applications SET name = $2, description = $3, namespace = $4, repo_url = $5,
 		   chart = $6, target_revision = $7, values = $8, expose_service = $9, expose_port = $10,
-		   wiring = $11, dependencies = $12
+		   hostname = $11, oidc_scope = $12, auth_required = $13,
+		   wiring = $14, dependencies = $15
 		 WHERE id = $1`,
 		a.ID, a.Name, a.Description, a.Namespace, a.RepoURL, a.Chart, a.TargetRevision, a.Values,
-		a.ExposeService, a.ExposePort, wiringJSON(a.Wiring), depsJSON(a.Dependencies))
+		a.ExposeService, a.ExposePort, a.Hostname, a.OIDCScope, a.AuthRequired,
+		wiringJSON(a.Wiring), depsJSON(a.Dependencies))
 	if err != nil {
 		return err
 	}

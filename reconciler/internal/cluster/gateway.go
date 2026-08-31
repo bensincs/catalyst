@@ -33,10 +33,53 @@ func applicationLoadBalancer(subnetID string) *unstructured.Unstructured {
 	}}
 }
 
+// tlsSecretName holds the wildcard certificate for the tenant's domain. It lives
+// in the gateway namespace because that is where the Gateway resolves
+// certificateRefs from without a ReferenceGrant.
+const tlsSecretName = "cortex-wildcard-tls"
+
 // gateway is the single external Gateway all app HTTPRoutes attach to. The
 // annotations bind it to the ALB-managed AGC resource; from:All lets HTTPRoutes in
 // the tenant app namespaces attach.
-func gateway() *unstructured.Unstructured {
+//
+// An HTTPS listener is added only once a wildcard certificate exists. AGC allows
+// only ports 80 and 443, and a listener referencing a missing Secret is rejected
+// outright — so the gateway serves plain HTTP until the control plane has
+// obtained a certificate, rather than failing to program at all.
+func gateway(domain string, tls bool) *unstructured.Unstructured {
+	listeners := []any{map[string]any{
+		"name":     "http",
+		"port":     int64(80),
+		"protocol": "HTTP",
+		"allowedRoutes": map[string]any{
+			"namespaces": map[string]any{"from": "All"},
+		},
+	}}
+	if tls && strings.TrimSpace(domain) != "" {
+		listeners = append(listeners, map[string]any{
+			"name":     "https",
+			"port":     int64(443),
+			"protocol": "HTTPS",
+			// The wildcard covers every app host under the tenant's domain, so one
+			// listener serves all of them.
+			"hostname": "*." + strings.TrimSpace(domain),
+			"tls": map[string]any{
+				"mode": "Terminate",
+				"certificateRefs": []any{map[string]any{
+					"kind":      "Secret",
+					"name":      tlsSecretName,
+					"namespace": gatewayNS,
+				}},
+			},
+			"allowedRoutes": map[string]any{
+				"namespaces": map[string]any{"from": "All"},
+			},
+		})
+	}
+	return gatewayWithListeners(listeners)
+}
+
+func gatewayWithListeners(listeners []any) *unstructured.Unstructured {
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "gateway.networking.k8s.io/v1",
 		"kind":       "Gateway",
@@ -51,14 +94,28 @@ func gateway() *unstructured.Unstructured {
 		},
 		"spec": map[string]any{
 			"gatewayClassName": gatewayClass,
-			"listeners": []any{map[string]any{
-				"name":     "http",
-				"port":     int64(80),
-				"protocol": "HTTP",
-				"allowedRoutes": map[string]any{
-					"namespaces": map[string]any{"from": "All"},
-				},
-			}},
+			"listeners":        listeners,
+		},
+	}}
+}
+
+// wildcardTLSSecret carries the certificate the control plane obtained for the
+// tenant's domain. The reconciler never talks to ACME or DNS — it only writes
+// what it is given, which is what keeps a delegated tenant's cluster free of any
+// DNS credential.
+func wildcardTLSSecret(certPEM, keyPEM string) *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "v1",
+		"kind":       "Secret",
+		"metadata": map[string]any{
+			"name":      tlsSecretName,
+			"namespace": gatewayNS,
+			"labels":    sysLabels(nil),
+		},
+		"type": "kubernetes.io/tls",
+		"stringData": map[string]any{
+			"tls.crt": certPEM,
+			"tls.key": keyPEM,
 		},
 	}}
 }

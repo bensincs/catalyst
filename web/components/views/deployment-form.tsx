@@ -88,6 +88,9 @@ export function DeploymentForm({
   const [values, setValues] = useState(app?.values ?? "");
   const [exposeService, setExposeService] = useState(app?.exposeService ?? "");
   const [exposePort, setExposePort] = useState(app?.exposePort ?? 80);
+  const [hostname, setHostname] = useState(app?.hostname ?? "");
+  const [authRequired, setAuthRequired] = useState(Boolean(app?.authRequired));
+  const [oidcScope, setOidcScope] = useState(app?.oidcScope ?? "");
   const [wiring, setWiring] = useState<WireLink[]>(app?.wiring ?? []);
   const [dependencies, setDependencies] = useState<Dependency[]>(app?.dependencies ?? []);
 
@@ -170,6 +173,9 @@ export function DeploymentForm({
       values,
       exposeService: exposeService.trim(),
       exposePort: exposePort || 80,
+      hostname: hostname.trim().toLowerCase(),
+      authRequired,
+      oidcScope: oidcScope.trim(),
       wiring: cleanWiring,
       dependencies,
     };
@@ -265,7 +271,7 @@ export function DeploymentForm({
         <Section
           icon={Globe}
           title="Exposure"
-          desc="Publish this app through the tenant's gateway. Name the in-cluster Service the chart creates (often <release>-<chart>, e.g. my-app-todo-app) — leave blank to keep the app cluster-internal (no ingress)."
+          desc="Publish this app through the tenant's gateway. Name the in-cluster Service the chart creates (often <release>-<chart>, e.g. my-app-todo-app) — leave blank to keep the app cluster-internal (no ingress). The app is published at <hostname>.<the tenant's domain>."
         >
           <div className={styles.grid2}>
             <Field label="Expose service" htmlFor="dep-svc" hint="The chart's Service name to route to. Blank = internal only.">
@@ -280,7 +286,39 @@ export function DeploymentForm({
                 placeholder="80"
               />
             </Field>
+            <Field label="Hostname" htmlFor="dep-host" hint="Label under the tenant's domain. Blank = the app's name.">
+              <TextInput id="dep-host" value={hostname} onChange={(e) => setHostname(e.target.value)} placeholder="todo" spellCheck={false} />
+            </Field>
+            <Field
+              label="Scope"
+              htmlFor="dep-scope"
+              hint="Scope on the tenant's app registration this app requires. Only used when sign-in is on."
+            >
+              <TextInput
+                id="dep-scope"
+                value={oidcScope}
+                onChange={(e) => setOidcScope(e.target.value)}
+                placeholder="api://<client-id>/Todo.Access"
+                spellCheck={false}
+              />
+            </Field>
           </div>
+          <label style={{ display: "flex", gap: 8, alignItems: "flex-start", marginTop: 10, fontSize: 13 }}>
+            <input
+              type="checkbox"
+              checked={authRequired}
+              onChange={(e) => setAuthRequired(e.target.checked)}
+              style={{ marginTop: 3 }}
+            />
+            <span>
+              <strong>Require sign-in</strong>
+              <span style={{ display: "block", color: "var(--text-secondary)", fontSize: 12 }}>
+                Puts the app behind the tenant&apos;s OIDC application. Needs a domain and a
+                certificate (the callback must be HTTPS), and the callback URL must be registered as
+                a redirect URI on that app registration.
+              </span>
+            </span>
+          </label>
         </Section>
 
         {depOptions.length > 0 && (

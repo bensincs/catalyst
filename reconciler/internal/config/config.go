@@ -44,6 +44,10 @@ type Config struct {
 	ClusterResourceGroup string
 	ArgoCDVersion        string
 
+	// TenantSlug identifies this tenant. Used to derive stable per-app secrets
+	// (oauth2-proxy's cookie key) so they don't rotate on every reconcile.
+	TenantSlug string
+
 	// AppsDomain, when set, is the DNS suffix for per-app hosts served by the
 	// Azure Application Gateway (<app>.<AppsDomain>). Empty ⇒ host-less Ingress.
 	AppsDomain string
@@ -97,6 +101,7 @@ func Load() Config {
 		ClusterName:          strings.TrimSpace(env("CLUSTER_NAME")),
 		ClusterResourceGroup: strings.TrimSpace(env("CLUSTER_RESOURCE_GROUP")),
 		ArgoCDVersion:        argocd,
+		TenantSlug:           strings.TrimSpace(env("TENANT_SLUG")),
 
 		AppsDomain: strings.TrimSpace(env("APPS_DOMAIN")),
 

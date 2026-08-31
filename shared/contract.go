@@ -116,6 +116,17 @@ type DesiredApplication struct {
 	// (default 80).
 	ExposeService string `json:"exposeService,omitempty"`
 	ExposePort    int    `json:"exposePort,omitempty"`
+
+	// Hostname is the label this app publishes under, within the tenant's
+	// delegated domain: <Hostname>.<IngressConfig.AppsDomain>. Empty ⇒ the app
+	// id is used. Ignored when ExposeService is empty.
+	Hostname string `json:"hostname,omitempty"`
+	// AuthRequired puts the app behind an OIDC login at the edge. The gateway
+	// routes to an oauth2-proxy in front of the app rather than to the app.
+	AuthRequired bool `json:"authRequired,omitempty"`
+	// OIDCScope is the scope on the tenant's app registration this app needs, so
+	// the token issued for one app isn't automatically good for another.
+	OIDCScope string `json:"oidcScope,omitempty"`
 	// DependsOn are ids of other applications that must converge first; Wave is
 	// the derived Argo sync-wave (0 = no deps) that enforces the order. (Only
 	// app→app edges gate cluster ordering; infra/agent deps are gated earlier,
@@ -156,6 +167,12 @@ type DesiredState struct {
 	// IngressAuth pins the cluster's ingress gateway to accept only this tenant's
 	// Entra tokens (nil ⇒ the control plane has no app registration configured).
 	IngressAuth *IngressAuth `json:"ingressAuth,omitempty"`
+
+	// Ingress carries everything the cluster needs to publish apps on the
+	// tenant's own domain: the domain itself, the wildcard certificate the
+	// control plane obtained for it, and the customer's OIDC application.
+	// nil ⇒ nothing is published (no domain configured yet).
+	Ingress *IngressConfig `json:"ingress,omitempty"`
 }
 
 // Lifecycle status values shared by agents and memory stores (reconciler →
@@ -219,6 +236,45 @@ type ApplicationStatus struct {
 	// when healthy. Without it the console can only show "Degraded" and the
 	// reason is reachable only with cluster access.
 	Detail string `json:"detail,omitempty"`
+}
+
+// IngressConfig is the tenant's published-apps configuration, resolved by the
+// control plane and handed to the reconciler whole.
+//
+// The certificate is included because the control plane owns the DNS zone and
+// therefore does the ACME DNS-01 exchange itself — the cluster never needs a DNS
+// credential, which is what lets a Lighthouse-delegated cluster (in the
+// customer's own directory) work exactly like a platform-hosted one.
+//
+// TLSKey and OIDCClientSecret are secrets. They travel over the authenticated
+// TLS sync channel and must never be logged.
+type IngressConfig struct {
+	// AppsDomain is the delegated zone, e.g. "apps.contoso.com". Apps are
+	// published at <app hostname>.<AppsDomain>.
+	AppsDomain string `json:"appsDomain"`
+
+	// TLSCert/TLSKey are the PEM wildcard certificate for *.<AppsDomain>. Empty
+	// until the certificate has been issued; the gateway serves HTTP only until
+	// then, and apps requiring auth stay closed (OIDC needs an HTTPS callback).
+	TLSCert string `json:"tlsCert,omitempty"`
+	TLSKey  string `json:"tlsKey,omitempty"`
+
+	// The customer's OIDC application. Empty ⇒ no app can require auth.
+	OIDCIssuer       string `json:"oidcIssuer,omitempty"`
+	OIDCClientID     string `json:"oidcClientId,omitempty"`
+	OIDCClientSecret string `json:"oidcClientSecret,omitempty"`
+}
+
+// TLSReady reports whether a wildcard certificate is present, which is the
+// precondition for an HTTPS listener and therefore for OIDC.
+func (c *IngressConfig) TLSReady() bool {
+	return c != nil && c.TLSCert != "" && c.TLSKey != ""
+}
+
+// OIDCReady reports whether apps can be put behind a login: an OIDC application
+// AND a certificate, since the OAuth callback must be HTTPS.
+func (c *IngressConfig) OIDCReady() bool {
+	return c.TLSReady() && c.OIDCIssuer != "" && c.OIDCClientID != "" && c.OIDCClientSecret != ""
 }
 
 // Heartbeat is the reconciler's periodic report: the in-tenant install identity

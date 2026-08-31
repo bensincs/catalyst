@@ -146,6 +146,10 @@ func (s *Server) Router() http.Handler {
 			// subscription isn't reappearing, and lift the deletion.
 			r.Get("/tenant-tombstones", s.handleListTombstones)
 			r.Delete("/tenant-tombstones/{slug}", s.handleRestoreTenant)
+			// Ingress: the domain a tenant publishes apps on, and the OIDC
+			// application that guards them.
+			r.Patch("/tenants/{slug}/ingress", s.handleSetAppsDomain)
+			r.Patch("/tenants/{slug}/oidc", s.handleSetOIDCConfig)
 			// Footprint editor: configure the cluster shape, then stamp it.
 			r.Patch("/tenants/{slug}/footprint", s.handleSetFootprintConfig)
 			r.Post("/tenants/{slug}/footprint/stamp", s.handleStampFootprint)
@@ -878,6 +882,89 @@ func (s *Server) handleRestoreTenant(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "restored"})
 }
 
+
+// handleSetAppsDomain sets the domain a tenant publishes apps on (platform only).
+//
+// Changing it resets delegation and discards the wildcard certificate, which was
+// issued for the previous domain. The control plane then creates the zone and
+// surfaces the nameservers the customer must delegate to.
+func (s *Server) handleSetAppsDomain(w http.ResponseWriter, r *http.Request) {
+	id, _ := auth.IdentityFrom(r.Context())
+	if !s.requirePlatform(w, id) {
+		return
+	}
+	var body struct {
+		AppsDomain string `json:"appsDomain"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	domain := strings.ToLower(strings.Trim(strings.TrimSpace(body.AppsDomain), "."))
+	if domain != "" && !isDomainName(domain) {
+		writeErr(w, http.StatusBadRequest, "that doesn't look like a domain name — expected something like apps.contoso.com")
+		return
+	}
+	if err := s.store.SetAppsDomain(r.Context(), chi.URLParam(r, "slug"), domain); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "tenant not found")
+			return
+		}
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "saved"})
+}
+
+// handleSetOIDCConfig records the customer's OIDC application (platform only).
+// An empty clientSecret leaves the stored one untouched, so the client id can be
+// corrected without re-entering a secret that is never shown back.
+func (s *Server) handleSetOIDCConfig(w http.ResponseWriter, r *http.Request) {
+	id, _ := auth.IdentityFrom(r.Context())
+	if !s.requirePlatform(w, id) {
+		return
+	}
+	var body struct {
+		Issuer       string `json:"oidcIssuer"`
+		ClientID     string `json:"oidcClientId"`
+		ClientSecret string `json:"oidcClientSecret"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	issuer := strings.TrimSpace(body.Issuer)
+	if issuer != "" && !strings.HasPrefix(issuer, "https://") {
+		writeErr(w, http.StatusBadRequest, "the OIDC issuer must be an https:// URL, e.g. https://login.microsoftonline.com/<tenant-id>/v2.0")
+		return
+	}
+	if err := s.store.SetOIDCConfig(r.Context(), chi.URLParam(r, "slug"), issuer, body.ClientID, body.ClientSecret); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "tenant not found")
+			return
+		}
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "saved"})
+}
+
+// isDomainName is a light sanity check: at least two labels, each RFC1123.
+func isDomainName(s string) bool {
+	labels := strings.Split(s, ".")
+	if len(labels) < 2 {
+		return false
+	}
+	for _, l := range labels {
+		if l == "" || len(l) > 63 || strings.HasPrefix(l, "-") || strings.HasSuffix(l, "-") {
+			return false
+		}
+		for _, r := range l {
+			if !(r >= 'a' && r <= 'z') && !(r >= '0' && r <= '9') && r != '-' {
+				return false
+			}
+		}
+	}
+	return true
+}
 
 // handleSearchUsers returns previously-signed-in users matching a query, for the
 // members type-ahead (platform only).

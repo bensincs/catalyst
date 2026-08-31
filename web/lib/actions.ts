@@ -418,3 +418,28 @@ export async function enableInfrastructure(id: string): Promise<ActionResult> {
 export async function disableInfrastructure(id: string): Promise<ActionResult> {
   return disableResource("infrastructure", id);
 }
+
+/* ── Tenant ingress ───────────────────────────────────────────────────────── */
+
+// Set the domain a tenant publishes apps on. The control plane creates the DNS
+// zone and returns the nameservers the customer must delegate to; changing the
+// domain discards the wildcard certificate, which was issued for the old one.
+export async function setAppsDomain(slug: string, appsDomain: string): Promise<ActionResult> {
+  return run(
+    () => apiSend("PATCH", `/api/tenants/${encodeURIComponent(slug)}/ingress`, { appsDomain }),
+    [`/tenants/${slug}`, "/"],
+  );
+}
+
+// Record the customer's OIDC application. An empty client secret leaves the
+// stored one untouched — it is never shown back, so this lets the id be
+// corrected without re-entering it.
+export async function setOIDCConfig(
+  slug: string,
+  cfg: { oidcIssuer: string; oidcClientId: string; oidcClientSecret: string },
+): Promise<ActionResult> {
+  return run(
+    () => apiSend("PATCH", `/api/tenants/${encodeURIComponent(slug)}/oidc`, cfg),
+    [`/tenants/${slug}`, "/"],
+  );
+}

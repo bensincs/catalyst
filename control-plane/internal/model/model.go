@@ -63,6 +63,36 @@ type Tenant struct {
 	// Footprint shape: free-form config the admin sets before stamping (AKS node
 	// size/count).
 	FootprintConfig map[string]any `json:"footprintConfig,omitempty"`
+
+	// Ingress: the delegated domain apps are published on, its DNS delegation
+	// state, the wildcard certificate the control plane holds for it, and the
+	// customer's OIDC application. Secrets are never serialized — only whether
+	// they are set.
+	Ingress TenantIngress `json:"ingress"`
+}
+
+// TenantIngress is a tenant's published-apps configuration as shown to an
+// operator. It deliberately exposes presence flags rather than the TLS private
+// key or the OIDC client secret.
+type TenantIngress struct {
+	AppsDomain string `json:"appsDomain,omitempty"`
+
+	// DNSState is '' | pending | verified | failed. Delegation is verified by
+	// resolving the zone's NS records publicly and comparing them with the
+	// nameservers Azure assigned, so it reflects reality rather than intent.
+	DNSState       string   `json:"dnsState,omitempty"`
+	DNSDetail      string   `json:"dnsDetail,omitempty"`
+	DNSNameservers []string `json:"dnsNameservers,omitempty"`
+
+	// Wildcard certificate status for *.<AppsDomain>.
+	TLSReady     bool    `json:"tlsReady"`
+	TLSExpiresAt *string `json:"tlsExpiresAt,omitempty"`
+	TLSDetail    string  `json:"tlsDetail,omitempty"`
+
+	// The customer's OIDC application. The secret itself is never returned.
+	OIDCIssuer         string `json:"oidcIssuer,omitempty"`
+	OIDCClientID       string `json:"oidcClientId,omitempty"`
+	OIDCSecretSet      bool   `json:"oidcSecretSet"`
 }
 
 // Agent is an enabled agent running in a tenant.
@@ -276,6 +306,13 @@ type Application struct {
 	Values         string            `json:"values,omitempty"`
 	ExposeService  string            `json:"exposeService"` // Service the gateway routes to ("" = internal)
 	ExposePort     int               `json:"exposePort"`    // Service port (default 80)
+	// Hostname is the label published under the tenant's domain
+	// (<hostname>.<appsDomain>); empty ⇒ the app id. AuthRequired puts the app
+	// behind an OIDC login; OIDCScope is the scope on the tenant's app
+	// registration it requires.
+	Hostname     string `json:"hostname"`
+	OIDCScope    string `json:"oidcScope"`
+	AuthRequired bool   `json:"authRequired"`
 	Wiring         []shared.WireLink `json:"wiring"`        // infra dependency output → Helm values path
 	Dependencies   []Dependency      `json:"dependencies"`  // infrastructure | application | agent
 	CreatedBy      string            `json:"createdBy,omitempty"`
