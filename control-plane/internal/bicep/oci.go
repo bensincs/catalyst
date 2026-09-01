@@ -48,6 +48,11 @@ func fetchOCIModule(ctx context.Context, ref string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The host is caller-supplied and becomes an outbound request from a process
+	// with a managed identity inside a private network.
+	if err := checkPublicHost(registry); err != nil {
+		return nil, err
+	}
 	c := &ociClient{
 		http:     &http.Client{Timeout: 30 * time.Second},
 		scheme:   "https",

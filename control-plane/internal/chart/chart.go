@@ -64,6 +64,13 @@ func Inspect(ctx context.Context, repoURL, chart, version, release, values strin
 	if !Available() {
 		return nil, ErrNoHelm
 	}
+	// These become argv elements; a leading dash is a flag, not a value.
+	if err := validateRef(repoURL, chart, version); err != nil {
+		return nil, err
+	}
+	if err := validateRelease(release); err != nil {
+		return nil, err
+	}
 	dir, err := os.MkdirTemp("", "cortex-chart-")
 	if err != nil {
 		return nil, err
