@@ -202,6 +202,15 @@ resource acr 'Microsoft.ContainerRegistry/registries@2023-11-01-preview' = {
 resource kv 'Microsoft.KeyVault/vaults@2023-07-01' = {
   name: kvName
   location: location
+  // The subscription's governance forces publicNetworkAccess to Disabled and
+  // silently reverts attempts to change it — a PATCH answers 200 and the value
+  // stays Disabled. This tag is the sanctioned exemption. It is required, not
+  // cosmetic: the registry reads the upstream credential over Key Vault's DATA
+  // plane, so with access disabled a cache rule falls back to anonymous and
+  // every pull of a private upstream fails with 401.
+  tags: {
+    SecurityControl: 'Ignore'
+  }
   properties: {
     tenantId: subscription().tenantId
     sku: { family: 'A', name: 'standard' }
@@ -209,6 +218,10 @@ resource kv 'Microsoft.KeyVault/vaults@2023-07-01' = {
     enableSoftDelete: true
     softDeleteRetentionInDays: 7
     publicNetworkAccess: 'Enabled'
+    networkAcls: {
+      bypass: 'AzureServices'
+      defaultAction: 'Allow'
+    }
   }
 }
 
