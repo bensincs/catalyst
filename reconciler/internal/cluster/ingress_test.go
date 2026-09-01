@@ -157,6 +157,37 @@ func TestAuthRedirectURL(t *testing.T) {
 	}
 }
 
+func TestAuthDeploymentReadsEmailFromIDToken(t *testing.T) {
+	// Regression: without an explicit claim, oauth2-proxy looks for `email`,
+	// which Entra v2.0 omits for most work accounts. It then falls back to the
+	// userinfo endpoint using an access token minted for the app's own API, so
+	// Graph returns 401 and every callback ends in a 400. The claim must be
+	// read from the ID token instead.
+	d := authDeployment("todo-auth", "todo", shared.DesiredApplication{
+		ExposeService: "todo-app", ExposePort: 80,
+		OIDCScope: "api://11111111-1111-1111-1111-111111111111/Todo.Access",
+	}, &shared.IngressConfig{
+		OIDCIssuer:   "https://login.microsoftonline.com/tid/v2.0",
+		OIDCClientID: "11111111-1111-1111-1111-111111111111",
+	}, "todo.apps.example.com")
+
+	args, _, err := unstructured.NestedStringSlice(d.Object,
+		"spec", "template", "spec", "containers", "0", "args")
+	if err != nil {
+		// containers is a slice, so walk it manually.
+		cs, _, _ := unstructured.NestedSlice(d.Object, "spec", "template", "spec", "containers")
+		if len(cs) == 0 {
+			t.Fatal("no containers")
+		}
+		raw, _, _ := unstructured.NestedStringSlice(cs[0].(map[string]any), "args")
+		args = raw
+	}
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "--oidc-email-claim=preferred_username") {
+		t.Fatalf("expected the email claim to be read from the ID token, got: %s", joined)
+	}
+}
+
 func TestOCIRegistryURL(t *testing.T) {
 	cases := map[string]string{
 		"ghcr.io/bensincs":           "ghcr.io/bensincs",

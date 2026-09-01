@@ -94,6 +94,16 @@ func authDeployment(name, namespace string, a shared.DesiredApplication, ing *sh
 		"--client-id=" + ing.OIDCClientID,
 		"--redirect-url=" + authRedirectURL(host),
 		"--scope=" + strings.Join(scopes, " "),
+		// Entra v2.0 omits `email` from the ID token unless a directory admin
+		// adds it as an optional claim, and work accounts frequently have no
+		// mail attribute at all. oauth2-proxy's default claim is `email`, and
+		// when it is absent it falls back to the provider's userinfo endpoint —
+		// which cannot work here, because the access token is minted for the
+		// app's own API (a.OIDCScope), not for Graph, so Graph answers 401 and
+		// the callback fails with a 400. `preferred_username` is always present
+		// on a v2.0 ID token when `profile` is requested, so read it directly
+		// and never make the userinfo call.
+		"--oidc-email-claim=preferred_username",
 		"--upstream=" + upstream,
 		fmt.Sprintf("--http-address=0.0.0.0:%d", authPort),
 		// Behind AGC, so trust forwarded headers — but only from the gateway.
