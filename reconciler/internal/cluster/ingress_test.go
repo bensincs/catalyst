@@ -279,3 +279,45 @@ func TestChartUnpinned(t *testing.T) {
 		}
 	}
 }
+
+func TestArgoMessageIgnoresWedgedHookOnSettledApp(t *testing.T) {
+	// ingress-nginx (and any chart whose hooks use hook-delete-policy:
+	// hook-succeeded) leaves the operation stuck on "waiting for completion of
+	// hook ..." forever: Argo deletes the succeeded hook Job and then waits to
+	// observe its own deletion. The app is Synced, Healthy and serving, so that
+	// message must not be reported as the deployment's state.
+	settled := map[string]any{"status": map[string]any{
+		"sync":   map[string]any{"status": "Synced"},
+		"health": map[string]any{"status": "Healthy"},
+		"operationState": map[string]any{
+			"phase":   "Running",
+			"message": "waiting for completion of hook batch/Job/jenkins-ingress-nginx-admission-patch",
+		},
+	}}
+	if got := argoMessage(settled); got != "" {
+		t.Errorf("a synced, healthy app must report nothing, got %q", got)
+	}
+
+	// While it genuinely is not settled, the same message is the most useful
+	// thing to show — it says exactly what the sync is waiting on.
+	pending := map[string]any{"status": map[string]any{
+		"sync":   map[string]any{"status": "OutOfSync"},
+		"health": map[string]any{"status": "Progressing"},
+		"operationState": map[string]any{
+			"phase":   "Running",
+			"message": "waiting for completion of hook batch/Job/x",
+		},
+	}}
+	if got := argoMessage(pending); got == "" {
+		t.Error("an unsettled app should still report what the sync is waiting on")
+	}
+
+	// A real health problem always wins, settled or not.
+	unhealthy := map[string]any{"status": map[string]any{
+		"sync":   map[string]any{"status": "Synced"},
+		"health": map[string]any{"status": "Degraded", "message": "container crash-looping"},
+	}}
+	if got := argoMessage(unhealthy); got != "container crash-looping" {
+		t.Errorf("health message must win, got %q", got)
+	}
+}

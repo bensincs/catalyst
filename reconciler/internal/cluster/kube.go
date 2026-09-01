@@ -647,13 +647,35 @@ func splitDocs(data []byte) [][]byte {
 // chart that wouldn't pull), and the conditions list (comparison errors, missing
 // permissions). Take the first that says something — all of them are far more
 // use than the bare "Degraded" the console shows today.
+// argoSettled reports whether Argo considers the app both in sync and healthy —
+// i.e. the cluster already matches the desired state, whatever an in-flight
+// operation may still say about itself.
+func argoSettled(obj map[string]any) bool {
+	sync, _, _ := unstructured.NestedString(obj, "status", "sync", "status")
+	health, _, _ := unstructured.NestedString(obj, "status", "health", "status")
+	return strings.EqualFold(sync, "Synced") && strings.EqualFold(health, "Healthy")
+}
+
 func argoMessage(obj map[string]any) string {
 	if m, ok, _ := unstructured.NestedString(obj, "status", "health", "message"); ok && strings.TrimSpace(m) != "" {
 		return trunc(m)
 	}
-	if m, ok, _ := unstructured.NestedString(obj, "status", "operationState", "message"); ok && strings.TrimSpace(m) != "" {
-		if phase, _, _ := unstructured.NestedString(obj, "status", "operationState", "phase"); !strings.EqualFold(phase, "Succeeded") {
-			return trunc(m)
+	// An operation message describes work in flight, not the state of the app,
+	// so it is only worth reporting while the app is not yet settled. Charts
+	// whose hooks carry `helm.sh/hook-delete-policy: hook-succeeded` routinely
+	// leave the operation wedged on
+	//
+	//	waiting for completion of hook batch/Job/<release>-admission-patch
+	//
+	// indefinitely: Argo deletes the hook Job once it succeeds, then waits to
+	// observe a deletion it performed itself. Every hook has in fact succeeded
+	// and the workloads are running, so surfacing that against a Synced and
+	// Healthy app reports a live deployment as though it were still deploying.
+	if !argoSettled(obj) {
+		if m, ok, _ := unstructured.NestedString(obj, "status", "operationState", "message"); ok && strings.TrimSpace(m) != "" {
+			if phase, _, _ := unstructured.NestedString(obj, "status", "operationState", "phase"); !strings.EqualFold(phase, "Succeeded") {
+				return trunc(m)
+			}
 		}
 	}
 	conds, _, _ := unstructured.NestedSlice(obj, "status", "conditions")
