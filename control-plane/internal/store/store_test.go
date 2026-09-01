@@ -5,6 +5,9 @@ import (
 	"errors"
 	"os"
 	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/inception42/cortex/control-plane/internal/model"
 	"github.com/inception42/cortex/shared"
@@ -1012,5 +1015,59 @@ func TestInfraTeardownLifecycle(t *testing.T) {
 	}
 	if instanceRows() != 0 || targeted() {
 		t.Fatal("never-provisioned infra should be removed with no teardown target")
+	}
+}
+
+// TestMigrateRetriesUnderTableLock: the schema contains ALTER TABLE statements,
+// and ALTER TABLE takes ACCESS EXCLUSIVE even when it is a no-op — so a
+// migration racing an ordinary session (a second replica booting while the
+// first serves, or parallel test packages) can deadlock or time out. That was
+// a real intermittent CI failure. Migrate must ride it out rather than fail.
+func TestMigrateRetriesUnderTableLock(t *testing.T) {
+	st, ctx := testStore(t)
+	defer st.Close()
+
+	// Hold ACCESS EXCLUSIVE on tenants, so any ALTER TABLE in the schema blocks
+	// and Migrate's lock_timeout fires.
+	blocker, err := st.pool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	tx, err := blocker.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	if _, err := tx.Exec(ctx, `LOCK TABLE tenants IN ACCESS EXCLUSIVE MODE`); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+
+	released := make(chan struct{})
+	go func() {
+		// Hold long enough that at least one attempt gives up on the lock.
+		time.Sleep(6 * time.Second)
+		_ = tx.Rollback(ctx)
+		blocker.Release()
+		close(released)
+	}()
+
+	// Migrate should retry past the contention and succeed once the lock drops.
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatalf("migrate did not survive a contended table lock: %v", err)
+	}
+	<-released
+}
+
+func TestIsLockContention(t *testing.T) {
+	for _, code := range []string{"40P01", "55P03"} {
+		if !isLockContention(&pgconn.PgError{Code: code}) {
+			t.Errorf("%s should be treated as contention", code)
+		}
+	}
+	// A genuine schema error must not be retried into a timeout.
+	if isLockContention(&pgconn.PgError{Code: "42703"}) {
+		t.Error("undefined_column must not be treated as contention")
+	}
+	if isLockContention(errors.New("boom")) {
+		t.Error("non-pg error must not be treated as contention")
 	}
 }

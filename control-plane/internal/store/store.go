@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"sigs.k8s.io/yaml"
 
@@ -89,7 +90,42 @@ const migrationLockID int64 = 8265719004321
 // test packages sharing one database, or two API replicas booting together (the
 // container app runs 1-3). Take a session-level advisory lock so migrations
 // queue behind each other instead of racing.
+//
+// The advisory lock only orders migrations against each other, though. The
+// schema also contains ALTER TABLE statements, and ALTER TABLE takes ACCESS
+// EXCLUSIVE even when it is a no-op — so it still conflicts with ordinary
+// sessions reading those tables. One process migrating while another already
+// serves traffic (parallel test packages sharing a database, or a second API
+// replica booting) can therefore deadlock. The schema is idempotent, so fail
+// fast on a contended lock and retry the whole thing rather than blocking.
 func (s *Store) Migrate(ctx context.Context) error {
+	const attempts = 5
+	var err error
+	for i := range attempts {
+		if err = s.migrateOnce(ctx); err == nil || !isLockContention(err) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Duration(i+1) * 250 * time.Millisecond):
+		}
+	}
+	return fmt.Errorf("migrate: gave up after %d attempts: %w", attempts, err)
+}
+
+// isLockContention reports whether err is Postgres telling us the migration
+// lost a race for a lock, rather than anything being wrong with the schema.
+func isLockContention(err error) bool {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return false
+	}
+	// 40P01 deadlock_detected, 55P03 lock_not_available.
+	return pgErr.Code == "40P01" || pgErr.Code == "55P03"
+}
+
+func (s *Store) migrateOnce(ctx context.Context) error {
 	// The lock is per-connection, so the schema must run on the same one.
 	conn, err := s.pool.Acquire(ctx)
 	if err != nil {
@@ -102,9 +138,20 @@ func (s *Store) Migrate(ctx context.Context) error {
 	}
 	defer func() {
 		// Release even if ctx is already done, else the lock is held until the
-		// connection is reaped.
-		_, _ = conn.Exec(context.WithoutCancel(ctx), `SELECT pg_advisory_unlock($1)`, migrationLockID)
+		// connection is reaped. Reset lock_timeout too: the connection goes back
+		// to a shared pool, and leaving it set would silently apply a 5s ceiling
+		// to unrelated queries that borrow this connection later.
+		clean := context.WithoutCancel(ctx)
+		_, _ = conn.Exec(clean, `RESET lock_timeout`)
+		_, _ = conn.Exec(clean, `SELECT pg_advisory_unlock($1)`, migrationLockID)
 	}()
+
+	// Wait only briefly for a table lock. Without this a migration blocks behind
+	// a long-running reader indefinitely, holding the advisory lock while it
+	// does so and stalling every other booting replica behind it.
+	if _, err := conn.Exec(ctx, `SET lock_timeout = '5s'`); err != nil {
+		return err
+	}
 
 	_, err = conn.Exec(ctx, schemaSQL)
 	return err
