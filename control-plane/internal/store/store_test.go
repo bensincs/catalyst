@@ -1308,3 +1308,69 @@ func TestUsageOfReportsBlastRadius(t *testing.T) {
 		t.Errorf("unknown kind: %+v (%v)", u, err)
 	}
 }
+
+// TestDeleteCascadeIsAtomic: a delete detaches the entity from every tenant's
+// entitlements and enablements. Those ran as separate statements with their
+// errors discarded, so a failed cleanup left the entity gone but still named in
+// tenants' arrays — an inconsistency the caller was never told about, because
+// the delete reported success.
+func TestDeleteCascadeIsAtomic(t *testing.T) {
+	st, ctx := testStore(t)
+	defer st.Close()
+
+	const appID = "zz-cascade-app"
+	const slug = "zz-cascade-tenant"
+	cleanup := func() {
+		_, _ = st.pool.Exec(ctx, `DELETE FROM tenant_deployments WHERE app_id = $1`, appID)
+		_, _ = st.pool.Exec(ctx, `DELETE FROM applications WHERE id = $1`, appID)
+		_, _ = st.pool.Exec(ctx, `DELETE FROM tenants WHERE id = $1`, slug)
+	}
+	cleanup()
+	defer cleanup()
+
+	if err := insertApplication(ctx, st.pool, model.Application{
+		ID: appID, Name: "Cascade", Owner: "", Namespace: "web", RepoURL: "https://r", Chart: "c",
+	}, "oid"); err != nil {
+		t.Fatalf("app: %v", err)
+	}
+	if _, err := st.pool.Exec(ctx,
+		`INSERT INTO tenants (id, name, tenant_id, enrollment, enabled) VALUES ($1,'C',$2,'bound',true)`,
+		slug, slug+"-tid"); err != nil {
+		t.Fatalf("tenant: %v", err)
+	}
+	if err := st.SetDeploymentEntitlements(ctx, slug, []string{appID}); err != nil {
+		t.Fatalf("entitle: %v", err)
+	}
+	if err := st.EnableDeployment(ctx, slug, appID); err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+
+	if err := st.DeleteApplication(ctx, appID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+
+	// Nothing may still reference it: an orphaned entitlement offers a tenant
+	// something that no longer exists, and an orphaned enablement row keeps a
+	// workload in the desired state.
+	var entitlements int
+	if err := st.pool.QueryRow(ctx,
+		`SELECT count(*) FROM tenants WHERE $1 = ANY(entitled_deployments)`, appID).Scan(&entitlements); err != nil {
+		t.Fatalf("count entitlements: %v", err)
+	}
+	if entitlements != 0 {
+		t.Errorf("entitlement survived the delete (%d tenants still reference it)", entitlements)
+	}
+	var enablements int
+	if err := st.pool.QueryRow(ctx,
+		`SELECT count(*) FROM tenant_deployments WHERE app_id = $1`, appID).Scan(&enablements); err != nil {
+		t.Fatalf("count enablements: %v", err)
+	}
+	if enablements != 0 {
+		t.Errorf("enablement row survived the delete (%d)", enablements)
+	}
+
+	// Deleting something absent is reported, not silently treated as success.
+	if err := st.DeleteApplication(ctx, appID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("second delete should report not-found, got %v", err)
+	}
+}

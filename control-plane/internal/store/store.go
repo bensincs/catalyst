@@ -859,16 +859,10 @@ func (s *Store) CatalogAgentOwner(ctx context.Context, agentID string) (string, 
 // un-entitles it everywhere, and removes any enabled instances. Deletion is not
 // blocked by in-use — the dep tree is trusted; the admin is choosing to remove it.
 func (s *Store) DeleteCatalogAgent(ctx context.Context, id string) error {
-	tag, err := s.pool.Exec(ctx, `DELETE FROM catalog_agents WHERE id = $1`, id)
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-	_, _ = s.pool.Exec(ctx, `UPDATE tenants SET entitled_agents = array_remove(entitled_agents, $1)`, id)
-	_, _ = s.pool.Exec(ctx, `DELETE FROM agents WHERE agent_id = $1`, id)
-	return nil
+	return s.deleteCascade(ctx, "catalog_agents", id,
+		`UPDATE tenants SET entitled_agents = array_remove(entitled_agents, $1)`,
+		`DELETE FROM agents WHERE agent_id = $1`,
+	)
 }
 
 // UpdateCatalogAgent edits an agent's name/description/model and overwrites its
@@ -1003,18 +997,12 @@ func (s *Store) UpdateMemoryStore(ctx context.Context, id, name, description str
 }
 
 func (s *Store) DeleteMemoryStore(ctx context.Context, id string) error {
-	tag, err := s.pool.Exec(ctx, `DELETE FROM memory_stores WHERE id = $1`, id)
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-	// Detach the store from tenant entitlements, enablements + agent connections.
-	_, _ = s.pool.Exec(ctx, `UPDATE tenants SET entitled_stores = array_remove(entitled_stores, $1)`, id)
-	_, _ = s.pool.Exec(ctx, `DELETE FROM tenant_stores WHERE store_id = $1`, id)
-	_, _ = s.pool.Exec(ctx, `UPDATE agents SET memory_store = '' WHERE memory_store = $1`, id)
-	return nil
+	// Detach from tenant entitlements, enablements, and agent connections.
+	return s.deleteCascade(ctx, "memory_stores", id,
+		`UPDATE tenants SET entitled_stores = array_remove(entitled_stores, $1)`,
+		`DELETE FROM tenant_stores WHERE store_id = $1`,
+		`UPDATE agents SET memory_store = '' WHERE memory_store = $1`,
+	)
 }
 
 func (s *Store) SetStoreEntitlements(ctx context.Context, slug string, storeIDs []string) error {
@@ -2136,16 +2124,10 @@ func (s *Store) UpdateApplication(ctx context.Context, a model.Application) erro
 // DeleteApplication removes a deployment definition and detaches it from tenant
 // entitlements + enablements.
 func (s *Store) DeleteApplication(ctx context.Context, id string) error {
-	tag, err := s.pool.Exec(ctx, `DELETE FROM applications WHERE id = $1`, id)
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-	_, _ = s.pool.Exec(ctx, `UPDATE tenants SET entitled_deployments = array_remove(entitled_deployments, $1)`, id)
-	_, _ = s.pool.Exec(ctx, `DELETE FROM tenant_deployments WHERE app_id = $1`, id)
-	return nil
+	return s.deleteCascade(ctx, "applications", id,
+		`UPDATE tenants SET entitled_deployments = array_remove(entitled_deployments, $1)`,
+		`DELETE FROM tenant_deployments WHERE app_id = $1`,
+	)
 }
 
 func (s *Store) SetDeploymentEntitlements(ctx context.Context, slug string, appIDs []string) error {
@@ -2324,9 +2306,18 @@ func (s *Store) UpdateInfrastructure(ctx context.Context, i model.Infrastructure
 }
 
 func (s *Store) DeleteInfrastructure(ctx context.Context, id string) error {
+	// One transaction: a partial run here leaves the definition marked for
+	// deletion but still entitled, or instances marked for teardown while the
+	// definition survives — states nothing later reconciles away.
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
 	// Mark the definition as being deleted (shown "Deleting"); it is removed once
 	// its last provisioned instance is torn down.
-	tag, err := s.pool.Exec(ctx, `UPDATE infrastructure SET pending_delete = true WHERE id = $1`, id)
+	tag, err := tx.Exec(ctx, `UPDATE infrastructure SET pending_delete = true WHERE id = $1`, id)
 	if err != nil {
 		return err
 	}
@@ -2334,26 +2325,31 @@ func (s *Store) DeleteInfrastructure(ctx context.Context, id string) error {
 		return ErrNotFound
 	}
 	// Stop offering it — detach from every tenant's entitlements.
-	_, _ = s.pool.Exec(ctx, `UPDATE tenants SET entitled_infrastructure = array_remove(entitled_infrastructure, $1)`, id)
+	if _, err := tx.Exec(ctx,
+		`UPDATE tenants SET entitled_infrastructure = array_remove(entitled_infrastructure, $1)`, id); err != nil {
+		return err
+	}
 	// Provisioned instances → mark for teardown (kept as "Deprovisioning").
-	if _, err := s.pool.Exec(ctx,
+	if _, err := tx.Exec(ctx,
 		`UPDATE tenant_infrastructure ti SET pending_delete = true, infra_state = 'deprovisioning', health = 'reconciling', auto = false
 		 FROM tenants t WHERE ti.tenant_slug = t.id AND ti.infra_id = $1
 		   AND ti.infra_state <> '' AND coalesce(t.subscription_id, '') <> ''`, id); err != nil {
 		return err
 	}
 	// Never-provisioned instances → drop immediately (nothing in Azure).
-	if _, err := s.pool.Exec(ctx,
+	if _, err := tx.Exec(ctx,
 		`DELETE FROM tenant_infrastructure ti USING tenants t
 		 WHERE ti.tenant_slug = t.id AND ti.infra_id = $1
 		   AND (ti.infra_state = '' OR coalesce(t.subscription_id, '') = '')`, id); err != nil {
 		return err
 	}
 	// Nothing left to tear down anywhere → remove the definition now.
-	_, err = s.pool.Exec(ctx,
+	if _, err := tx.Exec(ctx,
 		`DELETE FROM infrastructure WHERE id = $1 AND pending_delete = true
-		   AND NOT EXISTS (SELECT 1 FROM tenant_infrastructure WHERE infra_id = $1)`, id)
-	return err
+		   AND NOT EXISTS (SELECT 1 FROM tenant_infrastructure WHERE infra_id = $1)`, id); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 // InfrastructureOwner returns an infrastructure entity's owner ("" = platform).
