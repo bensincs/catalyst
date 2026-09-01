@@ -896,7 +896,6 @@ func (s *Server) handleRestoreTenant(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "restored"})
 }
 
-
 // handleSetAppsDomain sets the domain a tenant publishes apps on (platform only).
 //
 // Changing it resets delegation and discards the wildcard certificate, which was
@@ -1133,11 +1132,30 @@ func (s *Server) handleInspectChart(w http.ResponseWriter, r *http.Request) {
 		RepoURL string `json:"repoURL"`
 		Chart   string `json:"chart"`
 		Version string `json:"version"`
+		// Identify the release so rendered Service names are the real ones. When
+		// editing, AppID is the deployment's id; when creating it does not exist
+		// yet, so Name is slugged with the same rule create uses. The server owns
+		// that rule, so the client must not try to predict it.
+		AppID  string `json:"appId"`
+		Name   string `json:"name"`
+		Values string `json:"values"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
 	}
-	iface, err := chart.Inspect(r.Context(), body.RepoURL, body.Chart, body.Version)
+	release := strings.TrimSpace(body.AppID)
+	if release == "" && strings.TrimSpace(body.Name) != "" {
+		prefix := ""
+		if id, _ := auth.IdentityFrom(r.Context()); id.Role == model.RoleTenant {
+			t, ok := s.callerTenant(w, r)
+			if !ok {
+				return
+			}
+			prefix = t.ID + "-"
+		}
+		release = prefix + slugify(body.Name)
+	}
+	iface, err := chart.Inspect(r.Context(), body.RepoURL, body.Chart, body.Version, release, body.Values)
 	if err != nil {
 		if errors.Is(err, chart.ErrNoHelm) {
 			writeJSON(w, http.StatusOK, map[string]any{"resolved": false})
@@ -1153,6 +1171,7 @@ func (s *Server) handleInspectChart(w http.ResponseWriter, r *http.Request) {
 		"description": iface.Description,
 		"defaults":    iface.Defaults,
 		"schema":      iface.Schema,
+		"services":    iface.Services,
 	})
 }
 

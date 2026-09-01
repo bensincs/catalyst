@@ -144,12 +144,21 @@ export interface BicepOutputSpec {
  *  console can render a typed, searchable values builder instead of a raw
  *  textarea. The stored deployment `values` are override-only YAML: Helm merges
  *  them over these defaults at install. */
+/** A Service the chart renders for this release — an exposure candidate. The
+ *  name is the real object name, because the reconciler routes to it verbatim. */
+export interface ChartService {
+  name: string;
+  type?: string;
+  ports?: number[];
+}
+
 export interface ChartInterface {
   name: string;
   version: string;
   description?: string;
   defaults: Record<string, unknown>; // values.yaml → the default value tree
   schema?: Record<string, unknown>; // values.schema.json (JSON Schema), when present
+  services?: ChartService[];        // Services this release renders, for the exposure picker
 }
 
 /** A typed dependency candidate ({kind,id,name}) offered in a form's dependency

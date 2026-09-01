@@ -1,18 +1,18 @@
 "use client";
 
-import { useEffect, useMemo, useState, useTransition, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft, Boxes, Cable, GitBranch, Globe, Package, Rocket } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Field, TextInput, Textarea } from "@/components/ui/form";
+import { Field, Select, TextInput, Textarea } from "@/components/ui/form";
 import { StatusBadge } from "@/components/ui/status";
 import { useToast } from "@/components/providers/toast-provider";
 import { ValuesEditor } from "./values-editor";
 import { DependencyPicker } from "./dependency-picker";
 import { createApplication, updateApplication, inspectChart, type ActionResult } from "@/lib/actions";
 import { mapToYaml, yamlToMap } from "@/lib/values";
-import type { Application, ClusterInfo, Dependency, DepKind, DepOption, Role, WireLink } from "@/lib/types";
+import type { Application, ChartService, ClusterInfo, Dependency, DepKind, DepOption, Role, WireLink } from "@/lib/types";
 import styles from "./deployment-form.module.css";
 
 type Obj = Record<string, unknown>;
@@ -123,6 +123,11 @@ export function DeploymentForm({
   // The version the registry resolves for this chart. Inspection resolves it
   // even when the field is blank, so it can be offered as a one-click pin.
   const [resolvedVersion, setResolvedVersion] = useState("");
+  // The Services this release renders — the exposure candidates.
+  const [chartServices, setChartServices] = useState<ChartService[]>([]);
+
+  const valuesRef = useRef(values);
+  valuesRef.current = values;
 
   useEffect(() => {
     const repo = repoURL.trim();
@@ -130,23 +135,30 @@ export function DeploymentForm({
     if (repo === "" || c === "") {
       setHelmPaths([]);
       setResolvedVersion("");
+      setChartServices([]);
       return;
     }
     let cancelled = false;
     setChartLoading(true);
     const t = setTimeout(async () => {
       try {
-        const r = await inspectChart(repo, c, targetRevision.trim());
+        const r = await inspectChart(repo, c, targetRevision.trim(), {
+          appId: app?.id,
+          name,
+          values: valuesRef.current,
+        });
         if (cancelled) return;
         setChartLoading(false);
         const ok = r.ok && r.resolved && r.iface;
         setHelmPaths(ok ? flattenPaths(r.iface!.defaults) : []);
         setResolvedVersion(ok ? (r.iface!.version ?? "") : "");
+        setChartServices(ok ? (r.iface!.services ?? []) : []);
       } catch {
         if (!cancelled) {
           setChartLoading(false);
           setHelmPaths([]);
           setResolvedVersion("");
+          setChartServices([]);
         }
       }
     }, 600);
@@ -154,7 +166,7 @@ export function DeploymentForm({
       cancelled = true;
       clearTimeout(t);
     };
-  }, [repoURL, chart, targetRevision]);
+  }, [repoURL, chart, targetRevision, name, app?.id]);
 
   // The wireable sources are the outputs of the app's chosen dependencies — each
   // namespaced by "<kind>:<id>" so the WireLink knows its origin.
@@ -333,11 +345,55 @@ export function DeploymentForm({
         <Section
           icon={Globe}
           title="Exposure"
-          desc="Publish this app through the tenant's gateway. Name the in-cluster Service the chart creates (often <release>-<chart>, e.g. my-app-todo-app) — leave blank to keep the app cluster-internal (no ingress). The app is published at <hostname>.<the tenant's domain>."
+          desc="Publish this app through the tenant's gateway. Choose which of the chart's Services to route to — leave it unexposed to keep the app cluster-internal. The app is published at <hostname>.<the tenant's domain>."
         >
           <div className={styles.grid2}>
-            <Field label="Expose service" htmlFor="dep-svc" hint="The chart's Service name to route to. Blank = internal only.">
-              <TextInput id="dep-svc" value={exposeService} onChange={(e) => setExposeService(e.target.value)} placeholder="my-app-todo-app" spellCheck={false} />
+            <Field
+              label="Expose service"
+              htmlFor="dep-svc"
+              hint={
+                chartServices.length > 0
+                  ? "A Service this chart renders. Unexposed = internal only."
+                  : "The chart's Service name to route to. Blank = internal only."
+              }
+            >
+              {chartServices.length > 0 ? (
+                <Select
+                  id="dep-svc"
+                  value={exposeService}
+                  onChange={(e) => {
+                    const picked = e.target.value;
+                    setExposeService(picked);
+                    // A Service names its own port, so there is no reason to make
+                    // someone find and retype it.
+                    const svc = chartServices.find((c) => c.name === picked);
+                    if (svc?.ports?.length) setExposePort(svc.ports[0]);
+                  }}
+                >
+                  <option value="">Not exposed — cluster-internal</option>
+                  {chartServices.map((c) => (
+                    <option key={c.name} value={c.name}>
+                      {c.name}
+                      {c.ports?.length ? ` · port ${c.ports.join(", ")}` : ""}
+                      {c.type ? ` · ${c.type}` : ""}
+                    </option>
+                  ))}
+                  {/* Keep a stored choice selectable even if the chart, its
+                      version or its values no longer render that Service —
+                      dropping it silently would unpublish the app on save. */}
+                  {exposeService !== "" && !chartServices.some((c) => c.name === exposeService) && (
+                    <option value={exposeService}>{exposeService} — not in this chart</option>
+                  )}
+                </Select>
+              ) : (
+                <TextInput
+                  id="dep-svc"
+                  value={exposeService}
+                  onChange={(e) => setExposeService(e.target.value)}
+                  placeholder="my-app-todo-app"
+                  spellCheck={false}
+                />
+              )}
             </Field>
             <Field label="Port" htmlFor="dep-port" hint="Service port to route to.">
               <TextInput

@@ -8,6 +8,7 @@ import type {
   BicepOutputSpec,
   BicepParamSpec,
   ChartInterface,
+  ChartService,
   Dependency,
   MemoryStoreDefinition,
   WireLink,
@@ -113,6 +114,10 @@ export async function inspectChart(
   repoURL: string,
   chart: string,
   version: string,
+  // Identify the release so the rendered Service names are the ones this
+  // deployment will actually create. The server derives the release name (it
+  // owns the id rule), so pass the app's id when editing and its name when not.
+  release?: { appId?: string; name?: string; values?: string },
 ): Promise<InspectChartResult> {
   const repo = repoURL.trim();
   const name = chart.trim();
@@ -125,7 +130,15 @@ export async function inspectChart(
       description?: string;
       defaults?: Record<string, unknown>;
       schema?: Record<string, unknown>;
-    }>("POST", "/api/applications/inspect-chart", { repoURL: repo, chart: name, version: version.trim() });
+      services?: ChartService[];
+    }>("POST", "/api/applications/inspect-chart", {
+      repoURL: repo,
+      chart: name,
+      version: version.trim(),
+      appId: release?.appId ?? "",
+      name: release?.name ?? "",
+      values: release?.values ?? "",
+    });
     if (!d.resolved) return { ok: true, resolved: false };
     return {
       ok: true,
@@ -136,6 +149,7 @@ export async function inspectChart(
         description: d.description,
         defaults: d.defaults ?? {},
         schema: d.schema,
+        services: d.services ?? [],
       },
     };
   } catch (e) {

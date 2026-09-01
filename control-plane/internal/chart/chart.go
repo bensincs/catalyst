@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"sigs.k8s.io/yaml"
@@ -23,6 +24,16 @@ var ErrNoHelm = errors.New("no helm CLI available")
 // ErrBadRef is returned when neither an HTTP repo+chart nor an OCI ref is given.
 var ErrBadRef = errors.New("a Helm repo + chart (or an oci:// reference) is required")
 
+// Service is a Service the chart renders — an exposure candidate. The name is
+// the real object name for the release being authored, not a template, because
+// the reconciler routes to it verbatim: a name that is merely close does not
+// resolve, and the app silently serves nothing.
+type Service struct {
+	Name  string `json:"name"`
+	Type  string `json:"type,omitempty"`
+	Ports []int  `json:"ports,omitempty"`
+}
+
 // Interface is a chart's authoring surface for the values builder.
 type Interface struct {
 	Name        string          `json:"name"`
@@ -30,6 +41,7 @@ type Interface struct {
 	Description string          `json:"description,omitempty"`
 	Defaults    json.RawMessage `json:"defaults"`         // values.yaml → JSON (the value tree + defaults)
 	Schema      json.RawMessage `json:"schema,omitempty"` // values.schema.json (JSON Schema), when present
+	Services    []Service       `json:"services,omitempty"`
 }
 
 // Available reports whether the helm CLI is on PATH.
@@ -42,7 +54,7 @@ func Available() bool {
 // repo or an oci:// registry; chart is the chart name; version pins it (empty =
 // latest). Returns ErrNoHelm when the toolchain is absent (the console then falls
 // back to a raw YAML editor).
-func Inspect(ctx context.Context, repoURL, chart, version string) (*Interface, error) {
+func Inspect(ctx context.Context, repoURL, chart, version, release, values string) (*Interface, error) {
 	repoURL, chart = strings.TrimSpace(repoURL), strings.TrimSpace(chart)
 	oci := strings.HasPrefix(repoURL, "oci://")
 	if (!oci && (repoURL == "" || chart == "")) || (oci && repoURL == "") {
@@ -82,7 +94,88 @@ func Inspect(ctx context.Context, repoURL, chart, version string) (*Interface, e
 	v, _ := os.ReadFile(filepath.Join(chartDir, "values.yaml"))
 	s, _ := os.ReadFile(filepath.Join(chartDir, "values.schema.json"))
 	c, _ := os.ReadFile(filepath.Join(chartDir, "Chart.yaml"))
-	return buildInterface(v, s, c), nil
+	iface := buildInterface(v, s, c)
+	iface.Services = renderServices(ctx, chartDir, dir, release, values)
+	return iface, nil
+}
+
+// renderServices templates the chart and reports the Services it produces.
+//
+// Rendering is best-effort: a chart may need cluster capabilities it cannot have
+// here, and half-written values are normal while the author is still typing.
+// Either way the console falls back to naming the service by hand, so a failure
+// must never fail the inspection.
+func renderServices(ctx context.Context, chartDir, tmpDir, release, values string) []Service {
+	if strings.TrimSpace(release) == "" {
+		return nil
+	}
+	render := func(withValues bool) ([]byte, error) {
+		args := []string{"template", release, chartDir}
+		if withValues {
+			f := filepath.Join(tmpDir, "values-in.yaml")
+			if err := os.WriteFile(f, []byte(values), 0o600); err != nil {
+				return nil, err
+			}
+			args = append(args, "--values", f)
+		}
+		return exec.CommandContext(ctx, "helm", args...).Output()
+	}
+
+	out, err := render(strings.TrimSpace(values) != "")
+	if err != nil {
+		// The author's values are the usual reason rendering fails mid-edit.
+		// Fall back to the chart's own defaults so the list still appears; the
+		// names only shift if a value actually renames a Service.
+		if out, err = render(false); err != nil {
+			return nil
+		}
+	}
+	return servicesFromManifests(out)
+}
+
+// servicesFromManifests picks the Services out of a rendered multi-document
+// manifest stream (pure, so it unit-tests without helm).
+func servicesFromManifests(manifests []byte) []Service {
+	var out []Service
+	seen := map[string]bool{}
+	for _, doc := range strings.Split(string(manifests), "\n---") {
+		if !strings.Contains(doc, "kind: Service") {
+			continue
+		}
+		var m struct {
+			Kind     string `json:"kind"`
+			Metadata struct {
+				Name string `json:"name"`
+			} `json:"metadata"`
+			Spec struct {
+				Type  string `json:"type"`
+				Ports []struct {
+					Port int `json:"port"`
+				} `json:"ports"`
+			} `json:"spec"`
+		}
+		j, err := yaml.YAMLToJSON([]byte(doc))
+		if err != nil || len(j) == 0 {
+			continue
+		}
+		if err := json.Unmarshal(j, &m); err != nil {
+			continue
+		}
+		// "ServiceAccount" also contains the substring, so match the kind exactly.
+		if m.Kind != "Service" || m.Metadata.Name == "" || seen[m.Metadata.Name] {
+			continue
+		}
+		seen[m.Metadata.Name] = true
+		svc := Service{Name: m.Metadata.Name, Type: m.Spec.Type}
+		for _, p := range m.Spec.Ports {
+			if p.Port > 0 {
+				svc.Ports = append(svc.Ports, p.Port)
+			}
+		}
+		out = append(out, svc)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
 }
 
 // buildInterface assembles the Interface from the three chart files (pure, so it

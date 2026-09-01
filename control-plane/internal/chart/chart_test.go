@@ -45,3 +45,66 @@ func TestBuildInterfaceEmptyValues(t *testing.T) {
 		t.Fatalf("name: %s", iface.Name)
 	}
 }
+
+func TestServicesFromManifests(t *testing.T) {
+	// A realistic render: several documents, two Services, and a ServiceAccount
+	// whose kind contains "Service" as a substring and must not be mistaken for
+	// one. Names are the release's real object names, which is the whole point —
+	// the reconciler routes to whatever is chosen, verbatim.
+	manifests := []byte(`apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: jenkins-ingress-nginx
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jenkins-ingress-nginx-controller
+spec:
+  type: LoadBalancer
+  ports:
+    - port: 80
+      name: http
+    - port: 443
+      name: https
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jenkins-ingress-nginx-controller
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jenkins-ingress-nginx-controller-admission
+spec:
+  type: ClusterIP
+  ports:
+    - port: 443
+`)
+	got := servicesFromManifests(manifests)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 services, got %d: %#v", len(got), got)
+	}
+	// Sorted by name, so the order is stable for the picker.
+	if got[0].Name != "jenkins-ingress-nginx-controller" || got[1].Name != "jenkins-ingress-nginx-controller-admission" {
+		t.Fatalf("wrong names/order: %#v", got)
+	}
+	if got[0].Type != "LoadBalancer" || len(got[0].Ports) != 2 || got[0].Ports[0] != 80 || got[0].Ports[1] != 443 {
+		t.Errorf("first service wrong: %#v", got[0])
+	}
+	if got[1].Type != "ClusterIP" || len(got[1].Ports) != 1 || got[1].Ports[0] != 443 {
+		t.Errorf("second service wrong: %#v", got[1])
+	}
+}
+
+func TestServicesFromManifestsIgnoresJunk(t *testing.T) {
+	if got := servicesFromManifests(nil); len(got) != 0 {
+		t.Errorf("nil manifests: %#v", got)
+	}
+	// A document that mentions the kind but is not one, and an unparsable doc.
+	junk := []byte("kind: ServiceMonitor\nmetadata:\n  name: x\n---\nkind: Service\n  bad: [indent\n")
+	if got := servicesFromManifests(junk); len(got) != 0 {
+		t.Errorf("expected nothing usable, got %#v", got)
+	}
+}
