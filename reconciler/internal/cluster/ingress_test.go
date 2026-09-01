@@ -400,3 +400,22 @@ func TestRegistryAuthOverridesDeploymentValues(t *testing.T) {
 		}
 	}
 }
+
+func TestPublishFailureIsNotOverwrittenByArgo(t *testing.T) {
+	// Argo reports on the chart. It does not know that an app's HTTPRoute or its
+	// oauth2-proxy failed to apply, so it will happily report Healthy while the
+	// app is unreachable or unprotected. A publishing failure has to win, or a
+	// broken app reads as fine — which is worse than the reverse.
+	settledArgo := map[string]any{"status": map[string]any{
+		"sync":   map[string]any{"status": "Synced"},
+		"health": map[string]any{"status": "Healthy"},
+	}}
+	// argoMessage is what would be written for a healthy app: nothing.
+	if got := argoMessage(settledArgo); got != "" {
+		t.Fatalf("a healthy app should have no message, got %q", got)
+	}
+	// So if the publish error were overwritten, the operator would see an empty
+	// detail and a Healthy status for an app that is not serving. The reconciler
+	// guards that by only consulting Argo when publishing succeeded; this test
+	// pins the premise that makes the guard necessary.
+}

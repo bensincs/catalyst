@@ -155,6 +155,18 @@ func (k *kube) reconcileApplications(ctx context.Context, apps []shared.DesiredA
 		if url := ociRegistryURL(a.RepoURL); url != "" {
 			ociRepos[ociSecretName(url)] = url
 		}
+		// Publishing failures are collected rather than only logged: an app whose
+		// oauth2-proxy or route failed to apply is unprotected or unreachable,
+		// and Argo would still report the chart itself Healthy — so without this
+		// a broken app reads as fine.
+		var publishErr string
+		note := func(what string, err error) {
+			slog.Warn("cluster: "+what+" failed", "app", name, "err", trunc(err.Error()))
+			if publishErr == "" {
+				publishErr = what + " failed: " + trunc(err.Error())
+			}
+		}
+
 		k.ensureWorkloadNamespace(ctx, a.Namespace) // make sure the target namespace exists
 		// Argo pulls the chart; the kubelet pulls the images it references, and
 		// has no credential of its own. Do this before the Application is
@@ -182,15 +194,15 @@ func (k *kube) reconcileApplications(ctx context.Context, apps []shared.DesiredA
 					cookie := cookieSecretFor(o.TenantSlug, a.ID, ing.OIDCClientSecret)
 					si := k.dyn.Resource(secGVR).Namespace(a.Namespace)
 					if _, err := si.Apply(ctx, an, authSecret(an, a.Namespace, a.ID, ing.OIDCClientSecret, cookie), ssaOpts); err != nil {
-						slog.Warn("cluster: apply auth secret failed", "app", name, "err", trunc(err.Error()))
+						note("apply auth secret", err)
 					}
 					if _, err := k.dyn.Resource(depGVR).Namespace(a.Namespace).
 						Apply(ctx, an, authDeployment(an, a.Namespace, a, ing, host), ssaOpts); err != nil {
-						slog.Warn("cluster: apply oauth2-proxy failed", "app", name, "err", trunc(err.Error()))
+						note("apply oauth2-proxy", err)
 					}
 					if _, err := k.dyn.Resource(svcGVR).Namespace(a.Namespace).
 						Apply(ctx, an, authService(an, a.Namespace, a.ID), ssaOpts); err != nil {
-						slog.Warn("cluster: apply auth service failed", "app", name, "err", trunc(err.Error()))
+						note("apply auth service", err)
 					}
 					backend, backendPort = an, 80
 					authed[an] = true
@@ -198,12 +210,18 @@ func (k *kube) reconcileApplications(ctx context.Context, apps []shared.DesiredA
 
 				route := appRoute(name, a.Namespace, a.ID, host, backend, backendPort)
 				if _, err := k.dyn.Resource(routeGVR).Namespace(a.Namespace).Apply(ctx, name, route, ssaOpts); err != nil {
-					slog.Warn("cluster: apply HTTPRoute failed", "app", name, "err", trunc(err.Error()))
+					note("apply HTTPRoute", err)
 				}
 				exposed[name] = true
 			}
 		}
 		st := shared.ApplicationStatus{ID: a.ID, SyncStatus: "pending", HealthStatus: "pending"}
+		if publishErr != "" {
+			// The chart may well be Healthy; what failed is publishing it, and
+			// that is what the operator needs to see.
+			st.HealthStatus = "Degraded"
+			st.Detail = publishErr
+		}
 		// Argo rejects a Helm chart source with no targetRevision:
 		//
 		//	InvalidSpecError: spec.source.targetRevision is required if the
@@ -228,10 +246,15 @@ func (k *kube) reconcileApplications(ctx context.Context, apps []shared.DesiredA
 			if sync, ok, _ := unstructured.NestedString(cur.Object, "status", "sync", "status"); ok && sync != "" {
 				st.SyncStatus = sync
 			}
-			if health, ok, _ := unstructured.NestedString(cur.Object, "status", "health", "status"); ok && health != "" {
-				st.HealthStatus = health
+			// Argo reports on the chart. It does not know the app's route or its
+			// oauth2-proxy failed to apply, and would happily say Healthy — so a
+			// publishing failure is not overwritten by it.
+			if publishErr == "" {
+				if health, ok, _ := unstructured.NestedString(cur.Object, "status", "health", "status"); ok && health != "" {
+					st.HealthStatus = health
+				}
+				st.Detail = argoMessage(cur.Object)
 			}
-			st.Detail = argoMessage(cur.Object)
 		}
 		out = append(out, st)
 	}
