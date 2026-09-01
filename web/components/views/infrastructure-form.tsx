@@ -8,7 +8,7 @@ import { Field, TextInput, Textarea } from "@/components/ui/form";
 import { StatusBadge } from "@/components/ui/status";
 import { useToast } from "@/components/providers/toast-provider";
 import { FormShell, FormSection } from "./form-shell";
-import { WiringCanvas } from "./wiring-canvas";
+import { ValuesEditor } from "./values-editor";
 import { DependencyPicker } from "./dependency-picker";
 import {
   createInfrastructure,
@@ -177,11 +177,10 @@ export function InfrastructureForm({
           title="Bicep inputs"
           desc="Set each of the module's parameters — baked into the template on save. Put {{tenantHash}} (or {{tenant}} / {{region}}) inside a value for a per-tenant-unique result — e.g. a globally-unique Key Vault name across tenants."
         >
-          <WiringCanvas
+          <ValuesEditor
             targets={paramNames}
             requiredTargets={requiredParams}
             allowAddTarget
-            sourceLabel="Static inputs"
             targetLabel="Bicep inputs"
             addPlaceholder="Add a parameter not listed…"
             emptyHint={inspect.loading ? "Resolving the module's inputs…" : "No inputs resolved — add a parameter below."}
@@ -195,7 +194,7 @@ export function InfrastructureForm({
           />
           {missingRequired.length > 0 && (
             <p className={styles.note}>
-              {missingRequired.length} required input{missingRequired.length === 1 ? "" : "s"} still unset — wire a value into{" "}
+              {missingRequired.length} required input{missingRequired.length === 1 ? "" : "s"} still unset — set{" "}
               <span className="mono">{missingRequired.join(", ")}</span> before saving.
             </p>
           )}

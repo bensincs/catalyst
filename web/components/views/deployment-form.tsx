@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Field, TextInput, Textarea } from "@/components/ui/form";
 import { StatusBadge } from "@/components/ui/status";
 import { useToast } from "@/components/providers/toast-provider";
-import { WiringCanvas } from "./wiring-canvas";
+import { ValuesEditor } from "./values-editor";
 import { DependencyPicker } from "./dependency-picker";
 import { createApplication, updateApplication, inspectChart, type ActionResult } from "@/lib/actions";
 import { mapToYaml, yamlToMap } from "@/lib/values";
@@ -335,16 +335,15 @@ export function DeploymentForm({
           <Section
             icon={Cable}
             title="Helm values"
-            desc="Wire a source — a static value you type, or an output of a chosen dependency (infrastructure, application, or agent) — into each Helm value. The only place a chart's values are set."
+            desc="Set each of the chart's values — type a literal, or bind it to an output of one of this deployment's dependencies. The only place a chart's values are set."
             accent
           >
-            <WiringCanvas
+            <ValuesEditor
               outputs={liveOutputs}
               outputLabel={outputLabel}
               targets={helmPaths}
               suggestions={helmPaths}
               allowAddTarget
-              sourceLabel="Sources"
               targetLabel="Helm values"
               addPlaceholder="Add a value not listed — e.g. extraEnv.LOG_LEVEL"
               emptyHint="No values resolved from the chart — set a Helm chart above, or add a value below."
@@ -362,7 +361,7 @@ export function DeploymentForm({
             />
             {liveOutputs.length === 0 && (
               <p className={styles.note}>
-                Add a dependency above to wire its outputs into these values.
+                Add a dependency above to bind its outputs to these values.
               </p>
             )}
           </Section>

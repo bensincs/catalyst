@@ -1,0 +1,324 @@
+.wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ---- Header: how much is done, and a filter once the list gets long ---- */
+
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  min-height: 30px;
+}
+
+.count {
+  font-size: var(--text-body-sm);
+  color: var(--text-muted);
+}
+.count b {
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1;
+  max-width: 220px;
+}
+.searchIcon {
+  position: absolute;
+  left: 10px;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+.searchInput {
+  width: 100%;
+  height: 30px;
+  padding: 0 10px 0 30px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--text-body-sm);
+  transition: border-color var(--dur-fast) var(--ease-out-quart);
+}
+.searchInput::placeholder {
+  color: var(--text-muted);
+}
+.searchInput:hover {
+  border-color: var(--field-border);
+}
+.searchInput:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -1px;
+  border-color: transparent;
+}
+
+/* ---- Rows: the path, and what fills it ---- */
+
+.rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--border);
+}
+
+.row {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.85fr) minmax(0, 1.15fr);
+  align-items: center;
+  gap: var(--space-base);
+  padding: 3px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.path {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-sm);
+  min-width: 0;
+  font-size: var(--text-body-sm);
+  /* Unset rows sit back; a set row's path is ink, so a filled list reads as
+     filled at a glance without needing to look at the values. */
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.row[data-set] .path {
+  color: var(--text);
+}
+.path > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.required {
+  flex: none;
+  font-size: var(--text-overline);
+  font-weight: 600;
+  color: var(--warning-ink);
+}
+
+.control {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  min-width: 0;
+}
+
+/* The literal input carries no box until you touch it — at rest the value is
+   just text on the row, which is what keeps a long list quiet. */
+.input {
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  padding: 0 var(--space-sm);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text);
+  font-size: var(--text-body-sm);
+  transition:
+    border-color var(--dur-fast) var(--ease-out-quart),
+    background-color var(--dur-fast) var(--ease-out-quart);
+}
+.input::placeholder {
+  /* --text-disabled is ~2.2:1 here, well under the 4.5:1 text minimum. Derive a
+     tone dark enough to read while staying quieter than a real value; sans (the
+     values are mono) is what keeps an unset row from looking filled. */
+  color: color-mix(in srgb, var(--text) 66%, transparent);
+  font-family: var(--font-sans), system-ui, sans-serif;
+}
+.input:hover {
+  border-color: var(--border-strong);
+}
+.input:focus-visible {
+  outline: none;
+  background: var(--surface);
+  border-color: var(--focus);
+  box-shadow: 0 0 0 3px var(--focus-glow);
+}
+
+/* A bound value reads as a single object, not editable text. It sizes to its
+   content and pushes the row's actions to the right, so the clear button lands
+   in the same place as the bind button on an unbound row. */
+.bound {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  margin-right: auto;
+  height: 26px;
+  padding: 0 var(--space-sm);
+  border-radius: var(--radius-full);
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
+  background: var(--accent-bg);
+  color: var(--accent-ink);
+  font-size: var(--text-body-sm);
+  cursor: pointer;
+  transition:
+    border-color var(--dur-fast) var(--ease-out-quart),
+    background-color var(--dur-fast) var(--ease-out-quart);
+}
+.bound svg {
+  flex: none;
+}
+.bound:hover,
+.bound[data-open] {
+  border-color: var(--accent);
+}
+.bound:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+/* Both parts shrink only under real pressure — a percentage cap would truncate
+   a short name like "Postgres" purely because its output name is short. */
+.boundTag {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.boundTag::after {
+  content: " /";
+  opacity: 0.5;
+}
+.boundLabel {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Bind + clear: quiet at rest, never colour-loud on an inactive row. */
+.bindBtn,
+.clear {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border-radius: var(--radius-md);
+  color: var(--text-muted);
+  background: transparent;
+  transition:
+    background-color var(--dur-fast) var(--ease-out-quart),
+    color var(--dur-fast) var(--ease-out-quart);
+}
+.bindBtn:hover,
+.bindBtn[data-open] {
+  background: var(--accent-bg);
+  color: var(--accent-ink);
+}
+.clear:hover {
+  background: var(--danger-bg);
+  color: var(--danger-ink);
+}
+.bindBtn:focus-visible,
+.clear:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -1px;
+}
+
+/* ---- Add a value the chart didn't declare ---- */
+
+.addRow {
+  display: flex;
+  gap: var(--space-sm);
+  margin-top: var(--space-xs);
+}
+.addInput {
+  flex: 1;
+  min-width: 0;
+  height: 36px;
+  padding: 0 var(--space-md);
+  border-radius: var(--radius-md);
+  border: 1px dashed var(--border-strong);
+  background: transparent;
+  color: var(--text);
+  font-size: var(--text-body-sm);
+  transition: border-color var(--dur-fast) var(--ease-out-quart);
+}
+.addInput::placeholder {
+  color: var(--text-muted);
+}
+.addInput:hover {
+  border-color: var(--field-border);
+}
+.addInput:focus-visible {
+  outline: none;
+  border-style: solid;
+  border-color: var(--focus);
+  box-shadow: 0 0 0 3px var(--focus-glow);
+}
+.addBtn {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  flex: none;
+  border-radius: var(--radius-md);
+  background: var(--primary);
+  color: var(--on-primary);
+  transition: background-color var(--dur-fast) var(--ease-out-quart);
+}
+.addBtn:hover {
+  background: var(--primary-hover);
+}
+.addBtn:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.hint {
+  font-size: var(--text-body-sm);
+  color: var(--text-muted);
+  line-height: 1.5;
+  padding: var(--space-sm) 0;
+}
+
+/* Narrow: the two-column pairing stops helping, so stack path over value. */
+@media (max-width: 560px) {
+  .row {
+    grid-template-columns: 1fr;
+    gap: 2px;
+    padding: var(--space-sm) 0;
+  }
+  .input {
+    margin-left: calc(var(--space-sm) * -1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .searchInput,
+  .input,
+  .bound,
+  .bindBtn,
+  .clear,
+  .addInput,
+  .addBtn {
+    transition: none;
+  }
+}
