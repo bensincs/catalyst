@@ -258,3 +258,24 @@ func TestHelmRepoSecretCreds(t *testing.T) {
 		t.Fatalf("private creds missing: %v", sd2)
 	}
 }
+
+func TestChartUnpinned(t *testing.T) {
+	// Argo rejects a Helm chart source with no targetRevision, so the reconciler
+	// must catch it rather than stamping a spec that can never sync. A git
+	// source (no chart) is unaffected — there targetRevision is optional.
+	cases := []struct {
+		name string
+		app  shared.DesiredApplication
+		want bool
+	}{
+		{"chart with no version", shared.DesiredApplication{Chart: "nginx"}, true},
+		{"chart with blank version", shared.DesiredApplication{Chart: "nginx", TargetRevision: "  "}, true},
+		{"chart pinned", shared.DesiredApplication{Chart: "nginx", TargetRevision: "15.14.0"}, false},
+		{"no chart at all", shared.DesiredApplication{}, false},
+	}
+	for _, c := range cases {
+		if got := chartUnpinned(c.app); got != c.want {
+			t.Errorf("%s: chartUnpinned = %v, want %v", c.name, got, c.want)
+		}
+	}
+}

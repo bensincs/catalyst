@@ -293,3 +293,14 @@
     animation: none;
   }
 }
+
+/* Version field: the input plus a one-click pin to the resolved latest. */
+.versionRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+.versionRow > :first-child {
+  flex: 1;
+  min-width: 0;
+}

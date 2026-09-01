@@ -120,12 +120,16 @@ export function DeploymentForm({
   // Chart inspection → Helm value-path suggestions for the wiring canvas.
   const [helmPaths, setHelmPaths] = useState<string[]>([]);
   const [chartLoading, setChartLoading] = useState(false);
+  // The version the registry resolves for this chart. Inspection resolves it
+  // even when the field is blank, so it can be offered as a one-click pin.
+  const [resolvedVersion, setResolvedVersion] = useState("");
 
   useEffect(() => {
     const repo = repoURL.trim();
     const c = chart.trim();
     if (repo === "" || c === "") {
       setHelmPaths([]);
+      setResolvedVersion("");
       return;
     }
     let cancelled = false;
@@ -135,11 +139,14 @@ export function DeploymentForm({
         const r = await inspectChart(repo, c, targetRevision.trim());
         if (cancelled) return;
         setChartLoading(false);
-        setHelmPaths(r.ok && r.resolved && r.iface ? flattenPaths(r.iface.defaults) : []);
+        const ok = r.ok && r.resolved && r.iface;
+        setHelmPaths(ok ? flattenPaths(r.iface!.defaults) : []);
+        setResolvedVersion(ok ? (r.iface!.version ?? "") : "");
       } catch {
         if (!cancelled) {
           setChartLoading(false);
           setHelmPaths([]);
+          setResolvedVersion("");
         }
       }
     }, 600);
@@ -181,7 +188,12 @@ export function DeploymentForm({
   );
 
   const hasChart = repoURL.trim() !== "" && chart.trim() !== "";
-  const valid = name.trim().length >= 2 && hasChart;
+  // Argo rejects a Helm chart source with no targetRevision, so an unpinned
+  // chart cannot deploy at all. Pinning also keeps a deploy reproducible: with
+  // automated sync and selfHeal on, a floating version would silently roll a
+  // new chart into every tenant the moment it was published.
+  const hasVersion = targetRevision.trim() !== "";
+  const valid = name.trim().length >= 2 && hasChart && hasVersion;
 
   const submit = () => {
     // Only keep wiring whose source is still a selected dependency.
@@ -285,8 +297,35 @@ export function DeploymentForm({
             <Field label="Chart" htmlFor="dep-chart">
               <TextInput id="dep-chart" value={chart} onChange={(e) => setChart(e.target.value)} placeholder="nginx" spellCheck={false} />
             </Field>
-            <Field label="Version" htmlFor="dep-ver" hint="Chart version (blank = latest).">
-              <TextInput id="dep-ver" value={targetRevision} onChange={(e) => setTargetRevision(e.target.value)} placeholder="15.14.0" spellCheck={false} />
+            <Field
+              label="Version"
+              htmlFor="dep-ver"
+              hint={
+                hasChart && !hasVersion
+                  ? "Required — a chart deploys at a pinned version."
+                  : "The chart version this deploys at."
+              }
+            >
+              <div className={styles.versionRow}>
+                <TextInput
+                  id="dep-ver"
+                  value={targetRevision}
+                  onChange={(e) => setTargetRevision(e.target.value)}
+                  placeholder="15.14.0"
+                  spellCheck={false}
+                  aria-invalid={hasChart && !hasVersion ? true : undefined}
+                />
+                {resolvedVersion !== "" && targetRevision.trim() !== resolvedVersion && (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => setTargetRevision(resolvedVersion)}
+                  >
+                    Use {resolvedVersion}
+                  </Button>
+                )}
+              </div>
             </Field>
           </div>
         </Section>

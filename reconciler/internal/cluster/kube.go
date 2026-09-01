@@ -200,6 +200,21 @@ func (k *kube) reconcileApplications(ctx context.Context, apps []shared.DesiredA
 			}
 		}
 		st := shared.ApplicationStatus{ID: a.ID, SyncStatus: "pending", HealthStatus: "pending"}
+		// Argo rejects a Helm chart source with no targetRevision:
+		//
+		//	InvalidSpecError: spec.source.targetRevision is required if the
+		//	manifest source is a helm chart
+		//
+		// which reads as an Argo problem rather than a missing field on the
+		// deployment. Say what is actually wrong, and don't stamp a spec that
+		// cannot sync — the previous Application is left in place so an
+		// already-running app is not disturbed by an edit that blanked it.
+		if chartUnpinned(a) {
+			st.SyncStatus, st.HealthStatus = "Unknown", "Unknown"
+			st.Detail = "Chart version is required — set a version on the deployment (Argo cannot deploy an unpinned chart)."
+			out = append(out, st)
+			continue
+		}
 		if _, err := ri.Apply(ctx, name, buildApplication(a, name), metav1.ApplyOptions{FieldManager: fieldManager, Force: true}); err != nil {
 			st.SyncStatus, st.HealthStatus = "Unknown", "Unknown"
 			out = append(out, st)
@@ -531,6 +546,13 @@ func (k *kube) gatewayAddress(ctx context.Context) string {
 		}
 	}
 	return ""
+}
+
+// chartUnpinned reports whether a deployment names a Helm chart but no version.
+// Argo rejects that source outright ("spec.source.targetRevision is required if
+// the manifest source is a helm chart"), so it can never sync.
+func chartUnpinned(a shared.DesiredApplication) bool {
+	return strings.TrimSpace(a.Chart) != "" && strings.TrimSpace(a.TargetRevision) == ""
 }
 
 func buildApplication(a shared.DesiredApplication, name string) *unstructured.Unstructured {
