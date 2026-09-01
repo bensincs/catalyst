@@ -14,6 +14,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { PageHeader } from "@/components/ui/page-header";
+import { ConfirmDelete } from "./confirm-delete";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { StatusBadge } from "@/components/ui/status";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -185,15 +186,14 @@ export function AgentsView({
                     </Link>
                   )}
                   {(platform || a.owned) && (
-                    <Button
-                      size="sm"
-                      variant="danger-ghost"
-                      icon={Trash2}
-                      loading={pending}
-                      onClick={() => runAction(() => deleteCatalogAgent(a.id), `Deleted ${a.name}`)}
-                    >
-                      Delete
-                    </Button>
+                    <ConfirmDelete
+                          kind="agent"
+                          id={a.id}
+                          name={a.name}
+                          noun="agent"
+                          pending={pending}
+                          onConfirm={() => runAction(() => deleteCatalogAgent(a.id), `Deleted ${a.name}`)}
+                        />
                   )}
                 </div>
               </li>

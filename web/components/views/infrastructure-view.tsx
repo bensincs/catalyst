@@ -4,6 +4,7 @@ import { useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { AlertTriangle, Boxes, Cloud, GitBranch, Pencil, Plus, Power, Trash2 } from "lucide-react";
 import { PageHeader } from "@/components/ui/page-header";
+import { ConfirmDelete } from "./confirm-delete";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { StatusBadge } from "@/components/ui/status";
@@ -45,7 +46,9 @@ export function InfrastructureView({
   const manageable = (i: Infrastructure) => (platform ? i.owner === "" : i.owned);
   const scope = (i: Infrastructure): { label: string; tone: "success" | "info" | "neutral" } =>
     i.owned
-      ? { label: "Yours", tone: "success" }
+      // Ownership is not health. Green means live/synced everywhere else here,
+      // so tinting "Yours" with it makes an unhealthy thing you own look fine.
+      ? { label: "Yours", tone: "neutral" }
       : i.platform
         ? { label: platform ? "Platform" : "Entitled", tone: "info" }
         : { label: "Tenant", tone: "neutral" };
@@ -155,15 +158,14 @@ export function InfrastructureView({
                         <ButtonLink size="sm" variant="ghost" icon={Pencil} href={`/infrastructure/${i.id}/edit`}>
                           Edit
                         </ButtonLink>
-                        <Button
-                          size="sm"
-                          variant="danger-ghost"
-                          icon={Trash2}
-                          loading={pending}
-                          onClick={() => runAction(() => deleteInfrastructure(i.id), `Deleted ${i.name}`)}
-                        >
-                          Delete
-                        </Button>
+                        <ConfirmDelete
+                          kind="infrastructure"
+                          id={i.id}
+                          name={i.name}
+                          noun="infrastructure entity"
+                          pending={pending}
+                          onConfirm={() => runAction(() => deleteInfrastructure(i.id), `Deleted ${i.name}`)}
+                        />
                       </>
                     )}
                   </div>

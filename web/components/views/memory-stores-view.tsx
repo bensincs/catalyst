@@ -4,6 +4,7 @@ import { useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Database, Pencil, Plus, Power, Trash2 } from "lucide-react";
 import { PageHeader } from "@/components/ui/page-header";
+import { ConfirmDelete } from "./confirm-delete";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { StatusBadge } from "@/components/ui/status";
@@ -34,7 +35,9 @@ export function MemoryStoresView({ role, stores }: { role: Role; stores: MemoryS
   const manageable = (s: MemoryStore) => (platform ? s.owner === "" : s.owned);
   const scope = (s: MemoryStore): { label: string; tone: "success" | "info" | "neutral" } =>
     s.owned
-      ? { label: "Yours", tone: "success" }
+      // Ownership is not health. Green means live/synced everywhere else here,
+      // so tinting "Yours" with it makes an unhealthy thing you own look fine.
+      ? { label: "Yours", tone: "neutral" }
       : s.platform
         ? { label: platform ? "Platform" : "Entitled", tone: "info" }
         : { label: "Tenant", tone: "neutral" };
@@ -129,15 +132,14 @@ export function MemoryStoresView({ role, stores }: { role: Role; stores: MemoryS
                         <ButtonLink size="sm" variant="ghost" icon={Pencil} href={`/memory-stores/${s.id}/edit`}>
                           Edit
                         </ButtonLink>
-                        <Button
-                          size="sm"
-                          variant="danger-ghost"
-                          icon={Trash2}
-                          loading={pending}
-                          onClick={() => runAction(() => deleteMemoryStore(s.id), `Deleted ${s.name}`)}
-                        >
-                          Delete
-                        </Button>
+                        <ConfirmDelete
+                          kind="memory_store"
+                          id={s.id}
+                          name={s.name}
+                          noun="memory store"
+                          pending={pending}
+                          onConfirm={() => runAction(() => deleteMemoryStore(s.id), `Deleted ${s.name}`)}
+                        />
                       </>
                     )}
                   </div>

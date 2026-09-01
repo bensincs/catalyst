@@ -181,7 +181,7 @@ function errorCode(body: string): string | undefined {
   }
 }
 
-async function apiGet<T>(path: string): Promise<T> {
+export async function apiGet<T>(path: string): Promise<T> {
   const res = await fetch(`${API_URL}${path}`, {
     headers: await authHeaders(),
     cache: "no-store",

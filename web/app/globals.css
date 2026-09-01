@@ -1,6 +1,7 @@
 /* ============================================================================
    Cortex Console — design tokens & base
-   Tokens mirror DESIGN.md 1:1. Light is the default theme; [data-theme="dark"]
+   DESIGN.md documents this file, not the other way round: if the two disagree,
+   this is right and the doc is stale. Light is the default theme; [data-theme="dark"]
    swaps the semantic color set. Component logic never changes between themes.
    ============================================================================ */
 

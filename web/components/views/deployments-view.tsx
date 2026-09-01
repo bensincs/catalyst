@@ -4,6 +4,7 @@ import { useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { AlertTriangle, ExternalLink, Rocket, Plus, Trash2, Pencil, Power, GitBranch } from "lucide-react";
 import { PageHeader } from "@/components/ui/page-header";
+import { ConfirmDelete } from "./confirm-delete";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { StatusBadge } from "@/components/ui/status";
@@ -66,7 +67,9 @@ export function DeploymentsView({
   const manageable = (a: Application) => (platform ? a.owner === "" : a.owned);
   const scope = (a: Application): { label: string; tone: "success" | "info" | "neutral" } =>
     a.owned
-      ? { label: "Yours", tone: "success" }
+      // Ownership is not health. Green means live/synced everywhere else here,
+      // so tinting "Yours" with it makes an unhealthy thing you own look fine.
+      ? { label: "Yours", tone: "neutral" }
       : a.platform
         ? { label: platform ? "Platform" : "Entitled", tone: "info" }
         : { label: "Tenant", tone: "neutral" };
@@ -196,15 +199,14 @@ export function DeploymentsView({
                         <ButtonLink size="sm" variant="ghost" icon={Pencil} href={`/deployments/${a.id}/edit`}>
                           Edit
                         </ButtonLink>
-                        <Button
-                          size="sm"
-                          variant="danger-ghost"
-                          icon={Trash2}
-                          loading={pending}
-                          onClick={() => runAction(() => deleteApplication(a.id), `Deleted ${a.name}`)}
-                        >
-                          Delete
-                        </Button>
+                        <ConfirmDelete
+                          kind="application"
+                          id={a.id}
+                          name={a.name}
+                          noun="deployment"
+                          pending={pending}
+                          onConfirm={() => runAction(() => deleteApplication(a.id), `Deleted ${a.name}`)}
+                        />
                       </>
                     )}
                   </div>

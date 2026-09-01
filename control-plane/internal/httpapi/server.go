@@ -156,6 +156,9 @@ func (s *Server) Router() http.Handler {
 			r.Use(s.tenantGate)
 			r.Get("/fleet", s.handleFleet)
 			// Registry upstreams (platform only; each handler re-checks).
+			// What deleting a catalog entity would cost, so the console can say
+			// so before it happens rather than after.
+			r.Get("/resources/{kind}/{id}/usage", s.handleResourceUsage)
 			r.Get("/platform/registry/upstreams", s.handleListUpstreams)
 			r.Put("/platform/registry/upstreams/{name}", s.handlePutUpstream)
 			r.Delete("/platform/registry/upstreams/{name}", s.handleDeleteUpstream)

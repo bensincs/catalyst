@@ -1235,3 +1235,76 @@ func TestLiveTenantSlugsSkipsDisabled(t *testing.T) {
 		t.Error("a disabled tenant must not be listed")
 	}
 }
+
+// TestUsageOfReportsBlastRadius: deleting a catalog entity is unguarded and
+// cascades — it strips the entity from every tenant's entitlements and drops
+// every per-tenant enablement, after which the reconciler prunes the workloads.
+// The console states that cost before offering to delete, so the count has to be
+// right: under-reporting reads as "safe to delete" on something that is running.
+func TestUsageOfReportsBlastRadius(t *testing.T) {
+	st, ctx := testStore(t)
+	defer st.Close()
+
+	const appID = "zz-usage-app"
+	const t1, t2 = "zz-usage-t1", "zz-usage-t2"
+	cleanup := func() {
+		_, _ = st.pool.Exec(ctx, `DELETE FROM tenant_deployments WHERE app_id = $1`, appID)
+		_, _ = st.pool.Exec(ctx, `DELETE FROM applications WHERE id = $1`, appID)
+		_, _ = st.pool.Exec(ctx, `DELETE FROM tenants WHERE id = ANY($1)`, []string{t1, t2})
+	}
+	cleanup()
+	defer cleanup()
+
+	if err := insertApplication(ctx, st.pool, model.Application{
+		ID: appID, Name: "Usage", Owner: "", Namespace: "web", RepoURL: "https://r", Chart: "c",
+	}, "oid"); err != nil {
+		t.Fatalf("app: %v", err)
+	}
+	for _, id := range []string{t1, t2} {
+		if _, err := st.pool.Exec(ctx,
+			`INSERT INTO tenants (id, name, tenant_id, enrollment, enabled) VALUES ($1,'U',$2,'bound',true)`,
+			id, id+"-tid"); err != nil {
+			t.Fatalf("tenant %s: %v", id, err)
+		}
+	}
+
+	// Nothing entitled yet: deleting affects nobody.
+	u, err := st.UsageOf(ctx, model.DepApplication, appID)
+	if err != nil {
+		t.Fatalf("usage: %v", err)
+	}
+	if u.Entitled != 0 || u.Enabled != 0 {
+		t.Fatalf("expected no usage, got %+v", u)
+	}
+
+	// Entitled but not enabled — real, but nothing is running.
+	if err := st.SetDeploymentEntitlements(ctx, t1, []string{appID}); err != nil {
+		t.Fatalf("entitle t1: %v", err)
+	}
+	if err := st.SetDeploymentEntitlements(ctx, t2, []string{appID}); err != nil {
+		t.Fatalf("entitle t2: %v", err)
+	}
+	u, _ = st.UsageOf(ctx, model.DepApplication, appID)
+	if u.Entitled != 2 || u.Enabled != 0 {
+		t.Fatalf("entitled-only: %+v", u)
+	}
+
+	// Enabled in one: this is the case that must not be under-reported, because
+	// deleting now stops something that is serving.
+	if err := st.EnableDeployment(ctx, t1, appID); err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+	u, _ = st.UsageOf(ctx, model.DepApplication, appID)
+	if u.Enabled != 1 {
+		t.Fatalf("expected 1 tenant running it, got %+v", u)
+	}
+	if u.Entitled != 2 {
+		t.Errorf("entitled should still be 2, got %+v", u)
+	}
+
+	// An unknown kind must report nothing rather than error, so the console
+	// degrades to its strictest confirmation instead of failing open.
+	if u, err := st.UsageOf(ctx, model.DepKind("nonsense"), appID); err != nil || u.Enabled != 0 {
+		t.Errorf("unknown kind: %+v (%v)", u, err)
+	}
+}

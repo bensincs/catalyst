@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { apiSend, ApiError } from "@/lib/api";
+import { apiGet, apiSend, ApiError } from "@/lib/api";
 import type {
   AgentDefinition,
   AgentType,
@@ -50,7 +50,7 @@ functions below are thin, name-stable wrappers so views don't carry the URL
 vocabulary.
 */
 
-type ResourceKind = "infrastructure" | "application" | "agent" | "memory_store";
+export type ResourceKind = "infrastructure" | "application" | "agent" | "memory_store";
 
 const enablePaths: Record<ResourceKind, string[]> = {
   infrastructure: ["/infrastructure"],
@@ -491,5 +491,23 @@ export async function removeUpstream(name: string): Promise<ActionResult> {
     return { ok: true };
   } catch (e) {
     return { ok: false, error: errMsg(e) };
+  }
+}
+
+/** How many tenants are entitled to a catalog entity, and how many are running
+ *  it. Deleting one cascades — entitlements stripped, per-tenant enablement
+ *  dropped, workloads pruned by the reconciler — so the console states the cost
+ *  before offering to delete. Failure reports nothing rather than zero, so an
+ *  unreachable count cannot read as "safe to delete". */
+export async function getResourceUsage(
+  kind: ResourceKind,
+  id: string,
+): Promise<{ entitled: number; enabled: number } | null> {
+  try {
+    return await apiGet<{ entitled: number; enabled: number }>(
+      `${resourcePath(kind, id)}/usage`,
+    );
+  } catch {
+    return null;
   }
 }

@@ -7,6 +7,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/inception42/cortex/control-plane/internal/auth"
+	"github.com/inception42/cortex/control-plane/internal/model"
 )
 
 // Registry upstreams — the private registries mirrored into the platform
@@ -73,4 +74,26 @@ func (s *Server) handleDeleteUpstream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleResourceUsage reports how many tenants are entitled to a catalog entity
+// and how many are running it. Deleting one cascades — it strips entitlements
+// and drops every per-tenant enablement, and the reconciler then prunes the
+// workloads — so the console asks this before offering to delete.
+func (s *Server) handleResourceUsage(w http.ResponseWriter, r *http.Request) {
+	id, _ := auth.IdentityFrom(r.Context())
+	if !s.requirePlatform(w, id) {
+		return
+	}
+	kind := model.DepKind(chi.URLParam(r, "kind"))
+	if _, ok := resourceOpsByKind[kind]; !ok {
+		writeErr(w, http.StatusNotFound, "unknown resource kind")
+		return
+	}
+	u, err := s.store.UsageOf(r.Context(), kind, chi.URLParam(r, "id"))
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, u)
 }
