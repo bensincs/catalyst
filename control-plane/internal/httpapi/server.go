@@ -1139,7 +1139,11 @@ func (s *Server) handleInspectModule(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &body) {
 		return
 	}
-	params, outputs, err := bicep.Inspect(r.Context(), strings.TrimSpace(body.BicepModule))
+	// Same reasoning as the chart inspect: this fetches from a caller-named
+	// registry, so it gets its own budget rather than the client's patience.
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+	params, outputs, err := bicep.Inspect(ctx, strings.TrimSpace(body.BicepModule))
 	if err != nil {
 		if errors.Is(err, bicep.ErrNoCompiler) {
 			// No toolchain — the form degrades to the JSON editor client-side.
@@ -1177,6 +1181,13 @@ func (s *Server) handleInspectChart(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &body) {
 		return
 	}
+	// Inspecting pulls a chart from a caller-named repository, so the work is
+	// unbounded from here: a slow or tarpitting registry would otherwise hold a
+	// request — and a helm process — open for as long as it likes. Give it its
+	// own budget rather than inheriting the client's patience.
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+
 	release := strings.TrimSpace(body.AppID)
 	if release == "" && strings.TrimSpace(body.Name) != "" {
 		prefix := ""
@@ -1189,7 +1200,7 @@ func (s *Server) handleInspectChart(w http.ResponseWriter, r *http.Request) {
 		}
 		release = prefix + slugify(body.Name)
 	}
-	iface, err := chart.Inspect(r.Context(), body.RepoURL, body.Chart, body.Version, release, body.Values)
+	iface, err := chart.Inspect(ctx, body.RepoURL, body.Chart, body.Version, release, body.Values)
 	if err != nil {
 		if errors.Is(err, chart.ErrNoHelm) {
 			writeJSON(w, http.StatusOK, map[string]any{"resolved": false})

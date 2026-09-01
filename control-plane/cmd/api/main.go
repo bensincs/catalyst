@@ -120,6 +120,14 @@ func main() {
 		Addr:              ":" + cfg.Port,
 		Handler:           srv.Router(),
 		ReadHeaderTimeout: 5 * time.Second,
+		// Bound a request that stops making progress. Without ReadTimeout a slow
+		// body holds a connection open; without IdleTimeout a keep-alive
+		// connection is never reclaimed. WriteTimeout is deliberately generous:
+		// inspecting a chart pulls it, and the handler enforces its own, tighter
+		// budget — see handleInspectChart.
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 120 * time.Second,
+		IdleTimeout:  90 * time.Second,
 	}
 
 	go func() {
