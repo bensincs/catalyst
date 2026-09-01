@@ -13,6 +13,17 @@ import (
 	"github.com/inception42/cortex/shared"
 )
 
+// forceMigrate re-applies the schema even though its checksum is already
+// recorded. Migrate is a no-op once applied — which is the point — so the tests
+// that are about the act of migrating have to ask for it explicitly.
+func forceMigrate(t *testing.T, ctx context.Context, st *Store) error {
+	t.Helper()
+	if _, err := st.pool.Exec(ctx, `DELETE FROM schema_migrations`); err != nil {
+		t.Fatalf("clear ledger: %v", err)
+	}
+	return st.Migrate(ctx)
+}
+
 func testStore(t *testing.T) (*Store, context.Context) {
 	t.Helper()
 	dsn := os.Getenv("DATABASE_URL")
@@ -1051,7 +1062,7 @@ func TestMigrateRetriesUnderTableLock(t *testing.T) {
 	}()
 
 	// Migrate should retry past the contention and succeed once the lock drops.
-	if err := st.Migrate(ctx); err != nil {
+	if err := forceMigrate(t, ctx, st); err != nil {
 		t.Fatalf("migrate did not survive a contended table lock: %v", err)
 	}
 	<-released
@@ -1100,7 +1111,7 @@ func TestMigrateBackfillsDependenciesFromWiring(t *testing.T) {
 		t.Fatalf("insert: %v", err)
 	}
 
-	if err := st.Migrate(ctx); err != nil {
+	if err := forceMigrate(t, ctx, st); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 
@@ -1119,7 +1130,7 @@ func TestMigrateBackfillsDependenciesFromWiring(t *testing.T) {
 	}
 
 	// Idempotent: a second migration must not duplicate the edge.
-	if err := st.Migrate(ctx); err != nil {
+	if err := forceMigrate(t, ctx, st); err != nil {
 		t.Fatalf("migrate twice: %v", err)
 	}
 	a, _ = st.ApplicationByID(ctx, appID)

@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	_ "embed"
 	"encoding/hex"
 	"encoding/json"
@@ -52,7 +53,6 @@ var ErrNotFound = errors.New("not found")
 // refuse the sign-in/sync rather than silently re-creating the tenant.
 var ErrTenantDeleted = errors.New("tenant deleted")
 
-
 type Store struct {
 	pool *pgxpool.Pool
 }
@@ -92,15 +92,25 @@ const migrationLockID int64 = 8265719004321
 // queue behind each other instead of racing.
 //
 // The advisory lock only orders migrations against each other, though. The
-// schema also contains ALTER TABLE statements, and ALTER TABLE takes ACCESS
-// EXCLUSIVE even when it is a no-op — so it still conflicts with ordinary
-// sessions reading those tables. One process migrating while another already
-// serves traffic (parallel test packages sharing a database, or a second API
-// replica booting) can therefore deadlock. The schema is idempotent, so fail
-// fast on a contended lock and retry the whole thing rather than blocking.
+// schema is also full of ALTER TABLE, and ALTER TABLE takes ACCESS EXCLUSIVE
+// even when it changes nothing — ADD COLUMN IF NOT EXISTS still locks the table
+// when the column is already there. Re-running the schema on every boot
+// therefore takes an exclusive lock on the busiest tables every time, against
+// sessions that are already serving. That deadlocks in both directions, and
+// retrying only helps when the migration is the victim Postgres picks.
+//
+// So don't re-run it. The schema is applied once per version and its checksum
+// recorded; a process whose schema is already applied does no DDL at all and
+// takes no table locks. Retry is kept for the run that does do the work.
 func (s *Store) Migrate(ctx context.Context) error {
+	applied, err := s.schemaApplied(ctx)
+	if err != nil {
+		return err
+	}
+	if applied {
+		return nil
+	}
 	const attempts = 5
-	var err error
 	for i := range attempts {
 		if err = s.migrateOnce(ctx); err == nil || !isLockContention(err) {
 			return err
@@ -112,6 +122,27 @@ func (s *Store) Migrate(ctx context.Context) error {
 		}
 	}
 	return fmt.Errorf("migrate: gave up after %d attempts: %w", attempts, err)
+}
+
+// schemaChecksum identifies the schema this build would apply.
+func schemaChecksum() string {
+	sum := sha256.Sum256([]byte(schemaSQL))
+	return hex.EncodeToString(sum[:])
+}
+
+// schemaApplied reports whether this exact schema has already been applied.
+// Creating the ledger is itself DDL, but only ever on its own table, so it
+// never contends with the tables the application is reading.
+func (s *Store) schemaApplied(ctx context.Context) (bool, error) {
+	if _, err := s.pool.Exec(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
+		checksum   text PRIMARY KEY,
+		applied_at timestamptz NOT NULL DEFAULT now())`); err != nil {
+		return false, err
+	}
+	var n int
+	err := s.pool.QueryRow(ctx,
+		`SELECT count(*) FROM schema_migrations WHERE checksum = $1`, schemaChecksum()).Scan(&n)
+	return n > 0, err
 }
 
 // isLockContention reports whether err is Postgres telling us the migration
@@ -153,7 +184,11 @@ func (s *Store) migrateOnce(ctx context.Context) error {
 		return err
 	}
 
-	_, err = conn.Exec(ctx, schemaSQL)
+	if _, err = conn.Exec(ctx, schemaSQL); err != nil {
+		return err
+	}
+	_, err = conn.Exec(ctx,
+		`INSERT INTO schema_migrations (checksum) VALUES ($1) ON CONFLICT DO NOTHING`, schemaChecksum())
 	return err
 }
 
@@ -621,7 +656,6 @@ func (s *Store) RemoveTombstone(ctx context.Context, slug string) error {
 	}
 	return nil
 }
-
 
 // RenameTenant sets a tenant's display name (platform admins).
 func (s *Store) RenameTenant(ctx context.Context, slug, name string) error {
