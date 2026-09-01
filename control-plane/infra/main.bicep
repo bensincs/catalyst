@@ -108,10 +108,21 @@ param postgresStorageGb int = 32
 @description('Optional operator IP allowed through the PostgreSQL firewall (for psql/inspection). Empty to skip.')
 param operatorIp string = ''
 
+@description('Upstream registries cached into the platform registry, as [{name, source, target}] — e.g. { name: \'ghcr-charts\', source: \'ghcr.io/acme/charts/*\', target: \'charts/*\' }. Authors reference the platform registry for these; public registries are still referenced directly.')
+param registryCacheRules array = []
+
+@description('Username for the cached upstream (a GitHub username for a GHCR PAT). Empty ⇒ the upstream is public and needs no credential.')
+param registryUpstreamUsername string = ''
+
+@description('Password/PAT for the cached upstream. Held in Key Vault and read only by the registry — it is never handed to a tenant, which pulls from the platform registry instead.')
+@secure()
+param registryUpstreamPassword string = ''
+
 // ─────────────────────────── names ───────────────────────────
 
 var suffix = substring(uniqueString(resourceGroup().id), 0, 8)
 var acrName = toLower('${namePrefix}cpacr${suffix}')
+var kvName = toLower('${namePrefix}-cp-kv-${suffix}')
 var pgName = toLower('${namePrefix}-cp-pg-${suffix}')
 var dbName = 'cortex'
 var apiAppName = '${namePrefix}-cp-api'
@@ -125,6 +136,13 @@ var databaseUrl = 'postgres://${postgresAdminUser}:${postgresAdminPassword}@${pg
 
 // Built-in AcrPull role.
 var acrPullRoleId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
+// Built-in Key Vault Secrets User — what the registry needs to read the
+// upstream credential it caches with.
+var kvSecretsUserRoleId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
+var cacheUpstreamAuthed = !empty(registryUpstreamPassword)
+// A credential set is bound to one upstream login server; take it from the first
+// cache rule's source ('ghcr.io/acme/charts/*' → 'ghcr.io').
+var registryCacheLoginServer = empty(registryCacheRules) ? '' : first(split(registryCacheRules[0].source, '/'))
 
 // ─────────────────────────── base infra (all passes) ───────────────────────────
 
@@ -157,10 +175,88 @@ resource acr 'Microsoft.ContainerRegistry/registries@2023-11-01-preview' = {
   name: acrName
   location: location
   sku: { name: 'Standard' }
+  // The registry reads the upstream credential from Key Vault itself, so the
+  // credential is never passed through a deployment or held by the control plane.
+  identity: { type: 'SystemAssigned' }
   properties: {
     adminUserEnabled: false
   }
 }
+
+// ── Cached upstreams ────────────────────────────────────────────────────────
+// A private chart or Bicep module is mirrored into this registry on first pull
+// rather than pulled from its upstream by each tenant. That keeps the upstream
+// credential inside the platform: a tenant cluster is given a scoped token for
+// this registry only, so it can read the charts it needs and nothing else, and
+// revoking one tenant is deleting one token.
+
+resource kv 'Microsoft.KeyVault/vaults@2023-07-01' = if (cacheUpstreamAuthed) {
+  name: kvName
+  location: location
+  properties: {
+    tenantId: subscription().tenantId
+    sku: { family: 'A', name: 'standard' }
+    enableRbacAuthorization: true
+    enableSoftDelete: true
+    softDeleteRetentionInDays: 7
+    publicNetworkAccess: 'Enabled'
+  }
+}
+
+resource kvUser 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (cacheUpstreamAuthed) {
+  parent: kv
+  name: 'registry-upstream-username'
+  properties: { value: registryUpstreamUsername }
+}
+
+resource kvPass 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (cacheUpstreamAuthed) {
+  parent: kv
+  name: 'registry-upstream-password'
+  properties: { value: registryUpstreamPassword }
+}
+
+resource acrKvRead 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (cacheUpstreamAuthed) {
+  name: guid(kv.id, acr.id, 'KeyVaultSecretsUser')
+  scope: kv
+  properties: {
+    principalId: acr.identity.principalId
+    roleDefinitionId: kvSecretsUserRoleId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource upstreamCreds 'Microsoft.ContainerRegistry/registries/credentialSets@2023-11-01-preview' = if (cacheUpstreamAuthed) {
+  parent: acr
+  name: 'upstream'
+  identity: { type: 'SystemAssigned' }
+  properties: {
+    authCredentials: [
+      {
+        name: 'Credential1'
+        usernameSecretIdentifier: kvUser.properties.secretUri
+        passwordSecretIdentifier: kvPass.properties.secretUri
+      }
+    ]
+    loginServer: registryCacheLoginServer
+  }
+  dependsOn: [acrKvRead]
+}
+
+// One cache rule per upstream repository pattern. Credentials are attached only
+// when the upstream needs them; a public upstream caches anonymously.
+resource cacheRules 'Microsoft.ContainerRegistry/registries/cacheRules@2023-11-01-preview' = [
+  for rule in registryCacheRules: {
+    parent: acr
+    name: rule.name
+    properties: union(
+      {
+        sourceRepository: rule.source
+        targetRepository: rule.target
+      },
+      cacheUpstreamAuthed ? { credentialSetResourceId: upstreamCreds.id } : {}
+    )
+  }
+]
 
 // Let the apps pull images using the user-assigned identity (no registry admin creds).
 resource acrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
@@ -308,6 +404,12 @@ resource api 'Microsoft.App/containerApps@2024-03-01' = if (deployApps) {
             // platform directory, assigned to tenants, without being admins).
             { name: 'PLATFORM_SUBSCRIPTION_ID', value: platformSubscriptionId }
             { name: 'PLATFORM_ADMIN_EMAILS', value: platformAdminEmails }
+            // The registry authors reference for private charts and modules.
+            // The control plane inspects charts through it, and mints a scoped
+            // token per tenant so a cluster can pull from it and nothing else.
+            { name: 'HELM_OCI_REGISTRY', value: acr.properties.loginServer }
+            { name: 'PLATFORM_ACR_NAME', value: acr.name }
+            { name: 'PLATFORM_ACR_RESOURCE_ID', value: acr.id }
           ]
         }
       ]

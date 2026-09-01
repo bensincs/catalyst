@@ -112,6 +112,13 @@ param appsDomain string = ''
 @description('Optional private OCI Helm registry (e.g. ghcr.io/bensincs) whose charts need the reconciler credentials. Public OCI registries are auto-registered anonymously from each app repoURL, so leave empty for those.')
 param helmOciRegistry string = ''
 
+@description('Username for the platform registry — a registry-scoped token, not an Entra principal, so it works for a cluster in the customer\'s own directory.')
+param helmOciUsername string = ''
+
+@description('Password for that token. It grants pull on the cached chart repositories of the platform registry only; the upstream registry credential never leaves the platform.')
+@secure()
+param helmOciPassword string = ''
+
 @description('Reconciler container image (published by Cortex, or your own registry).')
 param reconcilerImage string = 'ghcr.io/inception42/cortex-reconciler:latest'
 
@@ -447,6 +454,8 @@ var reconcilerEnv = [
   { name: 'ARGOCD_VERSION', value: argocdVersion }
   { name: 'APPS_DOMAIN', value: appsDomain }
   { name: 'HELM_OCI_REGISTRY', value: helmOciRegistry }
+  { name: 'HELM_OCI_USERNAME', value: helmOciUsername }
+  { name: 'HELM_OCI_PASSWORD', value: helmOciPassword }
 ]
 
 resource env 'Microsoft.App/managedEnvironments@2024-03-01' = if (deployReconcilerApp) {

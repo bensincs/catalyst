@@ -55,6 +55,12 @@ type Provisioner struct {
 	platformSub      string // the platform's own subscription (platform-hosted tenants)
 	acmeDirectory    string // CA the tenant's reconciler obtains its wildcard from
 	acmeEmail        string
+	// The platform registry private charts and modules are cached into, and the
+	// repository patterns a tenant's scoped token may pull. Empty ⇒ no registry
+	// is offered and tenants pull public charts anonymously.
+	platformACRID    string
+	platformACRLogin string
+	platformACRRepos []string
 
 	mu          sync.Mutex        // guards apiVersions
 	apiVersions map[string]string // provider/type → api-version, resolved on demand for teardown
@@ -77,6 +83,11 @@ type Config struct {
 	// certificate issuance against its own DNS zone.
 	ACMEDirectory string
 	ACMEEmail     string
+	// The platform registry that caches private charts and Bicep modules, and
+	// the repository patterns a tenant's scoped token may pull from it.
+	PlatformACRID    string
+	PlatformACRLogin string
+	PlatformACRRepos []string
 }
 
 // New builds a Provisioner, or (nil, nil) when cross-tenant provisioning is off.
@@ -104,6 +115,9 @@ func New(st *store.Store, cfg Config) (*Provisioner, error) {
 		platformSub:      cfg.PlatformSubscriptionID,
 		acmeDirectory:    cfg.ACMEDirectory,
 		acmeEmail:        cfg.ACMEEmail,
+		platformACRID:    cfg.PlatformACRID,
+		platformACRLogin: cfg.PlatformACRLogin,
+		platformACRRepos: cfg.PlatformACRRepos,
 		apiVersions:      map[string]string{},
 	}, nil
 }

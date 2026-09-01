@@ -36,5 +36,5 @@ export default async function EditDeploymentPage({ params }: { params: Promise<{
   let cluster: ClusterInfo | undefined;
   if (me.role === "tenant") cluster = (await getMyContext()).tenant.cluster;
 
-  return <DeploymentForm role={me.role} app={app} depOptions={depOptions} depOutputs={depOutputs} cluster={cluster} />;
+  return <DeploymentForm role={me.role} platformRegistry={me.platformRegistry} app={app} depOptions={depOptions} depOutputs={depOutputs} cluster={cluster} />;
 }

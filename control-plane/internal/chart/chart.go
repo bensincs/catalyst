@@ -70,6 +70,13 @@ func Inspect(ctx context.Context, repoURL, chart, version, release, values strin
 	defer os.RemoveAll(dir)
 
 	args := []string{"pull"}
+	// Credentials for the platform registry. Charts on a private upstream are
+	// cached into it rather than pulled from the upstream directly, so this is
+	// the only registry the control plane ever needs to authenticate against —
+	// the upstream's own credential stays in the registry's credential set.
+	if u, pw := registryCreds(repoURL); u != "" {
+		args = append(args, "--username", u, "--password", pw)
+	}
 	if oci {
 		ref := repoURL
 		if chart != "" {
@@ -202,6 +209,30 @@ func buildInterface(valuesYAML, schemaJSON, chartYAML []byte) *Interface {
 		iface.Name, iface.Version, iface.Description = meta.Name, meta.Version, meta.Description
 	}
 	return iface
+}
+
+// registryCreds returns the credentials to use for repoURL, which are only ever
+// the platform registry's: HELM_OCI_REGISTRY names it, and a ref pointing
+// anywhere else (a public chart repo, say) is fetched anonymously. Mirrors the
+// BICEP_OCI_* pair used for Bicep modules.
+func registryCreds(repoURL string) (user, pass string) {
+	reg := strings.TrimSpace(os.Getenv("HELM_OCI_REGISTRY"))
+	if reg == "" {
+		return "", ""
+	}
+	// Compare on host, so oci:// and a bare host both match.
+	host := strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(repoURL), "oci://"), "https://")
+	reg = strings.TrimPrefix(strings.TrimPrefix(reg, "oci://"), "https://")
+	if h, _, ok := strings.Cut(host, "/"); ok {
+		host = h
+	}
+	if r, _, ok := strings.Cut(reg, "/"); ok {
+		reg = r
+	}
+	if !strings.EqualFold(host, reg) {
+		return "", ""
+	}
+	return strings.TrimSpace(os.Getenv("HELM_OCI_USERNAME")), os.Getenv("HELM_OCI_PASSWORD")
 }
 
 func singleSubdir(dir string) (string, error) {

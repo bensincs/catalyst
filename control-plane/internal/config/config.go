@@ -42,8 +42,15 @@ type Config struct {
 	// subscription and does ACME itself. These select the CA it uses.
 	ACMEDirectoryURL string
 	ACMEEmail        string
+	// The platform registry that caches private charts and Bicep modules.
+	// Authors reference it explicitly for private artifacts; public registries
+	// are still referenced directly. PlatformACRRepos limits what a tenant's
+	// scoped token may pull, so it cannot reach the control plane's own images.
+	HelmOCIRegistry       string
+	PlatformACRResourceID string
+	PlatformACRRepos      []string
 
-	InfraPollSeconds        int
+	InfraPollSeconds int
 
 	// Footprint parameters injected into each tenant's reconciler.
 	ControlPlanePublicURL string // the reconciler → control plane base URL
@@ -76,6 +83,9 @@ func Load() Config {
 		InfraRegion:             env("INFRA_REGION", "uksouth"),
 		ACMEDirectoryURL:        env("ACME_DIRECTORY_URL", ""),
 		ACMEEmail:               env("ACME_EMAIL", ""),
+		HelmOCIRegistry:         env("HELM_OCI_REGISTRY", ""),
+		PlatformACRResourceID:   env("PLATFORM_ACR_RESOURCE_ID", ""),
+		PlatformACRRepos:        splitList(env("PLATFORM_ACR_REPOS", "charts/*,bicep/*")),
 		InfraPollSeconds:        envInt("INFRA_POLL_SECONDS", 30),
 
 		ControlPlanePublicURL: env("CONTROL_PLANE_PUBLIC_URL", "https://api.catalyst.msft.ae"),

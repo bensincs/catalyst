@@ -63,6 +63,10 @@ type Server struct {
 	entraIssuerHost string // Entra issuer host (cloud-specific), for per-tenant issuers
 	platformTID     string // the platform's own directory (ingress issuer for platform-hosted tenants)
 	platformSub     string // the platform's own subscription (where platform-hosted tenants are created)
+	// platformRegistry is the registry private charts and Bicep modules are
+	// cached into. Authors reference it explicitly for private artifacts, so the
+	// console has to tell them it exists; public registries are used directly.
+	platformRegistry string
 
 	// tenantTeardown deletes a tenant's Azure resource groups. Injected by main
 	// from the infra provisioner (which owns the ARM credential); nil when
@@ -75,6 +79,13 @@ type Server struct {
 // provisioner is constructed after the server, so this can't be a constructor arg.
 func (s *Server) SetTenantTeardown(fn func(ctx context.Context, sub, hostingMode, tenantRG string) error) {
 	s.tenantTeardown = fn
+}
+
+// SetPlatformRegistry names the registry that caches private charts and modules,
+// so the console can offer it to authors. A setter, not another constructor
+// argument — that list is long enough already.
+func (s *Server) SetPlatformRegistry(loginServer string) {
+	s.platformRegistry = strings.TrimSpace(loginServer)
 }
 
 func NewServer(st *store.Store, a *auth.Authenticator, recon *auth.ReconAuthenticator, corsOrigin, entraClientID, entraIssuerHost, platformTID, platformSub string) *Server {
@@ -193,7 +204,7 @@ func (s *Server) Router() http.Handler {
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	id, _ := auth.IdentityFrom(r.Context())
-	resp := model.MeResponse{Identity: id}
+	resp := model.MeResponse{Identity: id, PlatformRegistry: s.platformRegistry}
 
 	// Bind any memberships created for this user's email before they'd signed in,
 	// so oid-based authorization works from here on.

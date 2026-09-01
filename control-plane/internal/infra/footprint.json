@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.40.2.10011",
-      "templateHash": "9617857550210296038"
+      "templateHash": "11459664381514991004"
     }
   },
   "parameters": {
@@ -201,6 +201,20 @@
       "defaultValue": "",
       "metadata": {
         "description": "Optional private OCI Helm registry (e.g. ghcr.io/bensincs) whose charts need the reconciler credentials. Public OCI registries are auto-registered anonymously from each app repoURL, so leave empty for those."
+      }
+    },
+    "helmOciUsername": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Username for the platform registry — a registry-scoped token, not an Entra principal, so it works for a cluster in the customer's own directory."
+      }
+    },
+    "helmOciPassword": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Password for that token. It grants pull on the cached chart repositories of the platform registry only; the upstream registry credential never leaves the platform."
       }
     },
     "reconcilerImage": {
@@ -632,6 +646,14 @@
                 {
                   "name": "HELM_OCI_REGISTRY",
                   "value": "[parameters('helmOciRegistry')]"
+                },
+                {
+                  "name": "HELM_OCI_USERNAME",
+                  "value": "[parameters('helmOciUsername')]"
+                },
+                {
+                  "name": "HELM_OCI_PASSWORD",
+                  "value": "[parameters('helmOciPassword')]"
                 }
               ]
             }

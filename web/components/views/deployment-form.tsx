@@ -90,9 +90,11 @@ export function DeploymentForm({
   depOptions = [],
   depOutputs = [],
   cluster,
+  platformRegistry = "",
 }: {
   role: Role;
   app?: Application;
+  platformRegistry?: string;
   depOptions?: DepOption[];
   depOutputs?: DepOutputs[];
   cluster?: ClusterInfo;
@@ -279,7 +281,11 @@ export function DeploymentForm({
         <Section
           icon={Boxes}
           title="Helm chart"
-          desc="The chart to install into the cluster as an Argo CD Application."
+          desc={
+            platformRegistry
+              ? `The chart to install into the cluster as an Argo CD Application. Public registries can be used directly; a private chart is mirrored into ${platformRegistry}, which every tenant can pull from.`
+              : "The chart to install into the cluster as an Argo CD Application."
+          }
           status={
             chartLoading ? (
               <StatusBadge tone="info" label="inspecting…" variant="soft" pulse />
@@ -291,19 +297,37 @@ export function DeploymentForm({
           }
         >
           <datalist id="dep-repos">
+            {platformRegistry && <option value={`oci://${platformRegistry}/charts`} />}
             <option value="https://charts.bitnami.com/bitnami" />
             <option value="https://kubernetes.github.io/ingress-nginx" />
             <option value="https://prometheus-community.github.io/helm-charts" />
           </datalist>
-          <Field label="Helm repo / OCI URL" htmlFor="dep-repo" hint="A Helm repository (https://…) or OCI registry (oci://…).">
-            <TextInput
-              id="dep-repo"
-              list="dep-repos"
-              value={repoURL}
-              onChange={(e) => setRepoURL(e.target.value)}
-              placeholder="https://charts.bitnami.com/bitnami"
-              spellCheck={false}
-            />
+          <Field
+            label="Helm repo / OCI URL"
+            htmlFor="dep-repo"
+            hint="A Helm repository (https://…) or OCI registry (oci://…)."
+          >
+            <div className={styles.versionRow}>
+              <TextInput
+                id="dep-repo"
+                list="dep-repos"
+                value={repoURL}
+                onChange={(e) => setRepoURL(e.target.value)}
+                placeholder="https://charts.bitnami.com/bitnami"
+                spellCheck={false}
+              />
+              {platformRegistry !== "" && !repoURL.includes(platformRegistry) && (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  title={`Charts mirrored into ${platformRegistry}, which every tenant can pull from`}
+                  onClick={() => setRepoURL(`oci://${platformRegistry}/charts`)}
+                >
+                  Platform registry
+                </Button>
+              )}
+            </div>
           </Field>
           <div className={styles.grid2}>
             <Field label="Chart" htmlFor="dep-chart">

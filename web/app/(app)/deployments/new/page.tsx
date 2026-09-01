@@ -32,5 +32,5 @@ export default async function NewDeploymentPage() {
   let cluster: ClusterInfo | undefined;
   if (me.role === "tenant") cluster = (await getMyContext()).tenant.cluster;
 
-  return <DeploymentForm role={me.role} depOptions={depOptions} depOutputs={depOutputs} cluster={cluster} />;
+  return <DeploymentForm role={me.role} platformRegistry={me.platformRegistry} depOptions={depOptions} depOutputs={depOutputs} cluster={cluster} />;
 }

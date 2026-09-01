@@ -73,6 +73,7 @@ func main() {
 		cfg.EntraIssuerHost,
 	)
 	srv := httpapi.NewServer(st, authn, recon, cfg.CORSOrigin, cfg.EntraClientID, cfg.EntraIssuerHost, cfg.PlatformTenantID, cfg.PlatformSubscriptionID)
+	srv.SetPlatformRegistry(cfg.HelmOCIRegistry)
 
 	// Infra worker: discovers Lighthouse-delegated subscriptions, provisions each
 	// enabled tenant's footprint (reconciler + Foundry + AKS) and each deployment's
@@ -96,6 +97,9 @@ func main() {
 		PlatformSubscriptionID: cfg.PlatformSubscriptionID,
 		ACMEDirectory:          cfg.ACMEDirectoryURL,
 		ACMEEmail:              cfg.ACMEEmail,
+		PlatformACRID:          cfg.PlatformACRResourceID,
+		PlatformACRLogin:       cfg.HelmOCIRegistry,
+		PlatformACRRepos:       cfg.PlatformACRRepos,
 	}); err != nil {
 		slog.Error("infra provisioner init failed", "err", err)
 	} else if prov == nil {

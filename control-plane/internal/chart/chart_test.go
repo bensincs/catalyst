@@ -108,3 +108,40 @@ func TestServicesFromManifestsIgnoresJunk(t *testing.T) {
 		t.Errorf("expected nothing usable, got %#v", got)
 	}
 }
+
+func TestRegistryCredsOnlyForThePlatformRegistry(t *testing.T) {
+	// The platform registry is the only one the control plane holds a credential
+	// for: a private upstream is reached through the registry's cache, never
+	// directly, so its own credential never leaves the registry.
+	t.Setenv("HELM_OCI_REGISTRY", "cortexcpacr.azurecr.io")
+	t.Setenv("HELM_OCI_USERNAME", "tenant-token")
+	t.Setenv("HELM_OCI_PASSWORD", "s3cret")
+
+	for _, ref := range []string{
+		"oci://cortexcpacr.azurecr.io/charts",
+		"cortexcpacr.azurecr.io/charts",
+		"oci://CORTEXCPACR.azurecr.io/charts", // registries are case-insensitive
+	} {
+		if u, p := registryCreds(ref); u != "tenant-token" || p != "s3cret" {
+			t.Errorf("%s: expected the platform credential, got %q/%q", ref, u, p)
+		}
+	}
+	// Anything else is fetched anonymously — never send the credential onward.
+	for _, ref := range []string{
+		"https://charts.bitnami.com/bitnami",
+		"oci://ghcr.io/bensincs/charts",
+		"oci://evil.example.com/cortexcpacr.azurecr.io",
+	} {
+		if u, p := registryCreds(ref); u != "" || p != "" {
+			t.Errorf("%s: credential must not be sent, got %q/%q", ref, u, p)
+		}
+	}
+}
+
+func TestRegistryCredsUnsetIsAnonymous(t *testing.T) {
+	t.Setenv("HELM_OCI_REGISTRY", "")
+	t.Setenv("HELM_OCI_USERNAME", "u")
+	if u, p := registryCreds("oci://anything"); u != "" || p != "" {
+		t.Errorf("no registry configured must mean anonymous, got %q/%q", u, p)
+	}
+}

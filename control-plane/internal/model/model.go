@@ -90,9 +90,9 @@ type TenantIngress struct {
 	TLSDetail    string  `json:"tlsDetail,omitempty"`
 
 	// The customer's OIDC application. The secret itself is never returned.
-	OIDCIssuer         string `json:"oidcIssuer,omitempty"`
-	OIDCClientID       string `json:"oidcClientId,omitempty"`
-	OIDCSecretSet      bool   `json:"oidcSecretSet"`
+	OIDCIssuer    string `json:"oidcIssuer,omitempty"`
+	OIDCClientID  string `json:"oidcClientId,omitempty"`
+	OIDCSecretSet bool   `json:"oidcSecretSet"`
 }
 
 // Agent is an enabled agent running in a tenant.
@@ -142,6 +142,10 @@ type MeResponse struct {
 	// tenant plus any they're assigned to (memberships). Drives the console's
 	// tenant switcher. Empty for platform admins (who see the whole fleet).
 	Tenants []Tenant `json:"tenants,omitempty"`
+	// PlatformRegistry is the OCI registry that caches private charts and Bicep
+	// modules. Authors reference it explicitly (public registries are referenced
+	// directly), so the console surfaces it on the authoring forms.
+	PlatformRegistry string `json:"platformRegistry,omitempty"`
 }
 
 // Membership is an explicit user → tenant assignment (platform-hosted tenants).
@@ -280,8 +284,8 @@ type Infrastructure struct {
 	// InfraDetail explains that state — for a failure the resource-level ARM
 	// error, so the console can say why instead of only "blocked".
 	InfraDetail string `json:"infraDetail,omitempty"`
-	Health     string `json:"health,omitempty"`     // reconciling | live | blocked
-	Waiting    bool   `json:"waiting,omitempty"`    // enabled but held for unmet infra deps
+	Health      string `json:"health,omitempty"`  // reconciling | live | blocked
+	Waiting     bool   `json:"waiting,omitempty"` // enabled but held for unmet infra deps
 	// PendingDelete: the definition is being deleted and torn down; kept visible
 	// as "Deleting" until its last provisioned instance is gone.
 	PendingDelete bool `json:"pendingDelete,omitempty"`
@@ -295,38 +299,38 @@ type Infrastructure struct {
 // Argo CD Application in that tenant's cluster. Its Azure infrastructure is a
 // separate entity it DEPENDS on (see Dependencies + Wiring), not embedded.
 type Application struct {
-	ID             string            `json:"id"`
-	Name           string            `json:"name"`
-	Description    string            `json:"description"`
-	Owner          string            `json:"owner"` // "" = platform-authored; else tenant slug
-	Namespace      string            `json:"namespace"`
-	RepoURL        string            `json:"repoURL"`
-	Chart          string            `json:"chart"`
-	TargetRevision string            `json:"targetRevision"`
-	Values         string            `json:"values,omitempty"`
-	ExposeService  string            `json:"exposeService"` // Service the gateway routes to ("" = internal)
-	ExposePort     int               `json:"exposePort"`    // Service port (default 80)
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	Description    string `json:"description"`
+	Owner          string `json:"owner"` // "" = platform-authored; else tenant slug
+	Namespace      string `json:"namespace"`
+	RepoURL        string `json:"repoURL"`
+	Chart          string `json:"chart"`
+	TargetRevision string `json:"targetRevision"`
+	Values         string `json:"values,omitempty"`
+	ExposeService  string `json:"exposeService"` // Service the gateway routes to ("" = internal)
+	ExposePort     int    `json:"exposePort"`    // Service port (default 80)
 	// Hostname is the label published under the tenant's domain
 	// (<hostname>.<appsDomain>); empty ⇒ the app id. AuthRequired puts the app
 	// behind an OIDC login; OIDCScope is the scope on the tenant's app
 	// registration it requires.
-	Hostname     string `json:"hostname"`
-	OIDCScope    string `json:"oidcScope"`
-	AuthRequired bool   `json:"authRequired"`
-	Wiring         []shared.WireLink `json:"wiring"`        // infra dependency output → Helm values path
-	Dependencies   []Dependency      `json:"dependencies"`  // infrastructure | application | agent
-	CreatedBy      string            `json:"createdBy,omitempty"`
-	CreatedAt      time.Time         `json:"createdAt"`
+	Hostname     string            `json:"hostname"`
+	OIDCScope    string            `json:"oidcScope"`
+	AuthRequired bool              `json:"authRequired"`
+	Wiring       []shared.WireLink `json:"wiring"`       // infra dependency output → Helm values path
+	Dependencies []Dependency      `json:"dependencies"` // infrastructure | application | agent
+	CreatedBy    string            `json:"createdBy,omitempty"`
+	CreatedAt    time.Time         `json:"createdAt"`
 
 	// Populated in the tenant view (per-tenant enablement + runtime status):
-	Platform     bool   `json:"platform"`               // platform-authored (vs tenant-owned)
-	Owned        bool   `json:"owned"`                  // owned by the viewing tenant
-	Entitled     bool   `json:"entitled"`               // entitled to the viewing tenant
-	Enabled      bool   `json:"enabled"`                // explicitly enabled (deployed) in the viewing tenant
-	Health       string `json:"health,omitempty"`       // per-tenant lifecycle: reconciling | live | blocked
-	SyncStatus   string `json:"syncStatus,omitempty"`   // Argo sync when enabled
+	Platform   bool   `json:"platform"`             // platform-authored (vs tenant-owned)
+	Owned      bool   `json:"owned"`                // owned by the viewing tenant
+	Entitled   bool   `json:"entitled"`             // entitled to the viewing tenant
+	Enabled    bool   `json:"enabled"`              // explicitly enabled (deployed) in the viewing tenant
+	Health     string `json:"health,omitempty"`     // per-tenant lifecycle: reconciling | live | blocked
+	SyncStatus string `json:"syncStatus,omitempty"` // Argo sync when enabled
 	// Detail is Argo's reason the deployment is unhealthy or out of sync.
-	Detail string `json:"detail,omitempty"`
+	Detail       string `json:"detail,omitempty"`
 	HealthStatus string `json:"healthStatus,omitempty"` // Argo health when enabled
 	Waiting      bool   `json:"waiting,omitempty"`      // enabled but held for unmet dependencies
 	// Populated in the platform view:

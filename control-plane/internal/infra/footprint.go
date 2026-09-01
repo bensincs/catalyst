@@ -334,7 +334,6 @@ func (p *Provisioner) createResourceGroup(ctx context.Context, sub, rg, region s
 // flags the deployment same-tenant (isDelegated=false). The Foundry project
 // deploys in the tenant's region; footprint_config supplies optional AKS node
 // sizing (nodeCount, nodeVmSize).
-//
 func (p *Provisioner) submitFootprint(ctx context.Context, sub, rg string, t store.FootprintTarget, region, reconcilerIdentityResourceID string, isDelegated bool) error {
 	var template map[string]any
 	if err := json.Unmarshal(footprintTemplate, &template); err != nil {
@@ -363,6 +362,21 @@ func (p *Provisioner) submitFootprint(ctx context.Context, sub, rg string, t sto
 	}
 	if p.acmeEmail != "" {
 		params["acmeEmail"] = map[string]any{"value": p.acmeEmail}
+	}
+	// Pull access to the platform registry, so Argo in the tenant's cluster can
+	// fetch a private chart cached there. The upstream's own credential is never
+	// sent: this is a token scoped to the cached repositories on our registry.
+	// A failure here is not fatal — public charts still deploy — so log and go on
+	// rather than blocking the whole footprint on it.
+	if p.platformACRLogin != "" {
+		user, pass, err := p.EnsureTenantPullToken(ctx, t.Slug)
+		if err != nil {
+			slog.Warn("infra: registry pull token failed", "tenant", t.Slug, "err", trunc(err.Error()))
+		} else if user != "" {
+			params["helmOciRegistry"] = map[string]any{"value": p.platformACRLogin}
+			params["helmOciUsername"] = map[string]any{"value": user}
+			params["helmOciPassword"] = map[string]any{"value": pass}
+		}
 	}
 	// Optional AKS node sizing from the admin-set footprint config (region is NOT
 	// a footprint field — it follows the tenant).

@@ -97,6 +97,7 @@ interface ApiMe {
   role: Role;
   tenant: ApiTenant | null;
   tenants?: ApiTenant[] | null;
+  platformRegistry?: string;
 }
 interface ApiFleet {
   stats: FleetStats;
@@ -373,6 +374,9 @@ export interface Me {
   oid: string;
   tenant: TenantSummary | null;
   tenants: TenantSummary[];
+  /** The registry that caches private charts and Bicep modules. Authors
+   *  reference it explicitly; public registries are referenced directly. */
+  platformRegistry?: string;
 }
 
 export const getMe = cache(async (): Promise<Me> => {
@@ -385,6 +389,7 @@ export const getMe = cache(async (): Promise<Me> => {
     oid: m.oid,
     tenant: m.tenant ? toSummary(m.tenant) : null,
     tenants: (m.tenants ?? []).map(toSummary),
+    platformRegistry: m.platformRegistry,
   };
 });
 

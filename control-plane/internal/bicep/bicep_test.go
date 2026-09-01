@@ -39,7 +39,7 @@ func TestModuleOutputsAndWrapper(t *testing.T) {
 	w := wrapper("br:acr.azurecr.io/bicep/db:1.0.0", outs, nil)
 	for _, want := range []string{
 		"module infra 'br:acr.azurecr.io/bicep/db:1.0.0'",
-		"name: '${deployment().name}-m'", // unique nested-deployment name (no cross-infra collision)
+		"name: '${deployment().name}-m'",                 // unique nested-deployment name (no cross-infra collision)
 		"output host string = infra.outputs.?host ?? ''", // safe-access + coalesce (tolerates nullable outputs)
 		"output port int = infra.outputs.?port ?? 0",
 	} {
