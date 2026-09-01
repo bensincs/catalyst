@@ -90,12 +90,7 @@ export interface ClusterInfo {
   argoInstalled: boolean;
   ingressInstalled: boolean;
   gatewayIP?: string;
-  ingressIssuer?: string;
-  // Publishing state, reported by the reconciler — it owns the tenant's DNS zone.
-  dnsState?: string;
-  dnsDetail?: string;
-  dnsNameservers?: string[];
-  tlsExpiresAt?: string; // Entra issuer the ingress enforces ("" ⇒ closed)
+  ingressIssuer?: string; // Entra issuer the ingress enforces ("" ⇒ closed)
   infraDelegated: boolean; // control plane can reach the tenant's Lighthouse-delegated RG
   infraDetail?: string; // human note about delegation reachability
   footprintState?: string; // "" | provisioning | ready | failed (reconciler + Foundry provisioned by control plane)
