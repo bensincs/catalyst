@@ -48,10 +48,14 @@ export function UpstreamsPanel({
   // almost always, so offer it rather than making it another thing to type.
   const suggestTarget = (src: string) => {
     const path = src.replace(/^oci:\/\//, "").split("/").slice(1).join("/");
-    return path || "";
+    if (path === "") return "";
+    return path.endsWith("/*") ? path : path.replace(/\/?\*?$/, "") + "/*";
   };
 
-  const valid = name.trim() !== "" && source.trim() !== "" && target.trim() !== "";
+  // The registry accepts an exact source and then refuses every pull with 403,
+  // so the wildcard form is the only one that works.
+  const wildcards = source.trim().endsWith("/*") && target.trim().endsWith("/*");
+  const valid = name.trim() !== "" && source.trim() !== "" && target.trim() !== "" && wildcards;
 
   const submit = () =>
     start(async () => {
@@ -140,7 +144,11 @@ export function UpstreamsPanel({
                 spellCheck={false}
               />
             </Field>
-            <Field label="Upstream" htmlFor="up-src" hint="Repository pattern to mirror.">
+            <Field
+              label="Upstream"
+              htmlFor="up-src"
+              hint="Repository pattern to mirror — must end with /*."
+            >
               <TextInput
                 id="up-src"
                 value={source}

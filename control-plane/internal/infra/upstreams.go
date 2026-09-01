@@ -99,6 +99,12 @@ func (p *Provisioner) PutUpstream(ctx context.Context, name, source, target, use
 	if name == "" || source == "" || target == "" {
 		return fmt.Errorf("name, source and target are required")
 	}
+	// An exact source is accepted by the registry and then refuses every pull
+	// with 403 — it has to be a wildcard pattern. Reject it here rather than let
+	// an admin save a rule that looks configured and never serves anything.
+	if !strings.HasSuffix(source, "/*") || !strings.HasSuffix(target, "/*") {
+		return fmt.Errorf("source and target must end with /* — e.g. ghcr.io/acme/* cached as images/*")
+	}
 	base := "https://management.azure.com" + p.platformACRID
 	props := map[string]any{"sourceRepository": source, "targetRepository": target}
 
@@ -109,9 +115,12 @@ func (p *Provisioner) PutUpstream(ctx context.Context, name, source, target, use
 			return err
 		}
 		props["credentialSetResourceId"] = id
-	} else if existing, err := p.credentialSetID(ctx, host); err == nil && existing != "" {
-		// Keep an already-configured credential rather than silently making the
-		// rule anonymous, which would break pulls the next time the cache misses.
+	} else if existing := p.ruleCredentialSetID(ctx, name); existing != "" {
+		// Editing a rule that already had a credential: keep it, so the token
+		// does not have to be retyped. Deliberately keyed on the rule and not on
+		// the host — a new public upstream on a host that happens to have a
+		// stored credential must stay anonymous, or it silently inherits one and
+		// fails with an opaque 403 when the upstream rejects it.
 		props["credentialSetResourceId"] = existing
 	}
 
@@ -131,19 +140,20 @@ func (p *Provisioner) DeleteUpstream(ctx context.Context, name string) error {
 		p.platformACRID, strings.TrimSpace(name), acrAPIVersion))
 }
 
-// credentialSetID returns the resource id of the credential set for a host, or
-// empty when there isn't one.
-func (p *Provisioner) credentialSetID(ctx context.Context, host string) (string, error) {
-	var cs struct {
-		ID string `json:"id"`
+// ruleCredentialSetID returns the credential set an existing cache rule already
+// uses, or empty when the rule is new or anonymous.
+func (p *Provisioner) ruleCredentialSetID(ctx context.Context, name string) string {
+	var rule struct {
+		Properties struct {
+			CredentialSetResourceID string `json:"credentialSetResourceId"`
+		} `json:"properties"`
 	}
-	err := p.armJSON(ctx, "GET",
-		fmt.Sprintf("https://management.azure.com%s/credentialSets/%s?api-version=%s",
-			p.platformACRID, credentialSetName(host), acrAPIVersion), nil, &cs)
-	if err != nil {
-		return "", err
+	if err := p.armJSON(ctx, "GET",
+		fmt.Sprintf("https://management.azure.com%s/cacheRules/%s?api-version=%s",
+			p.platformACRID, name, acrAPIVersion), nil, &rule); err != nil {
+		return ""
 	}
-	return cs.ID, nil
+	return rule.Properties.CredentialSetResourceID
 }
 
 // ensureCredentialSet writes the upstream credential to Key Vault and points a
