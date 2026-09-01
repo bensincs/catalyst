@@ -49,6 +49,8 @@ type Config struct {
 	HelmOCIRegistry       string
 	PlatformACRResourceID string
 	PlatformACRRepos      []string
+	KeyVaultURI           string
+	KeyVaultID            string
 
 	InfraPollSeconds int
 
@@ -86,6 +88,8 @@ func Load() Config {
 		HelmOCIRegistry:         env("HELM_OCI_REGISTRY", ""),
 		PlatformACRResourceID:   env("PLATFORM_ACR_RESOURCE_ID", ""),
 		PlatformACRRepos:        splitList(env("PLATFORM_ACR_REPOS", "charts/*,bicep/*")),
+		KeyVaultURI:             env("PLATFORM_KEYVAULT_URI", ""),
+		KeyVaultID:              env("PLATFORM_KEYVAULT_RESOURCE_ID", ""),
 		InfraPollSeconds:        envInt("INFRA_POLL_SECONDS", 30),
 
 		ControlPlanePublicURL: env("CONTROL_PLANE_PUBLIC_URL", "https://api.catalyst.msft.ae"),

@@ -195,7 +195,7 @@ async function apiGet<T>(path: string): Promise<T> {
 
 /** POST/PATCH/DELETE with the API access token. Used by server actions. */
 export async function apiSend<T = unknown>(
-  method: "POST" | "PATCH" | "DELETE",
+  method: "POST" | "PUT" | "PATCH" | "DELETE",
   path: string,
   body?: unknown,
 ): Promise<T> {
@@ -660,3 +660,20 @@ export const getResources = cache(async (): Promise<Resources> => {
     stores: (r.memoryStores ?? []).map(toStore),
   };
 });
+
+/** One upstream registry mirrored into the platform registry. */
+export interface Upstream {
+  name: string;
+  source: string;
+  target: string;
+  loginServer: string;
+  credentialed: boolean;
+  state?: string;
+}
+
+export const getUpstreams = async (): Promise<{ registry: string; upstreams: Upstream[] }> => {
+  const d = await apiGet<{ registry?: string; upstreams?: Upstream[] | null }>(
+    "/api/platform/registry/upstreams",
+  );
+  return { registry: d.registry ?? "", upstreams: d.upstreams ?? [] };
+};

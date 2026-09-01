@@ -61,6 +61,10 @@ type Provisioner struct {
 	platformACRID    string
 	platformACRLogin string
 	platformACRRepos []string
+	// The vault upstream registry credentials are written to. ACR reads them
+	// from here; the control plane only ever writes.
+	keyVaultURI string
+	keyVaultID  string
 
 	mu          sync.Mutex        // guards apiVersions
 	apiVersions map[string]string // provider/type → api-version, resolved on demand for teardown
@@ -88,6 +92,8 @@ type Config struct {
 	PlatformACRID    string
 	PlatformACRLogin string
 	PlatformACRRepos []string
+	KeyVaultURI      string
+	KeyVaultID       string
 }
 
 // New builds a Provisioner, or (nil, nil) when cross-tenant provisioning is off.
@@ -118,6 +124,8 @@ func New(st *store.Store, cfg Config) (*Provisioner, error) {
 		platformACRID:    cfg.PlatformACRID,
 		platformACRLogin: cfg.PlatformACRLogin,
 		platformACRRepos: cfg.PlatformACRRepos,
+		keyVaultURI:      cfg.KeyVaultURI,
+		keyVaultID:       cfg.KeyVaultID,
 		apiVersions:      map[string]string{},
 	}, nil
 }

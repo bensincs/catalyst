@@ -100,6 +100,8 @@ func main() {
 		PlatformACRID:          cfg.PlatformACRResourceID,
 		PlatformACRLogin:       cfg.HelmOCIRegistry,
 		PlatformACRRepos:       cfg.PlatformACRRepos,
+		KeyVaultURI:            cfg.KeyVaultURI,
+		KeyVaultID:             cfg.KeyVaultID,
 	}); err != nil {
 		slog.Error("infra provisioner init failed", "err", err)
 	} else if prov == nil {
@@ -109,6 +111,7 @@ func main() {
 		// Deleting a tenant reclaims its Azure resource groups; the provisioner
 		// owns the ARM credential, so the server borrows it.
 		srv.SetTenantTeardown(prov.TeardownTenant)
+		srv.SetUpstreamManager(prov)
 		slog.Info("cross-tenant provisioning enabled (managed identity + Lighthouse)", "footprintRG", cfg.FootprintRG, "infraRG", cfg.InfraResourceGroup, "region", cfg.InfraRegion)
 	}
 

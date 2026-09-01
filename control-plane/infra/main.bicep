@@ -108,6 +108,12 @@ param postgresStorageGb int = 32
 @description('Optional operator IP allowed through the PostgreSQL firewall (for psql/inspection). Empty to skip.')
 param operatorIp string = ''
 
+@description('ACME directory the tenant reconcilers obtain their wildcard certificate from. Empty ⇒ Let\'s Encrypt production.')
+param acmeDirectoryUrl string = ''
+
+@description('Contact address registered with the ACME account (expiry notices).')
+param acmeEmail string = ''
+
 @description('Upstream registries cached into the platform registry, as [{name, source, target}] — e.g. { name: \'ghcr-charts\', source: \'ghcr.io/acme/charts/*\', target: \'charts/*\' }. Authors reference the platform registry for these; public registries are still referenced directly.')
 param registryCacheRules array = []
 
@@ -139,6 +145,9 @@ var acrPullRoleId = subscriptionResourceId('Microsoft.Authorization/roleDefiniti
 // Built-in Key Vault Secrets User — what the registry needs to read the
 // upstream credential it caches with.
 var kvSecretsUserRoleId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
+// Key Vault Secrets Officer — the control plane writes an upstream credential
+// when a platform admin adds one from the console.
+var kvSecretsOfficerRoleId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7')
 var cacheUpstreamAuthed = !empty(registryUpstreamPassword)
 // A credential set is bound to one upstream login server; take it from the first
 // cache rule's source ('ghcr.io/acme/charts/*' → 'ghcr.io').
@@ -190,7 +199,7 @@ resource acr 'Microsoft.ContainerRegistry/registries@2023-11-01-preview' = {
 // this registry only, so it can read the charts it needs and nothing else, and
 // revoking one tenant is deleting one token.
 
-resource kv 'Microsoft.KeyVault/vaults@2023-07-01' = if (cacheUpstreamAuthed) {
+resource kv 'Microsoft.KeyVault/vaults@2023-07-01' = {
   name: kvName
   location: location
   properties: {
@@ -215,12 +224,22 @@ resource kvPass 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (cacheUpstre
   properties: { value: registryUpstreamPassword }
 }
 
-resource acrKvRead 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (cacheUpstreamAuthed) {
+resource acrKvRead 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(kv.id, acr.id, 'KeyVaultSecretsUser')
   scope: kv
   properties: {
     principalId: acr.identity.principalId
     roleDefinitionId: kvSecretsUserRoleId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource cpKvWrite 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(kv.id, uami.id, 'KeyVaultSecretsOfficer')
+  scope: kv
+  properties: {
+    principalId: uami.properties.principalId
+    roleDefinitionId: kvSecretsOfficerRoleId
     principalType: 'ServicePrincipal'
   }
 }
@@ -407,9 +426,14 @@ resource api 'Microsoft.App/containerApps@2024-03-01' = if (deployApps) {
             // The registry authors reference for private charts and modules.
             // The control plane inspects charts through it, and mints a scoped
             // token per tenant so a cluster can pull from it and nothing else.
+            { name: 'ACME_DIRECTORY_URL', value: acmeDirectoryUrl }
+            { name: 'ACME_EMAIL', value: acmeEmail }
             { name: 'HELM_OCI_REGISTRY', value: acr.properties.loginServer }
             { name: 'PLATFORM_ACR_NAME', value: acr.name }
             { name: 'PLATFORM_ACR_RESOURCE_ID', value: acr.id }
+            { name: 'PLATFORM_KEYVAULT_URI', value: kv.properties.vaultUri }
+            { name: 'PLATFORM_KEYVAULT_NAME', value: kv.name }
+            { name: 'PLATFORM_KEYVAULT_RESOURCE_ID', value: kv.id }
           ]
         }
       ]
@@ -517,3 +541,4 @@ output uamiClientId string = uami.properties.clientId
 // The control-plane identity's object id — the principal customers delegate to via
 // Azure Lighthouse (controlPlanePrincipalId / CORTEX_SP_OBJECT_ID).
 output uamiPrincipalId string = uami.properties.principalId
+output keyVaultName string = kv.name

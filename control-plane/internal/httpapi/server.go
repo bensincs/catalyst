@@ -16,6 +16,7 @@ import (
 	"github.com/inception42/cortex/control-plane/internal/auth"
 	"github.com/inception42/cortex/control-plane/internal/bicep"
 	"github.com/inception42/cortex/control-plane/internal/chart"
+	"github.com/inception42/cortex/control-plane/internal/infra"
 	"github.com/inception42/cortex/control-plane/internal/model"
 	"github.com/inception42/cortex/control-plane/internal/store"
 	"github.com/inception42/cortex/shared"
@@ -67,6 +68,9 @@ type Server struct {
 	// cached into. Authors reference it explicitly for private artifacts, so the
 	// console has to tell them it exists; public registries are used directly.
 	platformRegistry string
+	// upstreams manages the registry's cache rules. Nil when cross-tenant
+	// provisioning is off, since there is then no registry to manage.
+	upstreams UpstreamManager
 
 	// tenantTeardown deletes a tenant's Azure resource groups. Injected by main
 	// from the infra provisioner (which owns the ARM credential); nil when
@@ -87,6 +91,18 @@ func (s *Server) SetTenantTeardown(fn func(ctx context.Context, sub, hostingMode
 func (s *Server) SetPlatformRegistry(loginServer string) {
 	s.platformRegistry = strings.TrimSpace(loginServer)
 }
+
+// UpstreamManager is the registry-cache surface the console drives. Satisfied by
+// the infra provisioner; an interface so the API does not depend on it being
+// present (it is nil when cross-tenant provisioning is off).
+type UpstreamManager interface {
+	ListUpstreams(ctx context.Context) ([]infra.Upstream, error)
+	PutUpstream(ctx context.Context, name, source, target, user, pass string) error
+	DeleteUpstream(ctx context.Context, name string) error
+}
+
+// SetUpstreamManager wires registry-cache management, which the provisioner owns.
+func (s *Server) SetUpstreamManager(m UpstreamManager) { s.upstreams = m }
 
 func NewServer(st *store.Store, a *auth.Authenticator, recon *auth.ReconAuthenticator, corsOrigin, entraClientID, entraIssuerHost, platformTID, platformSub string) *Server {
 	return &Server{
@@ -139,6 +155,10 @@ func (s *Server) Router() http.Handler {
 		r.Group(func(r chi.Router) {
 			r.Use(s.tenantGate)
 			r.Get("/fleet", s.handleFleet)
+			// Registry upstreams (platform only; each handler re-checks).
+			r.Get("/platform/registry/upstreams", s.handleListUpstreams)
+			r.Put("/platform/registry/upstreams/{name}", s.handlePutUpstream)
+			r.Delete("/platform/registry/upstreams/{name}", s.handleDeleteUpstream)
 			r.Get("/tenant/context", s.handleMyContext)
 			r.Get("/tenants/{slug}/context", s.handleTenantContext)
 

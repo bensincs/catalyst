@@ -29,3 +29,17 @@ param entraClientSecret = readEnvironmentVariable('CORTEX_ENTRA_CLIENT_SECRET', 
 
 // Optional: your public IP, to reach Postgres with psql for inspection.
 param operatorIp = readEnvironmentVariable('CORTEX_OPERATOR_IP', '')
+
+// ── Settings that were only ever passed on the CLI ───────────────────────────
+// These have real values in the running deployment but no entry here, so an
+// apply from this file would quietly reset them to the template's defaults —
+// turning off cross-tenant provisioning, repointing the reconciler image, and
+// (worst) blanking platformAdminEmails, which makes every user in the directory
+// a platform admin. Pin them so an apply reproduces what is actually running.
+param crossTenantProvisioning = true
+param platformSubscriptionId = readEnvironmentVariable('CORTEX_PLATFORM_SUBSCRIPTION_ID', '')
+param platformAdminEmails = readEnvironmentVariable('CORTEX_PLATFORM_ADMIN_EMAILS', '')
+param reconcilerImage = readEnvironmentVariable('CORTEX_RECONCILER_IMAGE', '')
+param footprintResourceGroup = 'cortex'
+param infraResourceGroup = 'cortex-infra'
+param acmeEmail = readEnvironmentVariable('CORTEX_ACME_EMAIL', '')

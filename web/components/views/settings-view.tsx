@@ -3,6 +3,7 @@
 import {
   ArrowUpRight,
   Bot,
+  Boxes,
   Fingerprint,
   KeyRound,
   Monitor,
@@ -13,6 +14,8 @@ import {
 } from "lucide-react";
 import { PageHeader } from "@/components/ui/page-header";
 import { useConsole } from "@/components/providers/console-provider";
+import { UpstreamsPanel } from "./upstreams-panel";
+import type { Upstream } from "@/lib/api";
 import type { Role, TenantContextInfo } from "@/lib/types";
 import styles from "./settings-view.module.css";
 
@@ -31,9 +34,13 @@ const PORTAL_URL = "https://portal.azure.com/";
 export function SettingsView({
   identity,
   tenant,
+  registry = "",
+  upstreams = [],
 }: {
   identity: SettingsIdentity;
   tenant: TenantContextInfo | null;
+  registry?: string;
+  upstreams?: Upstream[];
 }) {
   const platform = identity.role === "platform";
 
@@ -86,6 +93,14 @@ export function SettingsView({
             <Fact label="Reconciler identity" value={tenant.reconcilerIdentity || "—"} mono />
             <Fact label="Foundry project" value={tenant.foundryProject || "—"} mono />
           </dl>
+        </Panel>
+      )}
+
+      {/* Registry upstreams — platform only, and the one thing on this page that
+          changes infrastructure rather than reporting it. */}
+      {platform && (
+        <Panel title="Registry upstreams" icon={Boxes}>
+          <UpstreamsPanel registry={registry} upstreams={upstreams} />
         </Panel>
       )}
 

@@ -457,3 +457,39 @@ export async function setOIDCConfig(
     [`/tenants/${slug}`, "/"],
   );
 }
+
+/* ── Registry upstreams (platform) ────────────────────────────────────────── */
+
+// The private registries mirrored into the platform registry. The registry is
+// the source of truth — nothing is cached here — so a change is visible to every
+// tenant on its next pull without a redeploy.
+export async function saveUpstream(input: {
+  name: string;
+  source: string;
+  target: string;
+  username: string;
+  password: string;
+}): Promise<ActionResult> {
+  try {
+    await apiSend("PUT", `/api/platform/registry/upstreams/${encodeURIComponent(input.name)}`, {
+      source: input.source,
+      target: input.target,
+      username: input.username,
+      password: input.password,
+    });
+    revalidatePath("/settings");
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: errMsg(e) };
+  }
+}
+
+export async function removeUpstream(name: string): Promise<ActionResult> {
+  try {
+    await apiSend("DELETE", `/api/platform/registry/upstreams/${encodeURIComponent(name)}`);
+    revalidatePath("/settings");
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: errMsg(e) };
+  }
+}
