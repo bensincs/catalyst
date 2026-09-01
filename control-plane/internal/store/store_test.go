@@ -1071,3 +1071,59 @@ func TestIsLockContention(t *testing.T) {
 		t.Error("non-pg error must not be treated as contention")
 	}
 }
+
+// TestMigrateBackfillsDependenciesFromWiring: an application that binds a
+// source's output into its Helm values depends on that source. Records exist
+// with wiring but no matching edge, which made the console show no dependencies
+// and — because the editor prunes wiring whose source is not a selected
+// dependency — silently discard every binding on the next save.
+func TestMigrateBackfillsDependenciesFromWiring(t *testing.T) {
+	st, ctx := testStore(t)
+	defer st.Close()
+
+	const appID = "zz-wire-backfill-app"
+	const infraID = "zz-wire-backfill-infra"
+	defer func() {
+		_, _ = st.pool.Exec(ctx, `DELETE FROM applications WHERE id = $1`, appID)
+	}()
+	_, _ = st.pool.Exec(ctx, `DELETE FROM applications WHERE id = $1`, appID)
+
+	if err := insertApplication(ctx, st.pool, model.Application{
+		ID: appID, Name: "Backfill", Owner: "", Namespace: "web", RepoURL: "https://r", Chart: "c",
+		Wiring: []shared.WireLink{
+			{SourceKind: "infrastructure", SourceID: infraID, Output: "host", HelmPath: "database.host"},
+			{SourceKind: "infrastructure", SourceID: infraID, Output: "port", HelmPath: "database.port"},
+		},
+		// Deliberately empty: this is the inconsistent shape found in real data.
+		Dependencies: nil,
+	}, "oid"); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	a, err := st.ApplicationByID(ctx, appID)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if len(a.Dependencies) != 1 {
+		t.Fatalf("expected the wiring's source to be backfilled as one edge, got %#v", a.Dependencies)
+	}
+	if a.Dependencies[0].Kind != model.DepInfrastructure || a.Dependencies[0].ID != infraID {
+		t.Fatalf("wrong edge: %#v", a.Dependencies[0])
+	}
+	if len(a.Wiring) != 2 {
+		t.Fatalf("wiring must be untouched, got %d", len(a.Wiring))
+	}
+
+	// Idempotent: a second migration must not duplicate the edge.
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatalf("migrate twice: %v", err)
+	}
+	a, _ = st.ApplicationByID(ctx, appID)
+	if len(a.Dependencies) != 1 {
+		t.Fatalf("re-running the migration duplicated edges: %#v", a.Dependencies)
+	}
+}

@@ -584,3 +584,26 @@ ALTER TABLE tenants ADD COLUMN IF NOT EXISTS oidc_client_secret text NOT NULL DE
 ALTER TABLE applications ADD COLUMN IF NOT EXISTS hostname      text NOT NULL DEFAULT '';
 ALTER TABLE applications ADD COLUMN IF NOT EXISTS oidc_scope    text NOT NULL DEFAULT '';
 ALTER TABLE applications ADD COLUMN IF NOT EXISTS auth_required boolean NOT NULL DEFAULT false;
+
+-- Wiring implies a dependency: an application that binds a source's output into
+-- its Helm values necessarily depends on that source. Records exist carrying
+-- wiring with no matching edge, and the two are consumed very differently — the
+-- console derives the wireable sources from the edges, so such an app showed no
+-- dependencies, its bound values lost their labels, and saving it pruned the
+-- wiring away entirely (the editor drops wiring whose source is not a selected
+-- dependency). Backfill the missing edges so the stored graph matches the
+-- wiring. Idempotent: once an edge exists the NOT EXISTS excludes it.
+UPDATE applications a
+   SET dependencies = a.dependencies || missing.edges
+  FROM (
+    SELECT x.id,
+           jsonb_agg(DISTINCT jsonb_build_object('kind', w->>'sourceKind', 'id', w->>'sourceId')) AS edges
+      FROM applications x, jsonb_array_elements(x.wiring) w
+     WHERE coalesce(w->>'sourceId', '') <> ''
+       AND coalesce(w->>'sourceKind', '') <> ''
+       AND NOT EXISTS (
+             SELECT 1 FROM jsonb_array_elements(x.dependencies) d
+              WHERE d->>'kind' = w->>'sourceKind' AND d->>'id' = w->>'sourceId')
+     GROUP BY x.id
+  ) AS missing
+ WHERE a.id = missing.id;
