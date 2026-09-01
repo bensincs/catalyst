@@ -157,12 +157,13 @@ func TestAuthRedirectURL(t *testing.T) {
 	}
 }
 
-func TestAuthDeploymentReadsEmailFromIDToken(t *testing.T) {
-	// Regression: without an explicit claim, oauth2-proxy looks for `email`,
-	// which Entra v2.0 omits for most work accounts. It then falls back to the
-	// userinfo endpoint using an access token minted for the app's own API, so
-	// Graph returns 401 and every callback ends in a 400. The claim must be
-	// read from the ID token instead.
+func TestAuthDeploymentDoesNotCallProfileURL(t *testing.T) {
+	// Regression: oauth2-proxy resolves any claim missing from the ID token by
+	// calling the provider's userinfo endpoint, using an access token minted for
+	// the app's own API rather than for Graph — so Graph returns 401 and every
+	// callback fails. Disabling the fallback per claim is whack-a-mole (`email`
+	// was fixed first, then `groups` surfaced); it must be off outright, with
+	// the email read from a claim Entra actually issues.
 	d := authDeployment("todo-auth", "todo", shared.DesiredApplication{
 		ExposeService: "todo-app", ExposePort: 80,
 		OIDCScope: "api://11111111-1111-1111-1111-111111111111/Todo.Access",
@@ -171,20 +172,20 @@ func TestAuthDeploymentReadsEmailFromIDToken(t *testing.T) {
 		OIDCClientID: "11111111-1111-1111-1111-111111111111",
 	}, "todo.apps.example.com")
 
-	args, _, err := unstructured.NestedStringSlice(d.Object,
-		"spec", "template", "spec", "containers", "0", "args")
-	if err != nil {
-		// containers is a slice, so walk it manually.
-		cs, _, _ := unstructured.NestedSlice(d.Object, "spec", "template", "spec", "containers")
-		if len(cs) == 0 {
-			t.Fatal("no containers")
-		}
-		raw, _, _ := unstructured.NestedStringSlice(cs[0].(map[string]any), "args")
-		args = raw
+	cs, _, _ := unstructured.NestedSlice(d.Object, "spec", "template", "spec", "containers")
+	if len(cs) == 0 {
+		t.Fatal("no containers")
 	}
+	args, _, _ := unstructured.NestedStringSlice(cs[0].(map[string]any), "args")
 	joined := strings.Join(args, " ")
-	if !strings.Contains(joined, "--oidc-email-claim=preferred_username") {
-		t.Fatalf("expected the email claim to be read from the ID token, got: %s", joined)
+
+	for _, want := range []string{
+		"--skip-claims-from-profile-url=true",
+		"--oidc-email-claim=preferred_username",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("missing %s; got: %s", want, joined)
+		}
 	}
 }
 
