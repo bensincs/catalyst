@@ -1,7 +1,9 @@
 package chart
 
 import (
+	"encoding/base64"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 )
@@ -143,5 +145,40 @@ func TestRegistryCredsUnsetIsAnonymous(t *testing.T) {
 	t.Setenv("HELM_OCI_USERNAME", "u")
 	if u, p := registryCreds("oci://anything"); u != "" || p != "" {
 		t.Errorf("no registry configured must mean anonymous, got %q/%q", u, p)
+	}
+}
+
+func TestWriteRegistryConfig(t *testing.T) {
+	// Helm 3 ignores --username/--password for an oci:// reference and tries an
+	// anonymous token, which a private registry refuses. The registry config is
+	// what it actually reads, so the auth entry must be keyed by bare host.
+	dir := t.TempDir()
+	path, err := writeRegistryConfig(dir, "oci://cortexcpacr.azurecr.io/charts", "tok", "pw")
+	if err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	var cfg struct {
+		Auths map[string]struct {
+			Auth string `json:"auth"`
+		} `json:"auths"`
+	}
+	if err := json.Unmarshal(b, &cfg); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	entry, ok := cfg.Auths["cortexcpacr.azurecr.io"]
+	if !ok {
+		t.Fatalf("expected an entry keyed by bare host, got %v", cfg.Auths)
+	}
+	raw, _ := base64.StdEncoding.DecodeString(entry.Auth)
+	if string(raw) != "tok:pw" {
+		t.Errorf("auth = %q", raw)
+	}
+	// It holds a credential.
+	if fi, err := os.Stat(path); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Errorf("permissions = %v (%v)", fi.Mode().Perm(), err)
 	}
 }

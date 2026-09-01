@@ -6,6 +6,7 @@ package chart
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -74,8 +75,17 @@ func Inspect(ctx context.Context, repoURL, chart, version, release, values strin
 	// cached into it rather than pulled from the upstream directly, so this is
 	// the only registry the control plane ever needs to authenticate against —
 	// the upstream's own credential stays in the registry's credential set.
+	//
+	// Helm 3 applies --username/--password to classic HTTP repositories only; an
+	// oci:// reference ignores them and falls back to an anonymous token, which
+	// the registry refuses. A registry config is what OCI reads, and it works on
+	// both Helm 3 and 4.
 	if u, pw := registryCreds(repoURL); u != "" {
-		args = append(args, "--username", u, "--password", pw)
+		cfg, err := writeRegistryConfig(dir, repoURL, u, pw)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, "--registry-config", cfg)
 	}
 	if oci {
 		ref := repoURL
@@ -211,6 +221,35 @@ func buildInterface(valuesYAML, schemaJSON, chartYAML []byte) *Interface {
 	return iface
 }
 
+// writeRegistryConfig writes a Docker-style auth file for one registry and
+// returns its path. This is what Helm reads for an oci:// reference.
+func writeRegistryConfig(dir, repoURL, user, pass string) (string, error) {
+	cfg := map[string]any{
+		"auths": map[string]any{
+			registryHost(repoURL): map[string]any{
+				"auth": base64.StdEncoding.EncodeToString([]byte(user + ":" + pass)),
+			},
+		},
+	}
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, "registry.json")
+	// 0600: it holds a credential, and the directory is removed with the chart.
+	return path, os.WriteFile(path, b, 0o600)
+}
+
+// registryHost reduces a repo reference to the bare registry host, which is how
+// both a registry config and a registry comparison key it.
+func registryHost(ref string) string {
+	h := strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(ref), "oci://"), "https://")
+	if before, _, ok := strings.Cut(h, "/"); ok {
+		h = before
+	}
+	return h
+}
+
 // registryCreds returns the credentials to use for repoURL, which are only ever
 // the platform registry's: HELM_OCI_REGISTRY names it, and a ref pointing
 // anywhere else (a public chart repo, say) is fetched anonymously. Mirrors the
@@ -221,14 +260,7 @@ func registryCreds(repoURL string) (user, pass string) {
 		return "", ""
 	}
 	// Compare on host, so oci:// and a bare host both match.
-	host := strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(repoURL), "oci://"), "https://")
-	reg = strings.TrimPrefix(strings.TrimPrefix(reg, "oci://"), "https://")
-	if h, _, ok := strings.Cut(host, "/"); ok {
-		host = h
-	}
-	if r, _, ok := strings.Cut(reg, "/"); ok {
-		reg = r
-	}
+	host, reg := registryHost(repoURL), registryHost(reg)
 	if !strings.EqualFold(host, reg) {
 		return "", ""
 	}
