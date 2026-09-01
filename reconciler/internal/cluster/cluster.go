@@ -24,6 +24,7 @@ import (
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
+	"github.com/inception42/cortex/reconciler/internal/dnscert"
 	"github.com/inception42/cortex/shared"
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -85,6 +86,11 @@ type Options struct {
 	// TenantSlug identifies the tenant, used to derive stable per-app secrets.
 	TenantSlug     string
 	SubscriptionID string
+	// DNSResourceGroup is where the tenant's DNS zone is created — its own
+	// footprint resource group. ACME* select the certificate authority.
+	DNSResourceGroup string
+	ACMEDirectory    string
+	ACMEEmail        string
 	ResourceGroup  string
 	ClusterName    string
 	ArgoVersion    string
@@ -103,6 +109,10 @@ type Client struct {
 	cred azcore.TokenCredential
 	http *http.Client
 	o    Options
+	// dns owns the tenant's zone and wildcard certificate. Nil when the tenant's
+	// subscription/resource group aren't known, which simply means nothing is
+	// published.
+	dns *dnscert.Client
 }
 
 func New(cred azcore.TokenCredential, o Options) *Client {
@@ -115,6 +125,15 @@ func New(cred azcore.TokenCredential, o Options) *Client {
 			Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}},
 		},
 		o: o,
+		// The zone lives in the tenant's own resource group, alongside the rest
+		// of the footprint — which is what makes granting this identity on it
+		// possible for delegated and platform-hosted tenants alike.
+		dns: dnscert.New(cred, dnscert.Options{
+			SubscriptionID: o.SubscriptionID,
+			ResourceGroup:  o.DNSResourceGroup,
+			ACMEDirectory:  o.ACMEDirectory,
+			ACMEEmail:      o.ACMEEmail,
+		}),
 	}
 }
 
@@ -172,21 +191,35 @@ func (c *Client) Reconcile(ctx context.Context, apps []shared.DesiredApplication
 	subnet := c.agcSubnetID(ctx, m.nodeResourceGroup)
 	c.ensureAGCSubnetNSG(ctx, subnet)
 
-	// The wildcard certificate arrives from the control plane, which owns the
-	// DNS zone and did the ACME exchange. Write it before the Gateway, so the
-	// HTTPS listener never references a Secret that isn't there yet.
+	// Publishing. The reconciler owns the tenant's DNS zone — it lives in the
+	// tenant's own subscription, so this identity can be granted on it — and
+	// therefore obtains the wildcard certificate itself. Nothing about DNS or
+	// TLS comes from the control plane except the intent (the domain).
 	domain := ""
 	if ing != nil {
 		domain = ing.AppsDomain
 	}
-	tlsReady := ing.TLSReady()
+	certPEM, keyPEM := "", ""
+	if c.dns != nil && domain != "" {
+		// Adopt any certificate already in the cluster before deciding to issue:
+		// after a restart the in-memory copy is empty, and re-issuing a valid
+		// certificate wastes an ACME rate limit for nothing.
+		if cert, key, notAfter, ok := k.existingWildcardTLS(ctx); ok {
+			c.dns.AdoptCertificate(cert, key, notAfter)
+		}
+		st := c.dns.Ensure(ctx, domain, k.gatewayAddress(ctx))
+		st.ToClusterStatus(&status)
+		certPEM, keyPEM = st.CertPEM, st.KeyPEM
+	}
+
+	tlsReady := certPEM != "" && keyPEM != ""
 	if tlsReady {
-		k.ensureWildcardTLS(ctx, ing.TLSCert, ing.TLSKey)
+		k.ensureWildcardTLS(ctx, certPEM, keyPEM)
 	}
 	k.ensureGateway(ctx, subnet, domain, tlsReady)
 
-	appStatuses := k.reconcileApplications(ctx, apps, c.o, ing)
-	if ing.OIDCReady() {
+	appStatuses := k.reconcileApplications(ctx, apps, c.o, ing, tlsReady)
+	if tlsReady && ing.OIDCConfigured() {
 		status.IngressIssuer = ing.OIDCIssuer
 	}
 	status.GatewayIP = k.gatewayAddress(ctx)

@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.40.2.10011",
-      "templateHash": "17808814986796848360"
+      "templateHash": "9617857550210296038"
     }
   },
   "parameters": {
@@ -168,6 +168,20 @@
         "description": "AKS system node count."
       }
     },
+    "acmeDirectoryUrl": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "ACME directory the reconciler obtains wildcard certificates from. Blank = Let's Encrypt production."
+      }
+    },
+    "acmeEmail": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Contact address registered with the ACME provider (expiry notices)."
+      }
+    },
     "argocdVersion": {
       "type": "string",
       "defaultValue": "v2.13.2",
@@ -261,6 +275,7 @@
     "nodeResourceGroupName": "[format('MC_{0}_{1}_{2}', resourceGroup().name, parameters('clusterName'), parameters('location'))]",
     "aksRbacClusterAdminRoleId": "b1ff04bb-8a4e-4dc4-8eb5-8693973ce19b",
     "aksClusterUserRoleId": "4abbcc35-e782-43d8-92c5-2d3f1bd2253f",
+    "dnsZoneContributorRoleId": "befefa01-2a29-4197-83a8-272ff33ce314",
     "clusterEnabled": "[parameters('deployCluster')]"
   },
   "resources": [
@@ -432,6 +447,20 @@
       }
     },
     {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(resourceGroup().id, variables('reconIdentityId'), variables('dnsZoneContributorRoleId'))]",
+      "properties": {
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('dnsZoneContributorRoleId'))]",
+        "principalId": "[if(variables('createReconIdentity'), reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix'))), '2023-01-31').principalId, reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('reconIdentityName')), '2023-01-31').principalId)]",
+        "principalType": "ServicePrincipal",
+        "delegatedManagedIdentityResourceId": "[if(parameters('isDelegated'), variables('reconIdentityId'), null())]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix')))]"
+      ]
+    },
+    {
       "condition": "[parameters('deployCluster')]",
       "type": "Microsoft.Authorization/roleAssignments",
       "apiVersion": "2022-04-01",
@@ -579,6 +608,18 @@
                 {
                   "name": "CLUSTER_RESOURCE_GROUP",
                   "value": "[resourceGroup().name]"
+                },
+                {
+                  "name": "DNS_RESOURCE_GROUP",
+                  "value": "[resourceGroup().name]"
+                },
+                {
+                  "name": "ACME_DIRECTORY_URL",
+                  "value": "[parameters('acmeDirectoryUrl')]"
+                },
+                {
+                  "name": "ACME_EMAIL",
+                  "value": "[parameters('acmeEmail')]"
                 },
                 {
                   "name": "ARGOCD_VERSION",

@@ -2,10 +2,14 @@ package cluster
 
 import (
 	"context"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/pem"
 	"fmt"
 	"log/slog"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/inception42/cortex/shared"
 
@@ -135,7 +139,7 @@ func (k *kube) restMapper() (meta.RESTMapper, error) {
 // reports each app's status. The Ingress routes the app's host to the Helm
 // release's Service (release name : 80) so the Azure Application Gateway serves
 // it publicly.
-func (k *kube) reconcileApplications(ctx context.Context, apps []shared.DesiredApplication, o Options, ing *shared.IngressConfig) []shared.ApplicationStatus {
+func (k *kube) reconcileApplications(ctx context.Context, apps []shared.DesiredApplication, o Options, ing *shared.IngressConfig, tlsReady bool) []shared.ApplicationStatus {
 	out := make([]shared.ApplicationStatus, 0, len(apps))
 	desired := map[string]bool{}
 	exposed := map[string]bool{}     // app names that publish a gateway Ingress
@@ -166,7 +170,10 @@ func (k *kube) reconcileApplications(ctx context.Context, apps []shared.DesiredA
 				// A protected app is fronted by its own oauth2-proxy, so the route
 				// targets that instead. AGC can't authenticate and has no
 				// ext_authz, so the proxy has to be in the path.
-				if a.AuthRequired && ing.OIDCReady() {
+				// Auth needs a certificate as well as an OIDC application: the
+				// OAuth callback must be HTTPS, so without TLS the app is served
+				// unprotected rather than being made unreachable.
+				if a.AuthRequired && tlsReady && ing.OIDCConfigured() {
 					an := authName(name)
 					cookie := cookieSecretFor(o.TenantSlug, a.ID, ing.OIDCClientSecret)
 					si := k.dyn.Resource(secGVR).Namespace(a.Namespace)
@@ -307,6 +314,38 @@ func (k *kube) ensureWildcardTLS(ctx context.Context, certPEM, keyPEM string) {
 		Apply(ctx, tlsSecretName, wildcardTLSSecret(certPEM, keyPEM), ssaOpts); err != nil {
 		slog.Warn("cluster: apply wildcard TLS secret failed", "err", trunc(err.Error()))
 	}
+}
+
+// existingWildcardTLS reads back a certificate already in the cluster, so a
+// restarted reconciler adopts it instead of issuing a fresh one and spending an
+// ACME rate limit on a certificate it already has.
+func (k *kube) existingWildcardTLS(ctx context.Context) (certPEM, keyPEM string, notAfter time.Time, ok bool) {
+	obj, err := k.dyn.Resource(secGVR).Namespace(gatewayNS).Get(ctx, tlsSecretName, metav1.GetOptions{})
+	if err != nil {
+		return "", "", time.Time{}, false
+	}
+	crt, _, _ := unstructured.NestedString(obj.Object, "data", "tls.crt")
+	key, _, _ := unstructured.NestedString(obj.Object, "data", "tls.key")
+	if crt == "" || key == "" {
+		return "", "", time.Time{}, false
+	}
+	crtRaw, err := base64.StdEncoding.DecodeString(crt)
+	if err != nil {
+		return "", "", time.Time{}, false
+	}
+	keyRaw, err := base64.StdEncoding.DecodeString(key)
+	if err != nil {
+		return "", "", time.Time{}, false
+	}
+	block, _ := pem.Decode(crtRaw)
+	if block == nil {
+		return "", "", time.Time{}, false
+	}
+	leaf, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return "", "", time.Time{}, false
+	}
+	return string(crtRaw), string(keyRaw), leaf.NotAfter, true
 }
 
 func (k *kube) ensureGateway(ctx context.Context, subnetID, domain string, tls bool) {

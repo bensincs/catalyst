@@ -1,13 +1,17 @@
-// Package ingress owns a tenant's published-apps infrastructure: the DNS zone
-// they delegate to us, and the wildcard certificate we obtain for it.
+// Package dnscert owns the tenant's public DNS zone and the wildcard certificate
+// for it, from inside the tenant.
 //
-// All of it runs control-plane side, deliberately. The zone lives in the
-// PLATFORM subscription where the control-plane identity already holds
-// Contributor, so a tenant cluster never needs a DNS credential or any DNS
-// awareness. That is what makes this behave identically for a Lighthouse-
-// delegated tenant — whose cluster sits in the customer's own Entra directory
-// and could not be granted rights on our zone — and a platform-hosted one.
-package ingress
+// Both live in the TENANT's own subscription, which is what makes this work at
+// all: the reconciler's managed identity and the zone are then in the same Entra
+// directory, so the footprint can grant DNS Zone Contributor on it. That holds
+// for a Lighthouse-delegated tenant exactly as for a platform-hosted one. A zone
+// held in the platform's subscription could not be granted to a
+// customer-directory identity — the same cross-directory wall that rules out
+// sharing clusters between tenants.
+//
+// Everything here therefore runs in-tenant: no certificate or DNS credential
+// ever leaves the customer's subscription, and the control plane holds neither.
+package dnscert
 
 import (
 	"bytes"
@@ -31,8 +35,8 @@ const (
 )
 
 // armDo performs an authenticated ARM request. out may be nil.
-func (m *Manager) armDo(ctx context.Context, method, url string, body []byte, out any) error {
-	tok, err := m.cred.GetToken(ctx, policy.TokenRequestOptions{Scopes: []string{armScope}})
+func (c *Client) armDo(ctx context.Context, method, url string, body []byte, out any) error {
+	tok, err := c.cred.GetToken(ctx, policy.TokenRequestOptions{Scopes: []string{armScope}})
 	if err != nil {
 		return err
 	}
@@ -48,7 +52,7 @@ func (m *Manager) armDo(ctx context.Context, method, url string, body []byte, ou
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := m.http.Do(req)
+	resp, err := c.http.Do(req)
 	if err != nil {
 		return err
 	}
@@ -66,14 +70,14 @@ func (m *Manager) armDo(ctx context.Context, method, url string, body []byte, ou
 	return nil
 }
 
-func (m *Manager) zoneURL(zone string) string {
+func (c *Client) zoneURL(zone string) string {
 	return fmt.Sprintf("%s/subscriptions/%s/resourceGroups/%s/providers/Microsoft.Network/dnsZones/%s?api-version=%s",
-		armBase, m.subscriptionID, m.resourceGroup, zone, dnsAPIVersion)
+		armBase, c.subscriptionID, c.resourceGroup, zone, dnsAPIVersion)
 }
 
-func (m *Manager) recordURL(zone, recordType, name string) string {
+func (c *Client) recordURL(zone, recordType, name string) string {
 	return fmt.Sprintf("%s/subscriptions/%s/resourceGroups/%s/providers/Microsoft.Network/dnsZones/%s/%s/%s?api-version=%s",
-		armBase, m.subscriptionID, m.resourceGroup, zone, recordType, name, dnsAPIVersion)
+		armBase, c.subscriptionID, c.resourceGroup, zone, recordType, name, dnsAPIVersion)
 }
 
 // EnsureZone creates the public DNS zone (idempotent) and returns the
@@ -82,14 +86,14 @@ func (m *Manager) recordURL(zone, recordType, name string) string {
 //
 // Public, not private: a private zone has no nameservers and cannot be
 // delegated, so it can't serve this purpose at all.
-func (m *Manager) EnsureZone(ctx context.Context, zone string) ([]string, error) {
+func (c *Client) EnsureZone(ctx context.Context, zone string) ([]string, error) {
 	body, _ := json.Marshal(map[string]any{
 		"location": "global",
 		"properties": map[string]any{
 			"zoneType": "Public",
 		},
 	})
-	if err := m.armDo(ctx, http.MethodPut, m.zoneURL(zone), body, nil); err != nil {
+	if err := c.armDo(ctx, http.MethodPut, c.zoneURL(zone), body, nil); err != nil {
 		return nil, err
 	}
 	// The nameservers are assigned asynchronously; the PUT response often omits
@@ -99,7 +103,7 @@ func (m *Manager) EnsureZone(ctx context.Context, zone string) ([]string, error)
 			NameServers []string `json:"nameServers"`
 		} `json:"properties"`
 	}
-	if err := m.armDo(ctx, http.MethodGet, m.zoneURL(zone), nil, &got); err != nil {
+	if err := c.armDo(ctx, http.MethodGet, c.zoneURL(zone), nil, &got); err != nil {
 		return nil, err
 	}
 	ns := make([]string, 0, len(got.Properties.NameServers))
@@ -112,8 +116,8 @@ func (m *Manager) EnsureZone(ctx context.Context, zone string) ([]string, error)
 
 // DeleteZone removes the zone entirely. Used when a tenant clears its domain or
 // is deleted.
-func (m *Manager) DeleteZone(ctx context.Context, zone string) error {
-	return m.armDo(ctx, http.MethodDelete, m.zoneURL(zone), nil, nil)
+func (c *Client) DeleteZone(ctx context.Context, zone string) error {
+	return c.armDo(ctx, http.MethodDelete, c.zoneURL(zone), nil, nil)
 }
 
 // UpsertWildcardCNAME points every host under the zone at the tenant cluster's
@@ -123,19 +127,19 @@ func (m *Manager) DeleteZone(ctx context.Context, zone string) error {
 // A CNAME (not A) because Application Gateway for Containers gives an FQDN
 // rather than a stable address. The zone apex is deliberately left alone — a
 // CNAME is illegal there, and apps always live on a subdomain.
-func (m *Manager) UpsertWildcardCNAME(ctx context.Context, zone, target string) error {
+func (c *Client) UpsertWildcardCNAME(ctx context.Context, zone, target string) error {
 	body, _ := json.Marshal(map[string]any{
 		"properties": map[string]any{
 			"TTL":         300,
 			"CNAMERecord": map[string]any{"cname": normalizeHost(target)},
 		},
 	})
-	return m.armDo(ctx, http.MethodPut, m.recordURL(zone, "CNAME", "*"), body, nil)
+	return c.armDo(ctx, http.MethodPut, c.recordURL(zone, "CNAME", "*"), body, nil)
 }
 
 // upsertTXT writes an ACME challenge record. Short TTL so a failed attempt
 // doesn't poison the next one.
-func (m *Manager) upsertTXT(ctx context.Context, zone, name string, values []string) error {
+func (c *Client) upsertTXT(ctx context.Context, zone, name string, values []string) error {
 	records := make([]any, 0, len(values))
 	for _, v := range values {
 		records = append(records, map[string]any{"value": []string{v}})
@@ -143,11 +147,11 @@ func (m *Manager) upsertTXT(ctx context.Context, zone, name string, values []str
 	body, _ := json.Marshal(map[string]any{
 		"properties": map[string]any{"TTL": 30, "TXTRecords": records},
 	})
-	return m.armDo(ctx, http.MethodPut, m.recordURL(zone, "TXT", name), body, nil)
+	return c.armDo(ctx, http.MethodPut, c.recordURL(zone, "TXT", name), body, nil)
 }
 
-func (m *Manager) deleteTXT(ctx context.Context, zone, name string) error {
-	return m.armDo(ctx, http.MethodDelete, m.recordURL(zone, "TXT", name), nil, nil)
+func (c *Client) deleteTXT(ctx context.Context, zone, name string) error {
+	return c.armDo(ctx, http.MethodDelete, c.recordURL(zone, "TXT", name), nil, nil)
 }
 
 // VerifyDelegation reports whether the zone's parent actually points at our

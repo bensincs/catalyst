@@ -97,6 +97,12 @@ param nodeVmSize string = 'Standard_D2s_v5'
 @minValue(1)
 param nodeCount int = 2
 
+@description('ACME directory the reconciler obtains wildcard certificates from. Blank = Let\'s Encrypt production.')
+param acmeDirectoryUrl string = ''
+
+@description('Contact address registered with the ACME provider (expiry notices).')
+param acmeEmail string = ''
+
 @description('Argo CD version the reconciler bootstraps into the cluster.')
 param argocdVersion string = 'v2.13.2'
 
@@ -342,6 +348,28 @@ var aksRbacClusterAdminRoleId = 'b1ff04bb-8a4e-4dc4-8eb5-8693973ce19b'
 // (user) kubeconfig the reconciler builds its client from.
 var aksClusterUserRoleId = '4abbcc35-e782-43d8-92c5-2d3f1bd2253f'
 
+// DNS Zone Contributor on THIS resource group, so the reconciler can create the
+// tenant's public DNS zone and write records into it — including the
+// _acme-challenge TXT for ACME DNS-01.
+//
+// The zone lives in the tenant's own subscription, alongside everything else in
+// the footprint. That is what lets the reconciler own DNS end to end: its
+// managed identity and the zone are in the SAME directory, so this assignment is
+// possible for a Lighthouse-delegated tenant exactly as it is for a
+// platform-hosted one. A zone held in the platform's subscription could not be
+// granted to a customer-directory identity at all.
+var dnsZoneContributorRoleId = 'befefa01-2a29-4197-83a8-272ff33ce314'
+
+resource dnsZoneAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(resourceGroup().id, reconIdentityId, dnsZoneContributorRoleId)
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', dnsZoneContributorRoleId)
+    principalId: reconIdentityPrincipalId
+    principalType: 'ServicePrincipal'
+    delegatedManagedIdentityResourceId: isDelegated ? reconIdentityId : null
+  }
+}
+
 resource aksAdminAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (deployCluster) {
   name: guid(clusterName, reconIdentityId, aksRbacClusterAdminRoleId)
   scope: aks
@@ -411,6 +439,11 @@ var reconcilerEnv = [
   { name: 'CLUSTER_ENABLED', value: string(clusterEnabled) }
   { name: 'CLUSTER_NAME', value: clusterName }
   { name: 'CLUSTER_RESOURCE_GROUP', value: resourceGroup().name }
+  // Where the tenant's DNS zone is created. Its own resource group, in its own
+  // subscription — so the reconciler's identity can be granted on it.
+  { name: 'DNS_RESOURCE_GROUP', value: resourceGroup().name }
+  { name: 'ACME_DIRECTORY_URL', value: acmeDirectoryUrl }
+  { name: 'ACME_EMAIL', value: acmeEmail }
   { name: 'ARGOCD_VERSION', value: argocdVersion }
   { name: 'APPS_DOMAIN', value: appsDomain }
   { name: 'HELM_OCI_REGISTRY', value: helmOciRegistry }

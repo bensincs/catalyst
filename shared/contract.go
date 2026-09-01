@@ -220,6 +220,16 @@ type ClusterStatus struct {
 	IngressInstalled bool   `json:"ingressInstalled"`        // Envoy ingress present
 	GatewayIP        string `json:"gatewayIP,omitempty"`     // public ingress address (LB IP/hostname)
 	IngressIssuer    string `json:"ingressIssuer,omitempty"` // Entra issuer the ingress enforces ("" ⇒ closed)
+
+	// Publishing state, reported by the reconciler because it owns the zone.
+	// DNSNameservers is what the customer must set at their registrar;
+	// DNSState is '' | pending | verified | failed.
+	DNSState       string   `json:"dnsState,omitempty"`
+	DNSDetail      string   `json:"dnsDetail,omitempty"`
+	DNSNameservers []string `json:"dnsNameservers,omitempty"`
+	// TLSExpiresAt is the wildcard certificate's expiry, RFC3339. Empty ⇒ none
+	// held yet, so the gateway serves HTTP only and auth-required apps stay shut.
+	TLSExpiresAt string `json:"tlsExpiresAt,omitempty"`
 	NodeCount        int    `json:"nodeCount,omitempty"`
 	Detail           string `json:"detail,omitempty"` // human-readable note when not ready
 }
@@ -238,26 +248,23 @@ type ApplicationStatus struct {
 	Detail string `json:"detail,omitempty"`
 }
 
-// IngressConfig is the tenant's published-apps configuration, resolved by the
-// control plane and handed to the reconciler whole.
+// IngressConfig is the tenant's published-apps INTENT, set by a platform admin
+// and handed to the reconciler. It carries no certificate: the reconciler owns
+// the DNS zone — which lives in the tenant's own subscription — and therefore
+// obtains the wildcard itself over ACME DNS-01.
 //
-// The certificate is included because the control plane owns the DNS zone and
-// therefore does the ACME DNS-01 exchange itself — the cluster never needs a DNS
-// credential, which is what lets a Lighthouse-delegated cluster (in the
-// customer's own directory) work exactly like a platform-hosted one.
+// That placement is the whole point. The reconciler's managed identity and the
+// zone are in the same Entra directory, so the footprint can grant DNS Zone
+// Contributor on it; a zone in the platform's subscription could not be granted
+// to a customer-directory identity at all. No certificate or DNS credential ever
+// leaves the tenant's subscription.
 //
-// TLSKey and OIDCClientSecret are secrets. They travel over the authenticated
-// TLS sync channel and must never be logged.
+// OIDCClientSecret is a secret. It travels over the authenticated TLS sync
+// channel and must never be logged.
 type IngressConfig struct {
-	// AppsDomain is the delegated zone, e.g. "apps.contoso.com". Apps are
-	// published at <app hostname>.<AppsDomain>.
+	// AppsDomain is the zone the tenant delegates, e.g. "apps.contoso.com". Apps
+	// are published at <app hostname>.<AppsDomain>.
 	AppsDomain string `json:"appsDomain"`
-
-	// TLSCert/TLSKey are the PEM wildcard certificate for *.<AppsDomain>. Empty
-	// until the certificate has been issued; the gateway serves HTTP only until
-	// then, and apps requiring auth stay closed (OIDC needs an HTTPS callback).
-	TLSCert string `json:"tlsCert,omitempty"`
-	TLSKey  string `json:"tlsKey,omitempty"`
 
 	// The customer's OIDC application. Empty ⇒ no app can require auth.
 	OIDCIssuer       string `json:"oidcIssuer,omitempty"`
@@ -265,16 +272,17 @@ type IngressConfig struct {
 	OIDCClientSecret string `json:"oidcClientSecret,omitempty"`
 }
 
-// TLSReady reports whether a wildcard certificate is present, which is the
-// precondition for an HTTPS listener and therefore for OIDC.
-func (c *IngressConfig) TLSReady() bool {
-	return c != nil && c.TLSCert != "" && c.TLSKey != ""
+// Configured reports whether a domain has been set; without one nothing is
+// published, which is the designed state rather than a failure.
+func (c *IngressConfig) Configured() bool {
+	return c != nil && c.AppsDomain != ""
 }
 
-// OIDCReady reports whether apps can be put behind a login: an OIDC application
-// AND a certificate, since the OAuth callback must be HTTPS.
-func (c *IngressConfig) OIDCReady() bool {
-	return c.TLSReady() && c.OIDCIssuer != "" && c.OIDCClientID != "" && c.OIDCClientSecret != ""
+// OIDCConfigured reports whether an OIDC application is available to put apps
+// behind. A certificate is also required at the point of use, since the OAuth
+// callback must be HTTPS — the reconciler checks that against the cert it holds.
+func (c *IngressConfig) OIDCConfigured() bool {
+	return c.Configured() && c.OIDCIssuer != "" && c.OIDCClientID != "" && c.OIDCClientSecret != ""
 }
 
 // Heartbeat is the reconciler's periodic report: the in-tenant install identity

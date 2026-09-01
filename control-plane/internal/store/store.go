@@ -122,7 +122,7 @@ const tenantCols = `id, name, coalesce(tenant_id,''), region, plan, enrollment, 
 	cluster_ingress_installed, cluster_gateway_ip, cluster_ingress_issuer, infra_delegated, infra_detail, footprint_state, footprint_detail,
 	coalesce(hosting_mode,'delegated'), coalesce(resource_group,''), coalesce(reconciler_principal_id,''), coalesce(footprint_config,'{}'),
 	coalesce(apps_domain,''), coalesce(dns_state,''), coalesce(dns_detail,''), coalesce(dns_nameservers,'{}'),
-	(coalesce(tls_cert,'') <> '' AND coalesce(tls_key,'') <> ''), tls_expires_at, coalesce(tls_detail,''),
+	(tls_expires_at IS NOT NULL AND tls_expires_at > now()), tls_expires_at, coalesce(tls_detail,''),
 	coalesce(oidc_issuer,''), coalesce(oidc_client_id,''), (coalesce(oidc_client_secret,'') <> '')`
 
 func scanTenant(row pgx.Row) (model.Tenant, error) {
@@ -1479,15 +1479,14 @@ func (s *Store) SyncDesired(ctx context.Context, t model.Tenant) (shared.Desired
 	// Order the deployable apps so their app→app dependencies converge first.
 	assignWaves(out.Applications)
 
-	// Ingress: the delegated domain, the wildcard certificate the control plane
-	// obtained for it, and the customer's OIDC application. Omitted entirely when
-	// no domain is configured — apps are then unpublished, which is the only
-	// state in which they are unreachable by design.
-	if domain, cert, key, issuer, clientID, secret, err := s.ingressConfigFor(ctx, t.ID); err == nil && domain != "" {
+	// Ingress: the domain the tenant publishes on and the customer's OIDC
+	// application — intent only. No certificate: the reconciler owns the zone,
+	// which lives in the tenant's own subscription, and issues the wildcard
+	// itself. Omitted entirely when no domain is configured, in which case
+	// nothing is published — the designed state, not a failure.
+	if domain, issuer, clientID, secret, err := s.ingressConfigFor(ctx, t.ID); err == nil && domain != "" {
 		out.Ingress = &shared.IngressConfig{
 			AppsDomain:       domain,
-			TLSCert:          cert,
-			TLSKey:           key,
 			OIDCIssuer:       issuer,
 			OIDCClientID:     clientID,
 			OIDCClientSecret: secret,
@@ -1763,10 +1762,13 @@ func (s *Store) ApplyHeartbeat(ctx context.Context, t model.Tenant, hb shared.He
 		if _, err := s.pool.Exec(ctx,
 			`UPDATE tenants SET cluster_name = $2, cluster_phase = $3, cluster_k8s_version = $4,
 			   cluster_argo_installed = $5, cluster_node_count = $6, cluster_detail = $7,
-			   cluster_ingress_installed = $8, cluster_gateway_ip = $9, cluster_ingress_issuer = $10
+			   cluster_ingress_installed = $8, cluster_gateway_ip = $9, cluster_ingress_issuer = $10,
+			   dns_state = $11, dns_detail = $12, dns_nameservers = $13,
+			   tls_expires_at = CASE WHEN $14 <> '' THEN $14::timestamptz ELSE tls_expires_at END
 			 WHERE id = $1`,
 			t.ID, c.Name, c.Phase, c.KubernetesVer, c.ArgoInstalled, c.NodeCount, c.Detail,
-			c.IngressInstalled, c.GatewayIP, c.IngressIssuer); err != nil {
+			c.IngressInstalled, c.GatewayIP, c.IngressIssuer,
+			c.DNSState, trunc256(c.DNSDetail), c.DNSNameservers, c.TLSExpiresAt); err != nil {
 			return err
 		}
 	}

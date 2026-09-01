@@ -101,9 +101,9 @@ export function IngressPanel({
             ) : null}
           </h2>
           <p className={panel.sub}>
-            {name}&apos;s apps are published at <code>&lt;app&gt;.&lt;domain&gt;</code>. Delegate a
-            domain to Cortex and we manage the zone, records and certificate for it. Apps are not
-            reachable until this is set.
+            {name}&apos;s apps are published at <code>&lt;app&gt;.&lt;domain&gt;</code>. The zone is
+            created in this tenant&apos;s own subscription and its reconciler manages the records
+            and certificate — nothing leaves the tenant. Apps are not reachable until this is set.
           </p>
         </div>
       </div>

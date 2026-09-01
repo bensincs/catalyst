@@ -356,6 +356,14 @@ func (p *Provisioner) submitFootprint(ctx context.Context, sub, rg string, t sto
 	if reconcilerIdentityResourceID != "" {
 		params["reconcilerIdentityResourceId"] = map[string]any{"value": reconcilerIdentityResourceID}
 	}
+	// The reconciler obtains the tenant's wildcard certificate itself; these
+	// only choose the CA it talks to.
+	if p.acmeDirectory != "" {
+		params["acmeDirectoryUrl"] = map[string]any{"value": p.acmeDirectory}
+	}
+	if p.acmeEmail != "" {
+		params["acmeEmail"] = map[string]any{"value": p.acmeEmail}
+	}
 	// Optional AKS node sizing from the admin-set footprint config (region is NOT
 	// a footprint field — it follows the tenant).
 	if v := configString(t.Config, "nodeVmSize"); v != "" {

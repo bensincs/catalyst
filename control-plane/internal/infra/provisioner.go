@@ -53,6 +53,8 @@ type Provisioner struct {
 	apiScope         string // Entra scope for the control-plane API
 	reconcilerImage  string // reconciler container image
 	platformSub      string // the platform's own subscription (platform-hosted tenants)
+	acmeDirectory    string // CA the tenant's reconciler obtains its wildcard from
+	acmeEmail        string
 
 	mu          sync.Mutex        // guards apiVersions
 	apiVersions map[string]string // provider/type → api-version, resolved on demand for teardown
@@ -70,7 +72,11 @@ type Config struct {
 	ControlPlaneURL        string
 	APIScope               string
 	ReconcilerImage        string
-	PlatformSubscriptionID string // platform's own subscription (platform-hosted tenants)
+	PlatformSubscriptionID string
+	// ACME settings handed to each tenant's reconciler, which does its own
+	// certificate issuance against its own DNS zone.
+	ACMEDirectory string
+	ACMEEmail     string
 }
 
 // New builds a Provisioner, or (nil, nil) when cross-tenant provisioning is off.
@@ -96,6 +102,8 @@ func New(st *store.Store, cfg Config) (*Provisioner, error) {
 		apiScope:         cfg.APIScope,
 		reconcilerImage:  cfg.ReconcilerImage,
 		platformSub:      cfg.PlatformSubscriptionID,
+		acmeDirectory:    cfg.ACMEDirectory,
+		acmeEmail:        cfg.ACMEEmail,
 		apiVersions:      map[string]string{},
 	}, nil
 }

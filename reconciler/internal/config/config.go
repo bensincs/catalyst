@@ -48,6 +48,13 @@ type Config struct {
 	// (oauth2-proxy's cookie key) so they don't rotate on every reconcile.
 	TenantSlug string
 
+	// DNSResourceGroup is where the tenant's own DNS zone is created; ACME*
+	// select the certificate authority. The reconciler owns both because the
+	// zone lives in this tenant's subscription.
+	DNSResourceGroup string
+	ACMEDirectoryURL string
+	ACMEEmail        string
+
 	// AppsDomain, when set, is the DNS suffix for per-app hosts served by the
 	// Azure Application Gateway (<app>.<AppsDomain>). Empty ⇒ host-less Ingress.
 	AppsDomain string
@@ -102,6 +109,9 @@ func Load() Config {
 		ClusterResourceGroup: strings.TrimSpace(env("CLUSTER_RESOURCE_GROUP")),
 		ArgoCDVersion:        argocd,
 		TenantSlug:           strings.TrimSpace(env("TENANT_SLUG")),
+		DNSResourceGroup:     strings.TrimSpace(env("DNS_RESOURCE_GROUP")),
+		ACMEDirectoryURL:     strings.TrimSpace(env("ACME_DIRECTORY_URL")),
+		ACMEEmail:            strings.TrimSpace(env("ACME_EMAIL")),
 
 		AppsDomain: strings.TrimSpace(env("APPS_DOMAIN")),
 

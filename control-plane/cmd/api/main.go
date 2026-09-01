@@ -15,7 +15,6 @@ import (
 	"github.com/inception42/cortex/control-plane/internal/config"
 	"github.com/inception42/cortex/control-plane/internal/httpapi"
 	"github.com/inception42/cortex/control-plane/internal/infra"
-	"github.com/inception42/cortex/control-plane/internal/ingress"
 	"github.com/inception42/cortex/control-plane/internal/store"
 )
 
@@ -95,6 +94,8 @@ func main() {
 		APIScope:               apiScope,
 		ReconcilerImage:        cfg.ReconcilerImage,
 		PlatformSubscriptionID: cfg.PlatformSubscriptionID,
+		ACMEDirectory:          cfg.ACMEDirectoryURL,
+		ACMEEmail:              cfg.ACMEEmail,
 	}); err != nil {
 		slog.Error("infra provisioner init failed", "err", err)
 	} else if prov == nil {
@@ -105,27 +106,6 @@ func main() {
 		// owns the ARM credential, so the server borrows it.
 		srv.SetTenantTeardown(prov.TeardownTenant)
 		slog.Info("cross-tenant provisioning enabled (managed identity + Lighthouse)", "footprintRG", cfg.FootprintRG, "infraRG", cfg.InfraResourceGroup, "region", cfg.InfraRegion)
-	}
-
-	// Ingress worker: keeps each tenant's delegated DNS zone, its wildcard record
-	// and its wildcard certificate correct. Runs control-plane side precisely so
-	// a Lighthouse-delegated cluster — which lives in the customer's directory
-	// and could never be granted rights on our zone — works the same as a
-	// platform-hosted one.
-	if ing, err := ingress.New(st, ingress.Config{
-		Enabled:        cfg.CrossTenantProvisioning && cfg.PlatformSubscriptionID != "",
-		SubscriptionID: cfg.PlatformSubscriptionID,
-		ResourceGroup:  cfg.DNSResourceGroup,
-		ACMEDirectory:  cfg.ACMEDirectoryURL,
-		ACMEEmail:      cfg.ACMEEmail,
-		Region:         cfg.InfraRegion,
-	}); err != nil {
-		slog.Error("ingress manager init failed", "err", err)
-	} else if ing == nil {
-		slog.Info("ingress disabled (needs CROSS_TENANT_PROVISIONING=true + PLATFORM_SUBSCRIPTION_ID)")
-	} else {
-		go ing.Run(workerCtx, time.Duration(cfg.InfraPollSeconds)*time.Second)
-		slog.Info("ingress enabled (delegated DNS zones + ACME wildcard certs)", "dnsRG", cfg.DNSResourceGroup)
 	}
 
 	httpServer := &http.Server{

@@ -37,10 +37,9 @@ type Config struct {
 	FootprintRG             string // RG the control plane deploys the tenant footprint into
 	InfraRegion             string // region for created resource groups
 
-	// Ingress: tenant DNS zones live in the platform subscription (so no
-	// cross-directory grant is ever needed) and wildcard certificates are
-	// obtained by the control plane over ACME DNS-01.
-	DNSResourceGroup string
+	// Ingress: the DOMAIN is platform config, but the zone and its certificate
+	// belong to the tenant — its reconciler creates the zone in the tenant's own
+	// subscription and does ACME itself. These select the CA it uses.
 	ACMEDirectoryURL string
 	ACMEEmail        string
 
@@ -75,7 +74,6 @@ func Load() Config {
 		InfraResourceGroup:      env("INFRA_RESOURCE_GROUP", "cortex-infra"),
 		FootprintRG:             env("FOOTPRINT_RESOURCE_GROUP", "cortex"),
 		InfraRegion:             env("INFRA_REGION", "uksouth"),
-		DNSResourceGroup:        env("DNS_RESOURCE_GROUP", "cortex-dns"),
 		ACMEDirectoryURL:        env("ACME_DIRECTORY_URL", ""),
 		ACMEEmail:               env("ACME_EMAIL", ""),
 		InfraPollSeconds:        envInt("INFRA_POLL_SECONDS", 30),

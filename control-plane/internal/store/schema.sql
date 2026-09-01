@@ -532,16 +532,45 @@ ALTER TABLE tenants ADD COLUMN IF NOT EXISTS dns_detail      text NOT NULL DEFAU
 -- registrar, and what delegation is verified against.
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS dns_nameservers text[] NOT NULL DEFAULT '{}';
 
--- Wildcard certificate for *.<apps_domain>, obtained by the control plane over
--- ACME DNS-01 (possible only because we hold the zone) and shipped to the
--- cluster on /recon/sync. One cert per tenant covers every app, so adding an app
--- needs no DNS record and no certificate.
-ALTER TABLE tenants ADD COLUMN IF NOT EXISTS tls_cert        text NOT NULL DEFAULT '';
-ALTER TABLE tenants ADD COLUMN IF NOT EXISTS tls_key         text NOT NULL DEFAULT '';
+-- Wildcard certificate status for *.<apps_domain>. Status only: the certificate
+-- and its key live in the tenant's cluster, obtained by its own reconciler
+-- against its own zone, and never reach the control plane. Reported on heartbeat
+-- so the console can show expiry.
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS tls_expires_at  timestamptz;
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS tls_detail      text NOT NULL DEFAULT '';
--- The ACME account key, so renewals reuse one registration per tenant.
-ALTER TABLE tenants ADD COLUMN IF NOT EXISTS acme_account_key text NOT NULL DEFAULT '';
+
+-- Earlier revisions kept the certificate, its private key and an ACME account
+-- key here, when the control plane did issuance. It doesn't any more — the zone
+-- moved into the tenant's subscription so its own identity can be granted on it
+-- — so that key material must not be left at rest.
+--
+-- Done in two steps, because they have very different risk. Blanking the values
+-- takes only row locks and always succeeds, so the secrets are gone
+-- unconditionally. Dropping the columns needs ACCESS EXCLUSIVE on `tenants`,
+-- which deadlocks against any concurrent session touching it (directly, or via
+-- memberships' foreign key) — and with several API replicas one serves while
+-- another migrates at boot. So the drop is attempted with a short lock timeout
+-- and allowed to fail: it is cosmetic, and it will succeed on a later boot.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns
+             WHERE table_name = 'tenants' AND column_name = 'tls_key') THEN
+    EXECUTE $q$UPDATE tenants SET tls_cert = '', tls_key = '', acme_account_key = ''
+                WHERE coalesce(tls_cert,'') <> '' OR coalesce(tls_key,'') <> ''
+                   OR coalesce(acme_account_key,'') <> ''$q$;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  SET LOCAL lock_timeout = '3s';
+  ALTER TABLE tenants DROP COLUMN IF EXISTS tls_cert;
+  ALTER TABLE tenants DROP COLUMN IF EXISTS tls_key;
+  ALTER TABLE tenants DROP COLUMN IF EXISTS acme_account_key;
+EXCEPTION
+  WHEN lock_not_available OR deadlock_detected THEN
+    RAISE NOTICE 'cortex: deferring tls column drop (table busy); values already blanked';
+END $$;
 
 -- The customer's OIDC application, used to put every exposed app behind a login.
 -- One app registration per tenant; each app names its own scope on it.

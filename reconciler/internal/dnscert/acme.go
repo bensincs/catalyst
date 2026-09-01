@@ -1,4 +1,4 @@
-package ingress
+package dnscert
 
 import (
 	"context"
@@ -27,6 +27,11 @@ const LetsEncryptStaging = "https://acme-staging-v02.api.letsencrypt.org/directo
 // issues for 90 days; 30 leaves room for repeated failures without an outage.
 const renewBefore = 30 * 24 * time.Hour
 
+// issueBackoff is how long to wait after a failed issuance. The reconcile loop
+// runs every poll interval and ACME rate limits are unforgiving, so a failing
+// tenant must back off rather than retry on every pass.
+const issueBackoff = 15 * time.Minute
+
 // IssueWildcard obtains a wildcard certificate for *.<zone> over ACME DNS-01,
 // answering the challenge by writing TXT records into the zone we hold.
 //
@@ -35,17 +40,17 @@ const renewBefore = 30 * 24 * time.Hour
 // be issued before the tenant's cluster or apps exist.
 //
 // Returns the PEM certificate chain, the PEM private key, and the expiry.
-func (m *Manager) IssueWildcard(ctx context.Context, zone, accountKeyPEM string) (certPEM, keyPEM string, notAfter time.Time, accountKeyOut string, err error) {
+func (c *Client) IssueWildcard(ctx context.Context, zone, accountKeyPEM string) (certPEM, keyPEM string, notAfter time.Time, accountKeyOut string, err error) {
 	accountKey, accountKeyOut, err := loadOrCreateAccountKey(accountKeyPEM)
 	if err != nil {
 		return "", "", time.Time{}, "", fmt.Errorf("acme account key: %w", err)
 	}
 
-	client := &acme.Client{Key: accountKey, DirectoryURL: m.acmeDirectory}
+	client := &acme.Client{Key: accountKey, DirectoryURL: c.acmeDirectory}
 
 	// Registration is idempotent in effect: an existing account for this key
 	// comes back as ErrAccountAlreadyExists, which is success for our purposes.
-	if _, err := client.Register(ctx, &acme.Account{Contact: contacts(m.acmeEmail)}, acme.AcceptTOS); err != nil &&
+	if _, err := client.Register(ctx, &acme.Account{Contact: contacts(c.acmeEmail)}, acme.AcceptTOS); err != nil &&
 		!errors.Is(err, acme.ErrAccountAlreadyExists) {
 		return "", "", time.Time{}, "", fmt.Errorf("acme register: %w", err)
 	}
@@ -92,12 +97,12 @@ func (m *Manager) IssueWildcard(ctx context.Context, zone, accountKeyPEM string)
 	}
 
 	if len(todo) > 0 {
-		if err := m.upsertTXT(ctx, zone, challengeName, values); err != nil {
+		if err := c.upsertTXT(ctx, zone, challengeName, values); err != nil {
 			return "", "", time.Time{}, "", fmt.Errorf("publish dns-01 record: %w", err)
 		}
 		// Always clean up: a stale challenge record is confusing and, once the
 		// order is done, useless.
-		defer func() { _ = m.deleteTXT(context.WithoutCancel(ctx), zone, challengeName) }()
+		defer func() { _ = c.deleteTXT(context.WithoutCancel(ctx), zone, challengeName) }()
 
 		// Azure DNS is authoritative immediately, but Let's Encrypt's resolvers
 		// need a moment to see it. Accepting too early wastes an attempt.
