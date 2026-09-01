@@ -87,7 +87,7 @@ func Load() Config {
 		ACMEEmail:               env("ACME_EMAIL", ""),
 		HelmOCIRegistry:         env("HELM_OCI_REGISTRY", ""),
 		PlatformACRResourceID:   env("PLATFORM_ACR_RESOURCE_ID", ""),
-		PlatformACRRepos:        splitList(env("PLATFORM_ACR_REPOS", "charts/*,bicep/*")),
+		PlatformACRRepos:        splitList(env("PLATFORM_ACR_REPOS", "charts/*,bicep/*,images/*")),
 		KeyVaultURI:             env("PLATFORM_KEYVAULT_URI", ""),
 		KeyVaultID:              env("PLATFORM_KEYVAULT_RESOURCE_ID", ""),
 		InfraPollSeconds:        envInt("INFRA_POLL_SECONDS", 30),
