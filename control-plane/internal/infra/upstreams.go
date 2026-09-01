@@ -1,20 +1,12 @@
 package infra
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"strings"
 
-	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/google/uuid"
 )
-
-// vaultScope is the Key Vault data-plane audience.
-const vaultScope = "https://vault.azure.net/.default"
 
 // Upstream registries cached into the platform registry, managed at runtime.
 //
@@ -157,7 +149,7 @@ func (p *Provisioner) credentialSetID(ctx context.Context, host string) (string,
 // ensureCredentialSet writes the upstream credential to Key Vault and points a
 // credential set for that host at it.
 func (p *Provisioner) ensureCredentialSet(ctx context.Context, host, user, pass string) (string, error) {
-	if strings.TrimSpace(p.keyVaultURI) == "" {
+	if strings.TrimSpace(p.keyVaultID) == "" {
 		return "", fmt.Errorf("no key vault configured for upstream credentials")
 	}
 	csName := credentialSetName(host)
@@ -202,36 +194,33 @@ func (p *Provisioner) ensureCredentialSet(ctx context.Context, host, user, pass 
 	return cs.ID, nil
 }
 
-// putVaultSecret writes a secret to the platform vault over its data plane and
-// returns the versionless identifier, so rotating the secret does not require
-// rewriting the credential set that points at it.
+// putVaultSecret writes a secret and returns its versionless identifier, so
+// rotating the value later does not require rewriting the credential set that
+// points at it.
+//
+// Written through ARM rather than the vault's own API: the vault has public
+// network access disabled, which blocks the data plane, and the control plane
+// reaches Azure from a Container App with no private link to it. The management
+// plane is not subject to that restriction — it is how a Bicep deployment
+// creates secrets — and the credential is only ever read by the registry.
 func (p *Provisioner) putVaultSecret(ctx context.Context, name, value string) (string, error) {
-	tok, err := p.cred.GetToken(ctx, policy.TokenRequestOptions{Scopes: []string{vaultScope}})
-	if err != nil {
-		return "", fmt.Errorf("acquire vault token: %w", err)
+	if strings.TrimSpace(p.keyVaultID) == "" {
+		return "", fmt.Errorf("no key vault configured")
 	}
-	body, err := json.Marshal(map[string]any{"value": value})
-	if err != nil {
-		return "", err
+	var out struct {
+		Properties struct {
+			SecretURI string `json:"secretUri"`
+		} `json:"properties"`
 	}
-	uri := strings.TrimSuffix(p.keyVaultURI, "/")
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut,
-		fmt.Sprintf("%s/secrets/%s?api-version=7.4", uri, name), bytes.NewReader(body))
-	if err != nil {
-		return "", err
+	if err := p.armJSON(ctx, "PUT", fmt.Sprintf(
+		"https://management.azure.com%s/secrets/%s?api-version=2023-07-01", p.keyVaultID, name),
+		map[string]any{"properties": map[string]any{"value": value}}, &out); err != nil {
+		return "", fmt.Errorf("vault secret %s: %w", name, err)
 	}
-	req.Header.Set("Authorization", "Bearer "+tok.Token)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := p.http.Do(req)
-	if err != nil {
-		return "", err
+	if out.Properties.SecretURI == "" {
+		return "", fmt.Errorf("vault secret %s: no identifier returned", name)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return "", fmt.Errorf("vault secret %s: %d %s", name, resp.StatusCode, strings.TrimSpace(string(b)))
-	}
-	return fmt.Sprintf("%s/secrets/%s", uri, name), nil
+	return out.Properties.SecretURI, nil
 }
 
 // grantVaultRead lets a principal read the vault's secrets. Idempotent: an
