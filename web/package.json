@@ -2,12 +2,13 @@
   "name": "cortex-console",
   "version": "0.1.0",
   "private": true,
-  "description": "Cortex — control-plane console for a multi-tenant AI-agent platform on Microsoft Foundry.",
+  "description": "Cortex \u2014 control-plane console for a multi-tenant AI-agent platform on Microsoft Foundry.",
   "scripts": {
     "dev": "next dev --port 4200",
     "build": "next build",
     "start": "next start --port 4200",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
     "jose": "^6.2.3",
@@ -23,6 +24,7 @@
     "@types/node": "24.5.2",
     "@types/react": "19.1.13",
     "@types/react-dom": "19.1.9",
-    "typescript": "5.9.2"
+    "typescript": "5.9.2",
+    "vitest": "^2.1.9"
   }
 }

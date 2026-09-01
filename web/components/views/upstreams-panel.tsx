@@ -105,7 +105,9 @@ export function UpstreamsPanel({
               <div className={styles.rowMain}>
                 <span className={styles.rowName}>{u.name}</span>
                 <span className={`${styles.rowPath} mono`}>
-                  {u.source} <span className={styles.arrow}>→</span> {registry}/{u.target}
+                  {u.source} <span className={styles.arrow} aria-hidden>
+                    →
+                  </span> {registry}/{u.target}
                 </span>
               </div>
               <StatusBadge

@@ -102,9 +102,11 @@
   gap: 10px;
 }
 .colEmpty {
+  /* "None" states a fact the operator needs — no stores exist — so it is muted,
+     not disabled. */
   display: flex;
   align-items: center;
-  color: var(--text-disabled);
+  color: var(--text-muted);
   font-size: var(--text-body-sm);
   padding: 11px 12px;
   border: 1px dashed var(--border);
@@ -289,4 +291,18 @@ a.node:hover {
   a.node:hover {
     transform: none;
   }
+}
+
+/* The reason a node needs attention. Clamped to two lines: an Argo message can
+   be a paragraph, and the node is a summary — the full text is on hover and in
+   the accessible name. */
+.nodeDetail {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin-top: 2px;
+  font-size: var(--text-caption);
+  line-height: 1.4;
+  color: var(--text-muted);
 }

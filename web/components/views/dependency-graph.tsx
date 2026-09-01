@@ -19,6 +19,10 @@ interface GNode {
   state: string;
   pulse: boolean;
   href?: string;
+  /** Why it is not live. A control plane reports on systems in someone else's
+   *  cloud, so "Failed" on its own sends the operator hunting for the reason
+   *  that the data already carries. */
+  detail?: string;
 }
 interface GEdge {
   from: string; // dependency (upstream / provider) key
@@ -57,15 +61,15 @@ export function DependencyGraph({
 
     for (const i of infrastructure) {
       const t = infraStatus(i.infraState);
-      add({ key: nkey("infrastructure", i.id), id: i.id, kind: "infrastructure", name: i.name, tone: t.tone, state: t.label, pulse: t.pulse, href: "/infrastructure" });
+      add({ key: nkey("infrastructure", i.id), id: i.id, kind: "infrastructure", name: i.name, tone: t.tone, state: t.label, pulse: t.pulse, href: "/infrastructure", detail: i.infraDetail });
     }
     for (const a of applications) {
       const t = applicationStatus(a);
-      add({ key: nkey("application", a.id), id: a.id, kind: "application", name: a.name, tone: t.tone, state: t.label, pulse: t.pulse, href: "/deployments" });
+      add({ key: nkey("application", a.id), id: a.id, kind: "application", name: a.name, tone: t.tone, state: t.label, pulse: t.pulse, href: "/deployments", detail: a.detail });
     }
     for (const a of agents) {
       const t = agentStatus(a);
-      add({ key: nkey("agent", a.id), id: a.id, kind: "agent", name: a.name, tone: t.tone, state: t.label, pulse: t.pulse, href: "/agents" });
+      add({ key: nkey("agent", a.id), id: a.id, kind: "agent", name: a.name, tone: t.tone, state: t.label, pulse: t.pulse, href: "/agents", detail: a.note });
     }
     for (const s of stores) {
       const t = storeStatus(s);
@@ -188,7 +192,11 @@ export function DependencyGraph({
         <span className={styles.summaryDivider} aria-hidden />
         {live > 0 && <span className={styles.summaryStat} data-tone="success">{live} live</span>}
         {working > 0 && <span className={styles.summaryStat} data-tone="info">{working} deploying</span>}
-        {attention > 0 && <span className={styles.summaryStat} data-tone="warning">{attention} need attention</span>}
+        {attention > 0 && (
+          <span className={styles.summaryStat} data-tone="warning">
+            {attention} need{attention === 1 ? "s" : ""} attention
+          </span>
+        )}
         {live === total && <span className={styles.summaryStat} data-tone="success">all live</span>}
       </div>
 
@@ -231,6 +239,14 @@ export function DependencyGraph({
                       <span className={styles.nodeText}>
                         <span className={styles.nodeName}>{n.name}</span>
                         <span className={styles.nodeState}>{n.state}</span>
+                        {/* Only when it is not fine: a reason is the useful thing
+                            on a node that needs attention, and noise on one that
+                            does not. */}
+                        {n.detail && (n.tone === "warning" || n.tone === "danger") && (
+                          <span className={styles.nodeDetail} title={n.detail}>
+                            {n.detail}
+                          </span>
+                        )}
                       </span>
                     </>
                   );
@@ -243,7 +259,9 @@ export function DependencyGraph({
                     onMouseLeave: () => setActive((a) => (a === n.key ? null : a)),
                     onFocus: () => setActive(n.key),
                     onBlur: () => setActive((a) => (a === n.key ? null : a)),
-                    "aria-label": `${col.label.replace(/s$/, "")}: ${n.name} — ${n.state}`,
+                    "aria-label":
+                      `${col.label.replace(/s$/, "")}: ${n.name} — ${n.state}` +
+                      (n.detail && (n.tone === "warning" || n.tone === "danger") ? `. ${n.detail}` : ""),
                   };
                   return n.href ? (
                     <Link key={n.key} href={n.href} {...common}>

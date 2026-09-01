@@ -37,6 +37,10 @@ export function coerce(s: string): unknown {
   if (t === "true") return true;
   if (t === "false") return false;
   if (t === "null") return null;
+  // A leading zero is significant — zero-padded account ids, ordinals, some
+  // image tags — so "0042" stays a string while "0" and "0.5" are numbers.
+  // Without this the value is silently rewritten to 42 on save.
+  if (/^-?0\d/.test(t)) return t;
   if (/^-?\d+$/.test(t) || /^-?\d*\.\d+$/.test(t)) return Number(t);
   try {
     const v = parse(t);

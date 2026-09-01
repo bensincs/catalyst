@@ -20,7 +20,11 @@
 
   --text: #292929;
   --text-secondary: rgb(41 41 41 / 0.74);
-  --text-muted: rgb(41 41 41 / 0.6);
+  /* 0.68, not 0.6: at 0.6 this measured 4.03:1 on white and 3.80:1 on the
+     sunken surface, under the 4.5:1 minimum — and it carries nearly every
+     description, stat label and metadata line in the product. 0.68 clears it on
+     all three light surfaces (5.14 / 4.96 / 4.78). */
+  --text-muted: rgb(41 41 41 / 0.68);
   --text-disabled: rgb(41 41 41 / 0.38);
 
   --border: rgb(41 41 41 / 0.08);
@@ -56,7 +60,8 @@
   --danger-ink: #b5231b;
   --danger-bg: rgb(181 35 27 / 0.1);
   --neutral: rgb(41 41 41 / 0.55);
-  --neutral-ink: rgb(41 41 41 / 0.62);
+  /* 0.70: at 0.62 a neutral badge's label measured 4.27:1 on its own tint. */
+  --neutral-ink: rgb(41 41 41 / 0.7);
   --neutral-bg: rgb(41 41 41 / 0.08);
 
   --overlay: rgb(0 0 0 / 0.4);

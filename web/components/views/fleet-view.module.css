@@ -386,7 +386,10 @@
 }
 
 .zero {
-  color: var(--text-disabled);
+  /* A count of zero is something the operator reads and compares, not
+     decoration — --text-disabled measures 2.23:1 and is for non-essential
+     marks only. */
+  color: var(--text-muted);
 }
 
 .reconcilingHint {
