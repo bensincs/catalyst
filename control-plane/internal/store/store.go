@@ -185,6 +185,20 @@ func (s *Store) migrateOnce(ctx context.Context) error {
 		_, _ = conn.Exec(clean, `SELECT pg_advisory_unlock($1)`, migrationLockID)
 	}()
 
+	// Re-check now the lock is held. The first check is outside it, so every
+	// process that started before the winner finished will have decided to
+	// migrate too — and would then re-run the DDL one after another while the
+	// winner's process is already serving. That is an ALTER TABLE taking ACCESS
+	// EXCLUSIVE against live readers, which deadlocks whichever side Postgres
+	// picks. Checking again here means exactly one process does the work.
+	applied, err := s.schemaApplied(ctx)
+	if err != nil {
+		return err
+	}
+	if applied {
+		return nil
+	}
+
 	// Wait only briefly for a table lock. Without this a migration blocks behind
 	// a long-running reader indefinitely, holding the advisory lock while it
 	// does so and stalling every other booting replica behind it.
