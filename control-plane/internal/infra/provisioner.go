@@ -159,8 +159,32 @@ func (p *Provisioner) reconcile(ctx context.Context) {
 	for _, tgt := range targets {
 		p.ensure(ctx, tgt)
 	}
-	// 4. Tear down the Azure resources of infra that was disabled/deleted.
+	// 4. Make sure every live tenant has a working registry pull token. Done on
+	//    the sweep, not only when the footprint is stamped: the credential is
+	//    delivered on the sync now, so a tenant that never had one — or whose
+	//    token stopped working — recovers here without re-stamping anything.
+	p.ensureRegistryTokens(ctx)
+	// 5. Tear down the Azure resources of infra that was disabled/deleted.
 	p.teardown(ctx)
+}
+
+// ensureRegistryTokens mints (or repairs) each live tenant's pull token. Cheap
+// in the steady state: a stored token that still authenticates is reused, so
+// this is one auth exchange per tenant per sweep and no writes.
+func (p *Provisioner) ensureRegistryTokens(ctx context.Context) {
+	if strings.TrimSpace(p.platformACRID) == "" {
+		return
+	}
+	slugs, err := p.store.LiveTenantSlugs(ctx)
+	if err != nil {
+		slog.Warn("infra: list tenants for registry tokens failed", "err", trunc(err.Error()))
+		return
+	}
+	for _, slug := range slugs {
+		if _, _, err := p.EnsureTenantPullToken(ctx, slug); err != nil {
+			slog.Warn("infra: registry token failed", "tenant", slug, "err", trunc(err.Error()))
+		}
+	}
 }
 
 // ensure is idempotent + non-blocking: if the deployment already succeeded it

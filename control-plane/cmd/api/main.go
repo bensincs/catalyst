@@ -74,6 +74,7 @@ func main() {
 	)
 	srv := httpapi.NewServer(st, authn, recon, cfg.CORSOrigin, cfg.EntraClientID, cfg.EntraIssuerHost, cfg.PlatformTenantID, cfg.PlatformSubscriptionID)
 	srv.SetPlatformRegistry(cfg.HelmOCIRegistry)
+	st.SetPlatformRegistry(cfg.HelmOCIRegistry)
 
 	// Infra worker: discovers Lighthouse-delegated subscriptions, provisions each
 	// enabled tenant's footprint (reconciler + Foundry + AKS) and each deployment's

@@ -2,7 +2,10 @@ package store
 
 import (
 	"context"
+	"errors"
 	"strings"
+
+	"github.com/jackc/pgx/v5"
 )
 
 /* ── Tenant ingress: delegated DNS zone, wildcard TLS, app OIDC ───────────── */
@@ -73,4 +76,47 @@ func (s *Store) ingressConfigFor(ctx context.Context, slug string) (string, stri
 		   FROM tenants WHERE id = $1`, slug).
 		Scan(&domain, &issuer, &clientID, &secret)
 	return domain, issuer, clientID, secret, err
+}
+
+// RegistryCredential returns the tenant's stored pull token for the platform
+// registry, or empty strings when it has never been minted.
+func (s *Store) RegistryCredential(ctx context.Context, slug string) (user, pass string, err error) {
+	err = s.pool.QueryRow(ctx,
+		`SELECT coalesce(registry_username,''), coalesce(registry_password,'')
+		   FROM tenants WHERE id = $1`, slug).Scan(&user, &pass)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", "", nil
+	}
+	return user, pass, err
+}
+
+// SetRegistryCredential stores the tenant's pull token. Minting one is
+// destructive — the registry returns a password only by generating it, which
+// invalidates the previous — so the value is kept and reused rather than
+// re-minted on every read.
+func (s *Store) SetRegistryCredential(ctx context.Context, slug, user, pass string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE tenants SET registry_username = $2, registry_password = $3 WHERE id = $1`,
+		slug, strings.TrimSpace(user), pass)
+	return err
+}
+
+// LiveTenantSlugs lists tenants that should hold a registry credential: enabled,
+// and past registration. A disabled or tombstoned tenant is skipped so a
+// credential is not minted for something that should not be pulling.
+func (s *Store) LiveTenantSlugs(ctx context.Context) ([]string, error) {
+	rows, err := s.pool.Query(ctx, `SELECT id FROM tenants WHERE enabled = true`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
 }

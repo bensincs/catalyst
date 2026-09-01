@@ -362,3 +362,41 @@ func TestImagePullSecret(t *testing.T) {
 		t.Errorf("auth = %q", d)
 	}
 }
+
+func TestRegistryAuthOverridesDeploymentValues(t *testing.T) {
+	// The credential arrives on every sync so a rotation takes effect on the
+	// next poll. Baked-in values are only a fallback: a control plane that sends
+	// one must win, or the cluster keeps using a token the registry has already
+	// invalidated — which is exactly the failure this replaced.
+	base := Options{HelmOCIRegistry: "old.azurecr.io", HelmOCIUsername: "old", HelmOCIPassword: "stale"}
+	c := &Client{o: base}
+
+	fresh := &shared.RegistryAuth{LoginServer: "new.azurecr.io", Username: "tok", Password: "rotated"}
+	if !fresh.Configured() {
+		t.Fatal("a complete credential must report configured")
+	}
+	got := c.withOptions(func() Options {
+		o := c.o
+		o.HelmOCIRegistry, o.HelmOCIUsername, o.HelmOCIPassword = fresh.LoginServer, fresh.Username, fresh.Password
+		return o
+	}())
+	if got.o.HelmOCIPassword != "rotated" || got.o.HelmOCIUsername != "tok" {
+		t.Errorf("sync credential did not win: %+v", got.o)
+	}
+	// The original must be untouched — the client is long-lived and shared.
+	if c.o.HelmOCIPassword != "stale" {
+		t.Errorf("withOptions mutated the client: %+v", c.o)
+	}
+
+	// An incomplete credential must not blank a working fallback.
+	for _, bad := range []*shared.RegistryAuth{
+		nil,
+		{LoginServer: "r", Username: "u"},
+		{LoginServer: "r", Password: "p"},
+		{Username: "u", Password: "p"},
+	} {
+		if bad.Configured() {
+			t.Errorf("incomplete credential reported configured: %+v", bad)
+		}
+	}
+}

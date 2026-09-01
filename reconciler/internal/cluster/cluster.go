@@ -105,6 +105,14 @@ type Options struct {
 	HelmOCIPassword string
 }
 
+// withOptions returns a shallow copy using o, so per-sync values (the registry
+// credential) apply without mutating the long-lived client.
+func (c *Client) withOptions(o Options) *Client {
+	cp := *c
+	cp.o = o
+	return &cp
+}
+
 // Client drives one tenant's cluster (one reconciler → one cluster).
 type Client struct {
 	cred azcore.TokenCredential
@@ -142,8 +150,17 @@ func New(cred azcore.TokenCredential, o Options) *Client {
 // stamped as Argo Applications, then returns cluster + per-app status. Apps are
 // exposed through the AKS-managed Azure Application Gateway (AGIC) — the edge no
 // longer enforces identity, so the auth policy is accepted but ignored.
-func (c *Client) Reconcile(ctx context.Context, apps []shared.DesiredApplication, _ *shared.IngressAuth, ing *shared.IngressConfig) (shared.ClusterStatus, []shared.ApplicationStatus) {
+func (c *Client) Reconcile(ctx context.Context, apps []shared.DesiredApplication, _ *shared.IngressAuth, ing *shared.IngressConfig, reg *shared.RegistryAuth) (shared.ClusterStatus, []shared.ApplicationStatus) {
 	status := shared.ClusterStatus{Name: c.o.ClusterName, Phase: shared.ClusterProvisioning}
+
+	// The control plane serves the registry credential on every sync, so a
+	// rotated token takes effect on the next poll. The deployment-time values
+	// remain as a fallback for a control plane that does not send one yet.
+	o := c.o
+	if reg.Configured() {
+		o.HelmOCIRegistry, o.HelmOCIUsername, o.HelmOCIPassword = reg.LoginServer, reg.Username, reg.Password
+	}
+	c = c.withOptions(o)
 
 	m, err := c.getCluster(ctx)
 	if err != nil {

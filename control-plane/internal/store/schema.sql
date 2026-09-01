@@ -607,3 +607,11 @@ UPDATE applications a
      GROUP BY x.id
   ) AS missing
  WHERE a.id = missing.id;
+
+-- The tenant's pull token for the platform registry. Persisted because minting
+-- one is destructive: the registry only ever returns a password by generating
+-- it, which invalidates the previous one. Reading the stored value instead of
+-- re-generating is what stops every read from silently breaking the cluster
+-- that is already using it.
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS registry_username text NOT NULL DEFAULT '';
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS registry_password text NOT NULL DEFAULT '';

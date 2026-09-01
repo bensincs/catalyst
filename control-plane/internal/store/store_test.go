@@ -1138,3 +1138,100 @@ func TestMigrateBackfillsDependenciesFromWiring(t *testing.T) {
 		t.Fatalf("re-running the migration duplicated edges: %#v", a.Dependencies)
 	}
 }
+
+// TestRegistryCredentialRoundTripAndSync: the token is stored and served on the
+// sync, because minting one is destructive — the registry hands back a password
+// only by creating it, invalidating the previous. Re-minting on every read
+// therefore broke the cluster already holding the old one, every poll.
+func TestRegistryCredentialRoundTripAndSync(t *testing.T) {
+	st, ctx := testStore(t)
+	defer st.Close()
+	st.SetPlatformRegistry("reg.azurecr.io")
+
+	const slug = "zz-regcred"
+	const tid = "zz-regcred-tid"
+	defer func() { _, _ = st.pool.Exec(ctx, `DELETE FROM tenants WHERE id = $1`, slug) }()
+	_, _ = st.pool.Exec(ctx, `DELETE FROM tenants WHERE id = $1`, slug)
+	if _, err := st.pool.Exec(ctx,
+		`INSERT INTO tenants (id, name, tenant_id, enrollment, enabled) VALUES ($1,'RC',$2,'bound',true)`,
+		slug, tid); err != nil {
+		t.Fatalf("tenant: %v", err)
+	}
+
+	// Absent until minted — and absence must not surface a half-built credential.
+	if u, p, err := st.RegistryCredential(ctx, slug); err != nil || u != "" || p != "" {
+		t.Fatalf("expected no credential, got %q/%q (%v)", u, p, err)
+	}
+	tn := mustTenantByTID(t, ctx, st, tid)
+	ds, err := st.SyncDesired(ctx, tn)
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if ds.Registry != nil {
+		t.Fatalf("no credential should mean no registry on the sync, got %+v", ds.Registry)
+	}
+
+	if err := st.SetRegistryCredential(ctx, slug, "cortex-"+slug, "p4ssw0rd"); err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	u, p, err := st.RegistryCredential(ctx, slug)
+	if err != nil || u != "cortex-"+slug || p != "p4ssw0rd" {
+		t.Fatalf("round trip: %q/%q (%v)", u, p, err)
+	}
+
+	// Now it must ride the sync, so a rotation reaches the cluster on the next
+	// poll rather than needing the footprint re-stamped.
+	ds, err = st.SyncDesired(ctx, tn)
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if !ds.Registry.Configured() {
+		t.Fatalf("expected a usable credential on the sync, got %+v", ds.Registry)
+	}
+	if ds.Registry.LoginServer != "reg.azurecr.io" || ds.Registry.Username != "cortex-"+slug || ds.Registry.Password != "p4ssw0rd" {
+		t.Errorf("wrong credential on the sync: %+v", ds.Registry)
+	}
+
+	// Rotation is a plain overwrite, and the new value must be what is served.
+	if err := st.SetRegistryCredential(ctx, slug, "cortex-"+slug, "rotated"); err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	ds, _ = st.SyncDesired(ctx, tn)
+	if ds.Registry.Password != "rotated" {
+		t.Errorf("sync served a stale password: %+v", ds.Registry)
+	}
+}
+
+// TestLiveTenantSlugsSkipsDisabled: a disabled tenant must not be handed a
+// registry credential — it should not be pulling anything.
+func TestLiveTenantSlugsSkipsDisabled(t *testing.T) {
+	st, ctx := testStore(t)
+	defer st.Close()
+	const on, off = "zz-live-on", "zz-live-off"
+	defer func() { _, _ = st.pool.Exec(ctx, `DELETE FROM tenants WHERE id = ANY($1)`, []string{on, off}) }()
+	_, _ = st.pool.Exec(ctx, `DELETE FROM tenants WHERE id = ANY($1)`, []string{on, off})
+	for _, c := range []struct {
+		id      string
+		enabled bool
+	}{{on, true}, {off, false}} {
+		if _, err := st.pool.Exec(ctx,
+			`INSERT INTO tenants (id, name, tenant_id, enrollment, enabled) VALUES ($1,'L',$2,'bound',$3)`,
+			c.id, c.id+"-tid", c.enabled); err != nil {
+			t.Fatalf("insert %s: %v", c.id, err)
+		}
+	}
+	slugs, err := st.LiveTenantSlugs(ctx)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	seen := map[string]bool{}
+	for _, s := range slugs {
+		seen[s] = true
+	}
+	if !seen[on] {
+		t.Error("an enabled tenant must be listed")
+	}
+	if seen[off] {
+		t.Error("a disabled tenant must not be listed")
+	}
+}

@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
 	"strings"
 	"time"
 )
@@ -64,6 +67,17 @@ func (p *Provisioner) EnsureTenantPullToken(ctx context.Context, slug string) (u
 		return "", "", nil
 	}
 	name := registryTokenName(slug)
+
+	// Reuse the stored password when it still works. Generating one is
+	// destructive — the registry hands a password back only by creating it,
+	// which invalidates the previous — so minting on every call would break the
+	// cluster already holding the old one, on every single sync.
+	if u, pw, err := p.store.RegistryCredential(ctx, slug); err == nil && u != "" && pw != "" {
+		if p.registryCredentialWorks(ctx, u, pw) {
+			return u, pw, nil
+		}
+		slog.Info("infra: registry token rejected, re-minting", "tenant", slug)
+	}
 	base := "https://management.azure.com" + p.platformACRID
 
 	scopeMapBody := map[string]any{
@@ -121,7 +135,35 @@ func (p *Provisioner) EnsureTenantPullToken(ctx context.Context, slug string) (u
 	if len(creds.Passwords) == 0 || creds.Passwords[0].Value == "" {
 		return "", "", fmt.Errorf("registry credentials: none returned")
 	}
-	return name, creds.Passwords[0].Value, nil
+	pass = creds.Passwords[0].Value
+	if err := p.store.SetRegistryCredential(ctx, slug, name, pass); err != nil {
+		// Not fatal for this call, but the next one would mint again and
+		// invalidate what was just handed out, so it is worth shouting about.
+		slog.Error("infra: storing registry token failed", "tenant", slug, "err", trunc(err.Error()))
+	}
+	return name, pass, nil
+}
+
+// registryCredentialWorks reports whether a stored token still authenticates.
+// Cheap: an auth exchange against the registry, no pull.
+func (p *Provisioner) registryCredentialWorks(ctx context.Context, user, pass string) bool {
+	host := strings.TrimSpace(p.platformACRLogin)
+	if host == "" {
+		return false
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		fmt.Sprintf("https://%s/oauth2/token?service=%s&scope=registry:catalog:*", host, host), nil)
+	if err != nil {
+		return false
+	}
+	req.SetBasicAuth(user, pass)
+	resp, err := p.http.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+	return resp.StatusCode >= 200 && resp.StatusCode < 300
 }
 
 // awaitTokenActive waits for a freshly written token to finish provisioning.

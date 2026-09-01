@@ -55,6 +55,14 @@ var ErrTenantDeleted = errors.New("tenant deleted")
 
 type Store struct {
 	pool *pgxpool.Pool
+	// platformRegistry is the registry private charts and images are cached
+	// into, served to each tenant alongside its pull token.
+	platformRegistry string
+}
+
+// SetPlatformRegistry names the registry tenants pull cached artifacts from.
+func (s *Store) SetPlatformRegistry(loginServer string) {
+	s.platformRegistry = strings.TrimSpace(loginServer)
 }
 
 func New(ctx context.Context, dsn string) (*Store, error) {
@@ -1571,6 +1579,17 @@ func (s *Store) SyncDesired(ctx context.Context, t model.Tenant) (shared.Desired
 			OIDCIssuer:       issuer,
 			OIDCClientID:     clientID,
 			OIDCClientSecret: secret,
+		}
+	}
+
+	// Pull access to the platform registry. Served on every sync so a rotated
+	// token reaches the cluster on the next poll; previously it was baked into
+	// the footprint, where a rotation could only be delivered by re-stamping.
+	if user, pass, err := s.RegistryCredential(ctx, t.ID); err == nil && user != "" && pass != "" {
+		out.Registry = &shared.RegistryAuth{
+			LoginServer: s.platformRegistry,
+			Username:    user,
+			Password:    pass,
 		}
 	}
 	return out, nil

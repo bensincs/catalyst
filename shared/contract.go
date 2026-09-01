@@ -173,6 +173,28 @@ type DesiredState struct {
 	// control plane obtained for it, and the customer's OIDC application.
 	// nil ⇒ nothing is published (no domain configured yet).
 	Ingress *IngressConfig `json:"ingress,omitempty"`
+
+	// Registry is the tenant's pull access to the platform registry, where
+	// private charts and images are cached. It travels on the sync rather than
+	// in the footprint because the credential rotates: baking it into the
+	// deployment meant a rotation could only be delivered by re-stamping the
+	// footprint, and until then the cluster held one the registry no longer
+	// accepted. nil ⇒ no platform registry, and public artifacts still pull.
+	Registry *RegistryAuth `json:"registry,omitempty"`
+}
+
+// RegistryAuth is pull access to the platform registry for one tenant. The token
+// is registry-scoped rather than an Entra identity, which is what lets a cluster
+// in the customer's own directory use it at all.
+type RegistryAuth struct {
+	LoginServer string `json:"loginServer"`
+	Username    string `json:"username"`
+	Password    string `json:"password"`
+}
+
+// Configured reports whether the credential is complete enough to use.
+func (r *RegistryAuth) Configured() bool {
+	return r != nil && r.LoginServer != "" && r.Username != "" && r.Password != ""
 }
 
 // Lifecycle status values shared by agents and memory stores (reconciler →
@@ -230,8 +252,8 @@ type ClusterStatus struct {
 	// TLSExpiresAt is the wildcard certificate's expiry, RFC3339. Empty ⇒ none
 	// held yet, so the gateway serves HTTP only and auth-required apps stay shut.
 	TLSExpiresAt string `json:"tlsExpiresAt,omitempty"`
-	NodeCount        int    `json:"nodeCount,omitempty"`
-	Detail           string `json:"detail,omitempty"` // human-readable note when not ready
+	NodeCount    int    `json:"nodeCount,omitempty"`
+	Detail       string `json:"detail,omitempty"` // human-readable note when not ready
 }
 
 // ApplicationStatus is the actual state of one Argo CD Application the reconciler
