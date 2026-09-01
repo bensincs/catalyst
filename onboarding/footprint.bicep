@@ -455,7 +455,17 @@ var reconcilerEnv = [
   { name: 'APPS_DOMAIN', value: appsDomain }
   { name: 'HELM_OCI_REGISTRY', value: helmOciRegistry }
   { name: 'HELM_OCI_USERNAME', value: helmOciUsername }
-  { name: 'HELM_OCI_PASSWORD', value: helmOciPassword }
+]
+
+// The registry token is the one credential this app holds, so it is a container
+// secret rather than a plain environment value — otherwise it is readable from
+// the app's definition by anyone with read on the resource group.
+var helmOciSecretName = 'helm-oci-password'
+var helmOciSecrets = empty(helmOciPassword) ? [] : [
+  { name: helmOciSecretName, value: helmOciPassword }
+]
+var helmOciEnv = empty(helmOciPassword) ? [] : [
+  { name: 'HELM_OCI_PASSWORD', secretRef: helmOciSecretName }
 ]
 
 resource env 'Microsoft.App/managedEnvironments@2024-03-01' = if (deployReconcilerApp) {
@@ -485,11 +495,14 @@ resource reconciler 'Microsoft.App/containerApps@2024-03-01' = if (deployReconci
     managedEnvironmentId: env.id
     configuration: {
       activeRevisionsMode: 'Single'
-      // Outbound-only worker: no ingress, and no secrets — the reconciler
-      // authenticates to its cluster and to Foundry with its own managed
-      // identity. A private registry (e.g. ACR) is pulled with that same
-      // user-assigned identity; empty registryServer keeps the public-image
-      // default (anonymous pull). The identity needs AcrPull on the registry.
+      // Outbound-only worker: no ingress. The reconciler authenticates to its
+      // cluster and to Foundry with its own managed identity; the one credential
+      // it holds is the platform registry's pull token, which cannot be an
+      // identity because this cluster may live in the customer's own directory.
+      // A private registry (e.g. ACR) is pulled with that same user-assigned
+      // identity; empty registryServer keeps the public-image default (anonymous
+      // pull). The identity needs AcrPull on the registry.
+      secrets: helmOciSecrets
       registries: empty(registryServer) ? [] : [
         {
           server: registryServer
@@ -506,7 +519,7 @@ resource reconciler 'Microsoft.App/containerApps@2024-03-01' = if (deployReconci
             cpu: json('0.25')
             memory: '0.5Gi'
           }
-          env: reconcilerEnv
+          env: concat(reconcilerEnv, helmOciEnv)
         }
       ]
       scale: {

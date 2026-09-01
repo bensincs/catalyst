@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.40.2.10011",
-      "templateHash": "11459664381514991004"
+      "templateHash": "3397105412414290299"
     }
   },
   "parameters": {
@@ -290,7 +290,10 @@
     "aksRbacClusterAdminRoleId": "b1ff04bb-8a4e-4dc4-8eb5-8693973ce19b",
     "aksClusterUserRoleId": "4abbcc35-e782-43d8-92c5-2d3f1bd2253f",
     "dnsZoneContributorRoleId": "befefa01-2a29-4197-83a8-272ff33ce314",
-    "clusterEnabled": "[parameters('deployCluster')]"
+    "clusterEnabled": "[parameters('deployCluster')]",
+    "helmOciSecretName": "helm-oci-password",
+    "helmOciSecrets": "[if(empty(parameters('helmOciPassword')), createArray(), createArray(createObject('name', variables('helmOciSecretName'), 'value', parameters('helmOciPassword'))))]",
+    "helmOciEnv": "[if(empty(parameters('helmOciPassword')), createArray(), createArray(createObject('name', 'HELM_OCI_PASSWORD', 'secretRef', variables('helmOciSecretName'))))]"
   },
   "resources": [
     {
@@ -543,6 +546,7 @@
         "managedEnvironmentId": "[resourceId('Microsoft.App/managedEnvironments', format('{0}-recon-env', variables('prefix')))]",
         "configuration": {
           "activeRevisionsMode": "Single",
+          "secrets": "[variables('helmOciSecrets')]",
           "registries": "[if(empty(parameters('registryServer')), createArray(), createArray(createObject('server', parameters('registryServer'), 'identity', variables('reconIdentityId'))))]"
         },
         "template": {
@@ -554,108 +558,7 @@
                 "cpu": "[json('0.25')]",
                 "memory": "0.5Gi"
               },
-              "env": [
-                {
-                  "name": "CONTROL_PLANE_URL",
-                  "value": "[parameters('controlPlaneUrl')]"
-                },
-                {
-                  "name": "CORTEX_API_SCOPE",
-                  "value": "[parameters('cortexApiScope')]"
-                },
-                {
-                  "name": "AZURE_CLIENT_ID",
-                  "value": "[if(variables('createReconIdentity'), reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix'))), '2023-01-31').clientId, reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('reconIdentityName')), '2023-01-31').clientId)]"
-                },
-                {
-                  "name": "TENANT_ID",
-                  "value": "[variables('tenantId')]"
-                },
-                {
-                  "name": "TENANT_NAME",
-                  "value": "[parameters('tenantName')]"
-                },
-                {
-                  "name": "AZURE_REGION",
-                  "value": "[parameters('location')]"
-                },
-                {
-                  "name": "AZURE_SUBSCRIPTION_ID",
-                  "value": "[variables('subscriptionId')]"
-                },
-                {
-                  "name": "FOUNDRY_PROJECT",
-                  "value": "[variables('foundryProjectDisplay')]"
-                },
-                {
-                  "name": "FOUNDRY_PROJECT_ENDPOINT",
-                  "value": "[variables('foundryProjectEndpoint')]"
-                },
-                {
-                  "name": "RECONCILER_IDENTITY",
-                  "value": "[variables('reconIdentityName')]"
-                },
-                {
-                  "name": "TENANT_SLUG",
-                  "value": "[parameters('tenantSlug')]"
-                },
-                {
-                  "name": "RECONCILER_VERSION",
-                  "value": "[parameters('reconcilerVersion')]"
-                },
-                {
-                  "name": "PLAN",
-                  "value": "[parameters('plan')]"
-                },
-                {
-                  "name": "POLL_INTERVAL_SECONDS",
-                  "value": "[string(parameters('pollIntervalSeconds'))]"
-                },
-                {
-                  "name": "CLUSTER_ENABLED",
-                  "value": "[string(variables('clusterEnabled'))]"
-                },
-                {
-                  "name": "CLUSTER_NAME",
-                  "value": "[parameters('clusterName')]"
-                },
-                {
-                  "name": "CLUSTER_RESOURCE_GROUP",
-                  "value": "[resourceGroup().name]"
-                },
-                {
-                  "name": "DNS_RESOURCE_GROUP",
-                  "value": "[resourceGroup().name]"
-                },
-                {
-                  "name": "ACME_DIRECTORY_URL",
-                  "value": "[parameters('acmeDirectoryUrl')]"
-                },
-                {
-                  "name": "ACME_EMAIL",
-                  "value": "[parameters('acmeEmail')]"
-                },
-                {
-                  "name": "ARGOCD_VERSION",
-                  "value": "[parameters('argocdVersion')]"
-                },
-                {
-                  "name": "APPS_DOMAIN",
-                  "value": "[parameters('appsDomain')]"
-                },
-                {
-                  "name": "HELM_OCI_REGISTRY",
-                  "value": "[parameters('helmOciRegistry')]"
-                },
-                {
-                  "name": "HELM_OCI_USERNAME",
-                  "value": "[parameters('helmOciUsername')]"
-                },
-                {
-                  "name": "HELM_OCI_PASSWORD",
-                  "value": "[parameters('helmOciPassword')]"
-                }
-              ]
+              "env": "[concat(createArray(createObject('name', 'CONTROL_PLANE_URL', 'value', parameters('controlPlaneUrl')), createObject('name', 'CORTEX_API_SCOPE', 'value', parameters('cortexApiScope')), createObject('name', 'AZURE_CLIENT_ID', 'value', if(variables('createReconIdentity'), reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix'))), '2023-01-31').clientId, reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('reconIdentityName')), '2023-01-31').clientId)), createObject('name', 'TENANT_ID', 'value', variables('tenantId')), createObject('name', 'TENANT_NAME', 'value', parameters('tenantName')), createObject('name', 'AZURE_REGION', 'value', parameters('location')), createObject('name', 'AZURE_SUBSCRIPTION_ID', 'value', variables('subscriptionId')), createObject('name', 'FOUNDRY_PROJECT', 'value', variables('foundryProjectDisplay')), createObject('name', 'FOUNDRY_PROJECT_ENDPOINT', 'value', variables('foundryProjectEndpoint')), createObject('name', 'RECONCILER_IDENTITY', 'value', variables('reconIdentityName')), createObject('name', 'TENANT_SLUG', 'value', parameters('tenantSlug')), createObject('name', 'RECONCILER_VERSION', 'value', parameters('reconcilerVersion')), createObject('name', 'PLAN', 'value', parameters('plan')), createObject('name', 'POLL_INTERVAL_SECONDS', 'value', string(parameters('pollIntervalSeconds'))), createObject('name', 'CLUSTER_ENABLED', 'value', string(variables('clusterEnabled'))), createObject('name', 'CLUSTER_NAME', 'value', parameters('clusterName')), createObject('name', 'CLUSTER_RESOURCE_GROUP', 'value', resourceGroup().name), createObject('name', 'DNS_RESOURCE_GROUP', 'value', resourceGroup().name), createObject('name', 'ACME_DIRECTORY_URL', 'value', parameters('acmeDirectoryUrl')), createObject('name', 'ACME_EMAIL', 'value', parameters('acmeEmail')), createObject('name', 'ARGOCD_VERSION', 'value', parameters('argocdVersion')), createObject('name', 'APPS_DOMAIN', 'value', parameters('appsDomain')), createObject('name', 'HELM_OCI_REGISTRY', 'value', parameters('helmOciRegistry')), createObject('name', 'HELM_OCI_USERNAME', 'value', parameters('helmOciUsername'))), variables('helmOciEnv'))]"
             }
           ],
           "scale": {
