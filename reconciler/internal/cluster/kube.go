@@ -142,8 +142,8 @@ func (k *kube) restMapper() (meta.RESTMapper, error) {
 func (k *kube) reconcileApplications(ctx context.Context, apps []shared.DesiredApplication, o Options, ing *shared.IngressConfig, tlsReady bool) []shared.ApplicationStatus {
 	out := make([]shared.ApplicationStatus, 0, len(apps))
 	desired := map[string]bool{}
-	exposed := map[string]bool{}     // app names that publish a gateway Ingress
-	authed := map[string]bool{}      // oauth2-proxy object names still wanted
+	exposed := map[string]bool{}    // app names that publish a gateway Ingress
+	authed := map[string]bool{}     // oauth2-proxy object names still wanted
 	ociRepos := map[string]string{} // Argo repo-secret name → OCI registry URL
 	ri := k.dyn.Resource(appGVR).Namespace(argoNamespace)
 
@@ -156,6 +156,10 @@ func (k *kube) reconcileApplications(ctx context.Context, apps []shared.DesiredA
 			ociRepos[ociSecretName(url)] = url
 		}
 		k.ensureWorkloadNamespace(ctx, a.Namespace) // make sure the target namespace exists
+		// Argo pulls the chart; the kubelet pulls the images it references, and
+		// has no credential of its own. Do this before the Application is
+		// stamped, so the first pull already has it.
+		k.ensureImagePullSecret(ctx, a.Namespace, o)
 		// Expose the app through the gateway only when it declares the Service to
 		// route to (charts name it unpredictably); empty ⇒ cluster-internal. AGC
 		// routes via the Service, so this works with CNI Overlay.

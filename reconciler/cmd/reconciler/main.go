@@ -39,18 +39,18 @@ func main() {
 	var clusterClient *cluster.Client
 	if cfg.ClusterEnabled {
 		clusterClient = cluster.New(cred, cluster.Options{
-			TenantSlug:      cfg.TenantSlug,
-			SubscriptionID:  cfg.SubscriptionID,
-			ResourceGroup:   cfg.ClusterResourceGroup,
-			ClusterName:     cfg.ClusterName,
+			TenantSlug:       cfg.TenantSlug,
+			SubscriptionID:   cfg.SubscriptionID,
+			ResourceGroup:    cfg.ClusterResourceGroup,
+			ClusterName:      cfg.ClusterName,
 			DNSResourceGroup: cfg.DNSResourceGroup,
 			ACMEDirectory:    cfg.ACMEDirectoryURL,
 			ACMEEmail:        cfg.ACMEEmail,
-			ArgoVersion:     cfg.ArgoCDVersion,
-			AppsDomain:      cfg.AppsDomain,
-			HelmOCIRegistry: cfg.HelmOCIRegistry,
-			HelmOCIUsername: cfg.HelmOCIUsername,
-			HelmOCIPassword: cfg.HelmOCIPassword,
+			ArgoVersion:      cfg.ArgoCDVersion,
+			AppsDomain:       cfg.AppsDomain,
+			HelmOCIRegistry:  cfg.HelmOCIRegistry,
+			HelmOCIUsername:  cfg.HelmOCIUsername,
+			HelmOCIPassword:  cfg.HelmOCIPassword,
 		})
 	}
 

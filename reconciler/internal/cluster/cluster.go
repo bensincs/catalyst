@@ -59,9 +59,9 @@ const (
 // mutates or prunes Applications it owns. System resources (the ingress) also
 // carry labelSystem so the tenant-app prune never removes them.
 const (
-	labelManaged = "cortex.io/managed" // "true"
-	labelSystem  = "cortex.io/system"  // "true" for the ingress/system resources
-	labelAppID   = "cortex.io/app-id"  // control-plane application id
+	labelManaged = "cortex.io/managed"  // "true"
+	labelSystem  = "cortex.io/system"   // "true" for the ingress/system resources
+	labelAppID   = "cortex.io/app-id"   // control-plane application id
 	labelOCIRepo = "cortex.io/oci-repo" // "true" for auto-registered Argo OCI Helm repos
 )
 
@@ -74,7 +74,8 @@ var (
 	depGVR   = schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
 	secGVR   = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "secrets"}
 	svcGVR   = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "services"}
-	ingGVR   = schema.GroupVersionResource{Group: "networking.k8s.io", Version: "v1", Resource: "ingresses"} // legacy AGIC cleanup
+	saGVR    = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "serviceaccounts"}
+	ingGVR   = schema.GroupVersionResource{Group: "networking.k8s.io", Version: "v1", Resource: "ingresses"}                     // legacy AGIC cleanup
 	albGVR   = schema.GroupVersionResource{Group: "alb.networking.azure.io", Version: "v1", Resource: "applicationloadbalancer"} // CRD plural is non-standard (no trailing s)
 	gwGVR    = schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "gateways"}
 	routeGVR = schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "httproutes"}
@@ -91,9 +92,9 @@ type Options struct {
 	DNSResourceGroup string
 	ACMEDirectory    string
 	ACMEEmail        string
-	ResourceGroup  string
-	ClusterName    string
-	ArgoVersion    string
+	ResourceGroup    string
+	ClusterName      string
+	ArgoVersion      string
 	// AppsDomain is the DNS suffix for per-app hosts (<app>.<AppsDomain>). Empty
 	// ⇒ host-less Ingress (App Gateway default backend).
 	AppsDomain string

@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -319,5 +320,45 @@ func TestArgoMessageIgnoresWedgedHookOnSettledApp(t *testing.T) {
 	}}
 	if got := argoMessage(unhealthy); got != "container crash-looping" {
 		t.Errorf("health message must win, got %q", got)
+	}
+}
+
+func TestImagePullSecret(t *testing.T) {
+	// Argo pulls the chart with the tenant's registry token; the images inside it
+	// are pulled by the kubelet, which has none — so a chart whose images live in
+	// the platform registry deploys and then ImagePullBackOffs without this.
+	sec, err := imagePullSecret("todo", "reg.azurecr.io", "tok", "pw")
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if got, _, _ := unstructured.NestedString(sec.Object, "type"); got != "kubernetes.io/dockerconfigjson" {
+		t.Fatalf("type = %q", got)
+	}
+	enc, _, _ := unstructured.NestedString(sec.Object, "data", ".dockerconfigjson")
+	raw, err := base64.StdEncoding.DecodeString(enc)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	var cfg struct {
+		Auths map[string]struct {
+			Username string `json:"username"`
+			Password string `json:"password"`
+			Auth     string `json:"auth"`
+		} `json:"auths"`
+	}
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	e, ok := cfg.Auths["reg.azurecr.io"]
+	if !ok {
+		t.Fatalf("no entry for the registry: %v", cfg.Auths)
+	}
+	if e.Username != "tok" || e.Password != "pw" {
+		t.Errorf("credentials = %q/%q", e.Username, e.Password)
+	}
+	// Some runtimes read only `auth`, so it has to be present too.
+	d, _ := base64.StdEncoding.DecodeString(e.Auth)
+	if string(d) != "tok:pw" {
+		t.Errorf("auth = %q", d)
 	}
 }

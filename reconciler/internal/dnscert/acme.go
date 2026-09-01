@@ -67,7 +67,10 @@ func (c *Client) IssueWildcard(ctx context.Context, zone, accountKeyPEM string) 
 	// their values must be published together rather than overwriting each other.
 	const challengeName = "_acme-challenge"
 	var values []string
-	type pending struct{ authzURL string; chal *acme.Challenge }
+	type pending struct {
+		authzURL string
+		chal     *acme.Challenge
+	}
 	var todo []pending
 
 	for _, authzURL := range order.AuthzURLs {

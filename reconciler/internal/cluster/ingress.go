@@ -57,7 +57,6 @@ func appHost(name, domain string) string {
 	return name + "." + strings.TrimSpace(domain)
 }
 
-
 // ociRegistryURL returns the scheme-stripped OCI registry URL for a repoURL, or
 // "" when it's a classic HTTP(S) Helm repo (or empty). OCI Helm registries carry
 // no http(s):// scheme — that's how Argo (and we) tell them apart.
