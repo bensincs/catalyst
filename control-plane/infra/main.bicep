@@ -114,6 +114,22 @@ param acmeDirectoryUrl string = ''
 @description('Contact address registered with the ACME account (expiry notices).')
 param acmeEmail string = ''
 
+@description('Managed-certificate resource id for the API custom domain. Empty ⇒ the domain is not bound by this template. A deployment replaces a container app\'s ingress wholesale, so a domain bound out-of-band is DELETED by an apply unless it is declared here.')
+param apiCertificateId string = ''
+
+@description('Managed-certificate resource id for the console custom domain. Empty ⇒ not bound.')
+param consoleCertificateId string = ''
+
+@description('Repository prefixes a tenant\'s scoped token may pull from the platform registry. Must cover every prefix an upstream is cached into — a chart a tenant can read whose images it cannot is a deploy that ImagePullBackOffs.')
+param platformAcrRepos string = 'charts/*,bicep/*,images/*'
+
+@description('Registry-scoped token the CONTROL PLANE uses to inspect cached charts and Bicep modules. Not an Entra identity, because Helm and the Bicep OCI client take a username/password.')
+param platformAcrPullUser string = ''
+
+@description('Password for that token.')
+@secure()
+param platformAcrPullPassword string = ''
+
 @description('Upstream registries cached into the platform registry, as [{name, source, target}] — e.g. { name: \'ghcr-charts\', source: \'ghcr.io/acme/charts/*\', target: \'charts/*\' }. Authors reference the platform registry for these; public registries are still referenced directly.')
 param registryCacheRules array = []
 
@@ -129,6 +145,7 @@ param registryUpstreamPassword string = ''
 var suffix = substring(uniqueString(resourceGroup().id), 0, 8)
 var acrName = toLower('${namePrefix}cpacr${suffix}')
 var kvName = toLower('${namePrefix}-cp-kv-${suffix}')
+var publicAcrName = toLower('${namePrefix}public${suffix}')
 var pgName = toLower('${namePrefix}-cp-pg-${suffix}')
 var dbName = 'cortex'
 var apiAppName = '${namePrefix}-cp-api'
@@ -184,6 +201,12 @@ resource acr 'Microsoft.ContainerRegistry/registries@2023-11-01-preview' = {
   name: acrName
   location: location
   sku: { name: 'Standard' }
+  // Governance disables public network access on untagged resources. Every
+  // tenant cluster pulls its charts and images from here over the internet, so
+  // losing that would break every deployment in the fleet.
+  tags: {
+    SecurityControl: 'Ignore'
+  }
   // The registry reads the upstream credential from Key Vault itself, so the
   // credential is never passed through a deployment or held by the control plane.
   identity: { type: 'SystemAssigned' }
@@ -301,6 +324,24 @@ resource acrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   }
 }
 
+// The reconciler image is pulled by a Container App in the CUSTOMER's
+// subscription, which cannot be granted AcrPull on a platform registry — a
+// customer-directory identity is not resolvable here (PrincipalNotFound). So it
+// is published to a registry that allows anonymous pull. Only the reconciler
+// image goes here; everything private lives in the registry above.
+resource publicAcr 'Microsoft.ContainerRegistry/registries@2023-11-01-preview' = {
+  name: publicAcrName
+  location: location
+  sku: { name: 'Standard' }
+  tags: {
+    SecurityControl: 'Ignore'
+  }
+  properties: {
+    adminUserEnabled: false
+    anonymousPullEnabled: true
+  }
+}
+
 resource pg 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' = {
   name: pgName
   location: location
@@ -388,7 +429,18 @@ resource api 'Microsoft.App/containerApps@2024-03-01' = if (deployApps) {
         targetPort: 8080
         transport: 'auto'
         allowInsecure: false
-        // api.catalyst.msft.ae is bound out-of-band via the CLI (see DEPLOYMENT.md).
+        // Declared, not bound out-of-band: a deployment replaces the ingress
+        // wholesale, so a domain attached with the CLI is deleted by the next
+        // apply. The certificate is issued once (it needs DNS already pointing
+        // here) and its id passed in, so an apply reproduces the binding rather
+        // than dropping it.
+        customDomains: empty(apiCertificateId) ? [] : [
+          {
+            name: apiDomain
+            bindingType: 'SniEnabled'
+            certificateId: apiCertificateId
+          }
+        ]
       }
       registries: [
         {
@@ -396,12 +448,25 @@ resource api 'Microsoft.App/containerApps@2024-03-01' = if (deployApps) {
           identity: uami.id
         }
       ]
-      secrets: [
-        {
-          name: 'database-url'
-          value: databaseUrl
-        }
-      ]
+      secrets: concat(
+        [
+          {
+            name: 'database-url'
+            value: databaseUrl
+          }
+        ],
+        // A credential, so it is a secret rather than a plain value — otherwise
+        // it is readable from the app's definition by anyone with read on the
+        // resource group.
+        empty(platformAcrPullPassword)
+          ? []
+          : [
+              {
+                name: 'platform-acr-pull-password'
+                value: platformAcrPullPassword
+              }
+            ]
+      )
     }
     template: {
       containers: [
@@ -412,7 +477,7 @@ resource api 'Microsoft.App/containerApps@2024-03-01' = if (deployApps) {
             cpu: json('0.5')
             memory: '1Gi'
           }
-          env: [
+          env: concat([
             { name: 'PORT', value: '8080' }
             { name: 'DATABASE_URL', secretRef: 'database-url' }
             { name: 'ENTRA_CLIENT_ID', value: entraClientId }
@@ -444,10 +509,18 @@ resource api 'Microsoft.App/containerApps@2024-03-01' = if (deployApps) {
             { name: 'HELM_OCI_REGISTRY', value: acr.properties.loginServer }
             { name: 'PLATFORM_ACR_NAME', value: acr.name }
             { name: 'PLATFORM_ACR_RESOURCE_ID', value: acr.id }
+            { name: 'PLATFORM_ACR_REPOS', value: platformAcrRepos }
+            { name: 'HELM_OCI_USERNAME', value: platformAcrPullUser }
+            { name: 'BICEP_OCI_USERNAME', value: platformAcrPullUser }
             { name: 'PLATFORM_KEYVAULT_URI', value: kv.properties.vaultUri }
             { name: 'PLATFORM_KEYVAULT_NAME', value: kv.name }
             { name: 'PLATFORM_KEYVAULT_RESOURCE_ID', value: kv.id }
-          ]
+          ],
+          // Only when configured: an empty secretRef is a deployment error.
+          empty(platformAcrPullPassword) ? [] : [
+            { name: 'HELM_OCI_PASSWORD', secretRef: 'platform-acr-pull-password' }
+            { name: 'BICEP_OCI_PASSWORD', secretRef: 'platform-acr-pull-password' }
+          ])
         }
       ]
       scale: {
@@ -482,7 +555,13 @@ resource console 'Microsoft.App/containerApps@2024-03-01' = if (deployApps) {
         targetPort: 3000
         transport: 'auto'
         allowInsecure: false
-        // catalyst.msft.ae is bound out-of-band via the CLI (see DEPLOYMENT.md).
+        customDomains: empty(consoleCertificateId) ? [] : [
+          {
+            name: consoleDomain
+            bindingType: 'SniEnabled'
+            certificateId: consoleCertificateId
+          }
+        ]
       }
       registries: [
         {
@@ -555,3 +634,5 @@ output uamiClientId string = uami.properties.clientId
 // Azure Lighthouse (controlPlanePrincipalId / CORTEX_SP_OBJECT_ID).
 output uamiPrincipalId string = uami.properties.principalId
 output keyVaultName string = kv.name
+output publicAcrName string = publicAcr.name
+output publicAcrLoginServer string = publicAcr.properties.loginServer

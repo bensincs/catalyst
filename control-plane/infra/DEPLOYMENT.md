@@ -35,6 +35,40 @@ Everything is in [`main.bicep`](./main.bicep) with defaults in
 
 ---
 
+## Every setting an apply needs
+
+A deployment replaces a container app's configuration wholesale. Anything set
+with the CLI and *not* declared in `main.bicepparam` is therefore deleted by the
+next apply — silently, and only noticed when something stops working. Export
+these before applying, or the apply will regress the running deployment:
+
+| Variable | Why it matters if omitted |
+|---|---|
+| `CORTEX_PLATFORM_ADMIN_EMAILS` | Blank makes **every user in the directory a platform admin** |
+| `CORTEX_PLATFORM_SUBSCRIPTION_ID` | Platform-hosted tenants stop being provisionable |
+| `CORTEX_RECONCILER_IMAGE` | Every tenant is repointed at the template default |
+| `CORTEX_ACME_EMAIL` | Tenants lose the contact registered for certificate expiry |
+| `CORTEX_ACR_PULL_USER` / `CORTEX_ACR_PULL_PASSWORD` | The control plane can no longer inspect private charts or Bicep modules |
+| `CORTEX_API_CERT_ID` / `CORTEX_CONSOLE_CERT_ID` | **The custom domains are unbound** — `catalyst.msft.ae` and `api.catalyst.msft.ae` stop serving |
+
+Confirm before applying, and expect no deletions beyond Azure-computed
+properties (`exposedPort`, `traffic`, `dataEndpointEnabled`, storage `tier` /
+`iops`, and similar, which the platform refills):
+
+```sh
+az deployment group what-if -g cortex-control-plane \
+  --template-file main.bicep --parameters main.bicepparam --parameters deployApps=true
+```
+
+The certificate ids are read back from the running apps:
+
+```sh
+export CORTEX_API_CERT_ID=$(az containerapp show -g cortex-control-plane -n cortex-cp-api \
+  --query "properties.configuration.ingress.customDomains[0].certificateId" -o tsv)
+export CORTEX_CONSOLE_CERT_ID=$(az containerapp show -g cortex-control-plane -n cortex-cp-console \
+  --query "properties.configuration.ingress.customDomains[0].certificateId" -o tsv)
+```
+
 ## Why two passes + a bind step
 
 An image must exist in the registry before an app can start, so the template

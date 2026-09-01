@@ -43,3 +43,15 @@ param reconcilerImage = readEnvironmentVariable('CORTEX_RECONCILER_IMAGE', '')
 param footprintResourceGroup = 'cortex'
 param infraResourceGroup = 'cortex-infra'
 param acmeEmail = readEnvironmentVariable('CORTEX_ACME_EMAIL', '')
+
+// The platform registry: which prefixes a tenant token may pull, and the
+// control plane's own token for inspecting cached charts and modules.
+param platformAcrRepos = 'charts/*,bicep/*,images/*'
+param platformAcrPullUser = readEnvironmentVariable('CORTEX_ACR_PULL_USER', '')
+param platformAcrPullPassword = readEnvironmentVariable('CORTEX_ACR_PULL_PASSWORD', '')
+
+// Managed certificates for the custom domains. Issued once (they require DNS to
+// already resolve to the app), then pinned here so an apply re-binds them
+// instead of deleting the binding.
+param apiCertificateId = readEnvironmentVariable('CORTEX_API_CERT_ID', '')
+param consoleCertificateId = readEnvironmentVariable('CORTEX_CONSOLE_CERT_ID', '')
