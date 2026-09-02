@@ -10,7 +10,7 @@ import {
   DeploymentForm,
   APP_OUTPUTS,
   AGENT_OUTPUTS,
-  SECRET_SET_OUTPUTS,
+  secretSetOutputs,
   type DepOutputs,
 } from "@/components/views/deployment-form";
 import type { ClusterInfo, DepOption } from "@/lib/types";
@@ -52,7 +52,7 @@ export default async function NewDeploymentPage() {
         kind: "secret_set" as const,
         id: s.id,
         name: s.name,
-        outputs: SECRET_SET_OUTPUTS,
+        outputs: secretSetOutputs(s.keys),
       })),
   ];
 

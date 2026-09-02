@@ -20,11 +20,17 @@ export default async function EditInfrastructurePage({ params }: { params: Promi
 
   const platform = me.role === "platform";
   const usable = (i: Infrastructure) => (platform ? i.owner === "" : i.owned || i.entitled);
-  const depOptions: DepOption[] = all
-    .filter((i) => i.id !== id && usable(i))
-    .map((i) => ({ id: i.id, name: i.name, kind: "infrastructure" as const }));
-
   const secretSets = sets.filter((s) => (platform ? s.owner === "" : s.owned || s.entitled));
+
+  // Allowed edges out of infrastructure: other infrastructure, and secret stores
+  // (a @secure() parameter binds to one). Secret stores were reachable
+  // server-side but absent from this picker, so the edge could not be authored.
+  const depOptions: DepOption[] = [
+    ...all
+      .filter((i) => i.id !== id && usable(i))
+      .map((i) => ({ id: i.id, name: i.name, kind: "infrastructure" as const })),
+    ...secretSets.map((s) => ({ id: s.id, name: s.name, kind: "secret_set" as const })),
+  ];
 
   return <InfrastructureForm infra={infra} depOptions={depOptions} secretSets={secretSets} />;
 }

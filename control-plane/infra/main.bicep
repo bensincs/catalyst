@@ -511,6 +511,11 @@ resource api 'Microsoft.App/containerApps@2024-03-01' = if (deployApps) {
             { name: 'PLATFORM_ACR_RESOURCE_ID', value: acr.id }
             { name: 'PLATFORM_ACR_REPOS', value: platformAcrRepos }
             { name: 'HELM_OCI_USERNAME', value: platformAcrPullUser }
+            // The registry this credential is for. Without it the credential
+            // was offered to whatever registry a module reference named, which
+            // both broke inspection of modules hosted anywhere else and handed
+            // the token to any registry an author could point at.
+            { name: 'BICEP_OCI_REGISTRY', value: acr.properties.loginServer }
             { name: 'BICEP_OCI_USERNAME', value: platformAcrPullUser }
             { name: 'PLATFORM_KEYVAULT_URI', value: kv.properties.vaultUri }
             { name: 'PLATFORM_KEYVAULT_NAME', value: kv.name }
