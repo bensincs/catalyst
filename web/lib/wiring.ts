@@ -28,7 +28,6 @@ export function dependenciesFor(
   return deps;
 }
 
-
 /* ── Wireable outputs, by dependency kind ─────────────────────────────────────
  *
  * These live here rather than in the deployment form because the form is a
@@ -57,5 +56,30 @@ export const AGENT_OUTPUTS = ["agentId", "name"];
  */
 export const secretSetOutputs = (keys: string[]): string[] => [
   "secretName",
-  ...keys.map((k) => `key:${k}`),
+  ...keys.map((k) => `${SECRET_KEY_PREFIX}${k}`),
 ];
+
+/** Wire-format prefix marking an output as "the NAME of this key". */
+const SECRET_KEY_PREFIX = "key:";
+
+/** How a wireable output should read in the picker.
+ *
+ *  Most outputs are the source's own identifiers (`host`, `agentId`) and are
+ *  shown as they are — an author recognises them from the module or chart.
+ *
+ *  A secret store's key outputs need translating twice over. `key:password` is
+ *  wire format and should never have been on screen, but simply stripping the
+ *  prefix would be worse than ugly: an entry reading `password`, sitting next to
+ *  a Secret name, invites the reading "this binds the password" when what it
+ *  binds is the literal string "password". Charts want exactly that (it is what
+ *  goes in `existingSecretPasswordKey`), but an author who misreads it would
+ *  believe they had wired a credential when they had wired a label. So the label
+ *  says which of the two it is.
+ */
+export function outputLabel(output: string): string {
+  if (output === "secretName") return "Secret name";
+  if (output.startsWith(SECRET_KEY_PREFIX)) {
+    return `Key name: ${output.slice(SECRET_KEY_PREFIX.length)}`;
+  }
+  return output;
+}

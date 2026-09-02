@@ -1,4 +1,4 @@
-import { dependenciesFor, secretSetOutputs } from "./wiring";
+import { dependenciesFor, outputLabel, secretSetOutputs } from "./wiring";
 
 // Wiring implies a dependency: an app that binds a source's output into its Helm
 // values necessarily depends on that source. Records exist carrying wiring with
@@ -90,5 +90,33 @@ describe("secretSetOutputs", () => {
     for (const o of secretSetOutputs(["password"])) {
       expect(o === "secretName" || o.startsWith("key:")).toBe(true);
     }
+  });
+});
+
+describe("outputLabel", () => {
+  it("never shows the wire format", () => {
+    expect(outputLabel("key:password")).not.toContain("key:");
+  });
+
+  it("distinguishes a key NAME from the secret itself", () => {
+    // The danger this guards against: an entry reading just "password", next to
+    // a Secret name, reads as "this binds the password". It binds the string
+    // "password". An author who misreads it thinks they wired a credential when
+    // they wired a label.
+    const label = outputLabel("key:password");
+    expect(label).toContain("password");
+    expect(label.toLowerCase()).toContain("key name");
+  });
+
+  it("leaves a source's own identifiers alone", () => {
+    // Bicep outputs and derived app/agent outputs are names the author already
+    // recognises; rewriting them would make them harder to match up, not easier.
+    for (const o of ["host", "port", "administratorLogin", "serviceHost", "agentId"]) {
+      expect(outputLabel(o)).toBe(o);
+    }
+  });
+
+  it("reads the Secret name as prose", () => {
+    expect(outputLabel("secretName")).toBe("Secret name");
   });
 });

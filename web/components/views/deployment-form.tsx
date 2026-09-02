@@ -32,7 +32,7 @@ import {
   type ActionResult,
 } from "@/lib/actions";
 import { mapToYaml, yamlToMap } from "@/lib/values";
-import { dependenciesFor } from "@/lib/wiring";
+import { dependenciesFor, outputLabel as labelForOutput } from "@/lib/wiring";
 import type {
   Application,
   ChartService,
@@ -56,8 +56,6 @@ export interface DepOutputs {
   name: string;
   outputs: string[];
 }
-
-
 
 // Dotted leaf paths of a chart's default values — the Helm value-path suggestions.
 function flattenPaths(obj: Obj, base = ""): string[] {
@@ -213,7 +211,7 @@ export function DeploymentForm({
     const { sourceKind, sourceId, output } = parseWireToken(token);
     return {
       tag: depNameByKey.get(`${sourceKind}:${sourceId}`) ?? sourceId,
-      label: output,
+      label: labelForOutput(output),
     };
   };
 
