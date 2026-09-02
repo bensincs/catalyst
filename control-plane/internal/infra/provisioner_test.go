@@ -1,8 +1,11 @@
 package infra
 
 import (
+	"context"
 	"strings"
 	"testing"
+
+	"github.com/inception42/cortex/control-plane/internal/store"
 )
 
 func TestSubstituteTokens(t *testing.T) {
@@ -67,5 +70,34 @@ func TestIsNestedResource(t *testing.T) {
 		if got := isNestedResource(id); got != want {
 			t.Errorf("isNestedResource(%q) = %v, want %v", id, got, want)
 		}
+	}
+}
+
+// A template whose module resolves its own credential must not be submitted
+// before the tenant has supplied it. ARM would fail the whole deployment with an
+// error about a resource it could not read, which tells the operator nothing
+// about the value somebody owes.
+func TestMissingVaultSecretsHoldsWhenThereIsNoVaultYet(t *testing.T) {
+	arm := `{"resources":[{"properties":{"parameters":{
+	  "p":{"reference":{"keyVault":{"id":"/x"},"secretName":"set-todo-database--password"}}},"template":{}}}]}`
+
+	p := &Provisioner{}
+	// No vault recorded: it arrives with the tenant's footprint, so until then
+	// there is nowhere for the value to be.
+	got := p.missingVaultSecrets(context.Background(), store.InfraTarget{}, arm)
+	if len(got) != 1 || got[0] != "set-todo-database--password" {
+		t.Fatalf("expected the secret to be reported missing, got %v", got)
+	}
+}
+
+func TestMissingVaultSecretsIgnoresTemplatesThatReadNone(t *testing.T) {
+	// The overwhelming majority of modules take no credential. They must not be
+	// held, and must not cost a vault round-trip.
+	p := &Provisioner{}
+	got := p.missingVaultSecrets(context.Background(),
+		store.InfraTarget{VaultID: "/subscriptions/s/vaults/v"},
+		`{"resources":[{"properties":{"parameters":{"name":{"value":"x"}},"template":{}}}]}`)
+	if len(got) != 0 {
+		t.Fatalf("held a deployment that reads no vault secret: %v", got)
 	}
 }

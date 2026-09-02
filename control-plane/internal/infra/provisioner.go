@@ -24,6 +24,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 
+	"github.com/inception42/cortex/control-plane/internal/bicep"
 	"github.com/inception42/cortex/control-plane/internal/store"
 )
 
@@ -234,6 +235,17 @@ func (p *Provisioner) ensure(ctx context.Context, tgt store.InfraTarget) {
 			"Waiting on the resource group: "+trunc(err.Error()))
 		return
 	}
+	// A module can read its own credential from the tenant's vault instead of
+	// being handed one. If the tenant has not supplied it yet, ARM fails the
+	// whole deployment with an error about a resource it could not read, which
+	// says nothing about the value somebody owes — so hold it, and say what is
+	// missing. Checked here rather than declared as a dependency: what the
+	// template actually reads is knowable from the template.
+	if missing := p.missingVaultSecrets(ctx, tgt, armStr); len(missing) > 0 {
+		_ = p.store.SetInfraState(ctx, tgt.TenantSlug, tgt.InfraID, "", nil,
+			"Waiting for "+strings.Join(missing, ", ")+" in this tenant's key vault — supply the value in the secret store that declares it.")
+		return
+	}
 	// A rejected submit never becomes a deployment, so there is nothing for the
 	// state check above to find on the next sweep — record the rejection here or
 	// it is invisible. ARM preflight failures (quota, unsupported SKU, a name
@@ -244,6 +256,60 @@ func (p *Provisioner) ensure(ctx context.Context, tgt store.InfraTarget) {
 		return
 	}
 	_ = p.store.SetInfraState(ctx, tgt.TenantSlug, tgt.InfraID, stateProvisioning, nil, "Provisioning…")
+}
+
+// missingVaultSecrets returns the vault secrets a template reads that are not in
+// the tenant's vault yet.
+//
+// Existence is all that is checked, and all that CAN be checked: the management
+// plane answers with a secret's metadata and never its value, which is the same
+// asymmetry that stops the control plane reading what a tenant supplied. A
+// secret whose presence cannot be determined — no vault recorded, or the check
+// itself failed — is treated as present, so a transient fault delays a
+// deployment rather than reporting that the tenant owes a value it has already
+// given.
+func (p *Provisioner) missingVaultSecrets(ctx context.Context, tgt store.InfraTarget, arm string) []string {
+	names := bicep.VaultSecretRefs(arm)
+	if len(names) == 0 {
+		return nil
+	}
+	if strings.TrimSpace(tgt.VaultID) == "" {
+		// The vault arrives with the tenant's footprint; until then there is
+		// nowhere for the value to be, and nothing to check against.
+		return names
+	}
+	var missing []string
+	for _, n := range names {
+		switch p.vaultSecretExists(ctx, tgt.VaultID, n) {
+		case secretAbsent:
+			missing = append(missing, n)
+		case secretUnknown:
+			slog.Warn("infra: could not check vault secret", "infra", tgt.InfraID, "secret", n)
+		}
+	}
+	return missing
+}
+
+type secretPresence int
+
+const (
+	secretPresent secretPresence = iota
+	secretAbsent
+	secretUnknown
+)
+
+// vaultSecretExists reports whether a secret exists, without reading it.
+func (p *Provisioner) vaultSecretExists(ctx context.Context, vaultID, name string) secretPresence {
+	err := p.armJSON(ctx, http.MethodGet, fmt.Sprintf(
+		"https://management.azure.com%s/secrets/%s?api-version=2023-07-01", vaultID, name), nil, nil)
+	switch {
+	case err == nil:
+		return secretPresent
+	case strings.Contains(err.Error(), " 404"):
+		return secretAbsent
+	default:
+		return secretUnknown
+	}
 }
 
 // templateProviders returns the distinct resource-provider namespaces an ARM
