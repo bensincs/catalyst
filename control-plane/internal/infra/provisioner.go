@@ -194,29 +194,42 @@ func (p *Provisioner) ensureRegistryTokens(ctx context.Context) {
 func (p *Provisioner) ensure(ctx context.Context, tgt store.InfraTarget) {
 	name := deploymentName(tgt.InfraID)
 	rg := p.appInfraRGFor(tgt.HostingMode, tgt.ResourceGroup)
-	if outs, pstate, found := p.deploymentState(ctx, p.deploymentURL(tgt.SubscriptionID, rg, name)); found {
-		switch {
-		case strings.EqualFold(pstate, "Succeeded"):
-			_ = p.store.SetInfraState(ctx, tgt.TenantSlug, tgt.InfraID, stateReady, outs, "")
-		case strings.EqualFold(pstate, "Failed") || strings.EqualFold(pstate, "Canceled"):
-			// Pull the resource-level reason out of the deployment's operations.
-			// A Failed ARM deployment is terminal, so this is also the only
-			// chance to record it — the sweep short-circuits here from now on.
-			detail := p.deploymentFailure(ctx, tgt.SubscriptionID, rg, name, 0)
-			if detail == "" {
-				detail = "Deployment " + pstate + "."
-			}
-			slog.Warn("infra: deployment failed", "infra", tgt.InfraID, "tenant", tgt.TenantSlug, "detail", detail)
-			_ = p.store.SetInfraState(ctx, tgt.TenantSlug, tgt.InfraID, stateFailed, nil, detail)
-		default:
-			_ = p.store.SetInfraState(ctx, tgt.TenantSlug, tgt.InfraID, stateProvisioning, nil, "Provisioning…")
-		}
-		return
-	}
+
 	// Substitute per-tenant tokens (e.g. {{tenantHash}} for a globally-unique Key
 	// Vault name) into the template before deploying, so a single platform-authored
 	// infra yields tenant-unique resource names instead of colliding across tenants.
 	armStr := substituteTokens(tgt.ArmTemplate, tgt.TenantSlug, p.region, tgt.VaultName, resourceGroupOf(tgt.VaultID))
+	hash := templateHash(armStr)
+
+	if outs, pstate, found := p.deploymentState(ctx, p.deploymentURL(tgt.SubscriptionID, rg, name)); found {
+		switch {
+		case strings.EqualFold(pstate, "Succeeded"):
+			_ = p.store.SetInfraState(ctx, tgt.TenantSlug, tgt.InfraID, stateReady, outs, "")
+			return
+		case strings.EqualFold(pstate, "Failed") || strings.EqualFold(pstate, "Canceled"):
+			// A failed ARM deployment is terminal: re-reading it returns the same
+			// failure forever. That used to end the sweep here, which meant
+			// correcting the module and re-resolving it changed nothing — the
+			// only escape was deleting the deployment in Azure by hand.
+			//
+			// A CHANGED template is a new attempt and falls through to resubmit;
+			// an unchanged one still reports the failure without re-submitting,
+			// so a genuinely broken template is not retried every sweep.
+			if hash != "" && hash == tgt.DeployedHash {
+				detail := p.deploymentFailure(ctx, tgt.SubscriptionID, rg, name, 0)
+				if detail == "" {
+					detail = "Deployment " + pstate + "."
+				}
+				slog.Warn("infra: deployment failed", "infra", tgt.InfraID, "tenant", tgt.TenantSlug, "detail", detail)
+				_ = p.store.SetInfraState(ctx, tgt.TenantSlug, tgt.InfraID, stateFailed, nil, detail)
+				return
+			}
+			slog.Info("infra: template changed since the failure — retrying", "infra", tgt.InfraID, "tenant", tgt.TenantSlug)
+		default:
+			_ = p.store.SetInfraState(ctx, tgt.TenantSlug, tgt.InfraID, stateProvisioning, nil, "Provisioning…")
+			return
+		}
+	}
 	var template map[string]any
 	if err := json.Unmarshal([]byte(armStr), &template); err != nil {
 		slog.Warn("infra: template is not valid ARM JSON; skipping", "infra", tgt.InfraID)
@@ -250,6 +263,9 @@ func (p *Provisioner) ensure(ctx context.Context, tgt store.InfraTarget) {
 	// state check above to find on the next sweep — record the rejection here or
 	// it is invisible. ARM preflight failures (quota, unsupported SKU, a name
 	// already taken) surface at exactly this point.
+	// Record what is being submitted before submitting it: if this attempt fails
+	// too, the next sweep must be able to tell that it was already tried.
+	_ = p.store.SetInfraDeployedHash(ctx, tgt.TenantSlug, tgt.InfraID, hash)
 	if err := p.submit(ctx, tgt.SubscriptionID, rg, name, template); err != nil {
 		slog.Warn("infra: submit deployment failed", "infra", tgt.InfraID, "tenant", tgt.TenantSlug, "err", trunc(err.Error()))
 		_ = p.store.SetInfraState(ctx, tgt.TenantSlug, tgt.InfraID, stateFailed, nil, armMessage(err.Error()))
@@ -663,6 +679,16 @@ func substituteTokens(arm, slug, region, vaultName, vaultRG string) string {
 		"{{vaultName}}", vaultName,
 		"{{vaultResourceGroup}}", vaultRG,
 	).Replace(arm)
+}
+
+// templateHash identifies a template, so a fixed one can be told from the one
+// that failed.
+func templateHash(arm string) string {
+	if strings.TrimSpace(arm) == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(arm))
+	return hex.EncodeToString(sum[:])[:16]
 }
 
 // resourceGroupOf pulls the resource group out of an ARM resource id.

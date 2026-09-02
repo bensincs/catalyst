@@ -678,3 +678,11 @@ ALTER TABLE tenants ADD COLUMN IF NOT EXISTS vault_id   text NOT NULL DEFAULT ''
 -- the bindings here; the column held no values, only names, so dropping it
 -- discards nothing sensitive.
 ALTER TABLE infrastructure DROP COLUMN IF EXISTS secret_params;
+
+-- Hash of the ARM template last submitted for an enabled infrastructure entity.
+-- A failed ARM deployment is terminal, so the provisioning sweep short-circuits
+-- on it — which meant fixing the module and re-resolving it changed nothing, and
+-- there was no way to ask for a retry short of deleting the deployment in Azure.
+-- Comparing the hash lets a CHANGED template resubmit exactly once, while an
+-- unchanged one still fails fast instead of hammering ARM every sweep.
+ALTER TABLE tenant_infrastructure ADD COLUMN IF NOT EXISTS deployed_hash text NOT NULL DEFAULT '';

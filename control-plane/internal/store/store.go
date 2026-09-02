@@ -1676,6 +1676,9 @@ type InfraTarget struct {
 	// actually exists before the deployment is submitted.
 	VaultName string
 	VaultID   string
+	// DeployedHash is the template last submitted. A failed deployment is
+	// terminal in ARM, so it is retried only when the template has changed.
+	DeployedHash string
 }
 
 // InfraTargets returns every enabled infrastructure entity (across tenants) that
@@ -1683,7 +1686,7 @@ type InfraTarget struct {
 func (s *Store) InfraTargets(ctx context.Context) ([]InfraTarget, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT t.id, coalesce(t.tenant_id,''), coalesce(t.subscription_id,''), i.id, i.arm_template, coalesce(ti.infra_state,''),
-		        coalesce(t.hosting_mode,'delegated'), coalesce(t.resource_group,''), coalesce(t.vault_name,''), coalesce(t.vault_id,'')
+		        coalesce(t.hosting_mode,'delegated'), coalesce(t.resource_group,''), coalesce(t.vault_name,''), coalesce(t.vault_id,''), coalesce(ti.deployed_hash,'')
 		 FROM tenant_infrastructure ti
 		 JOIN infrastructure i ON i.id = ti.infra_id
 		 JOIN tenants t ON t.id = ti.tenant_slug
@@ -1696,12 +1699,21 @@ func (s *Store) InfraTargets(ctx context.Context) ([]InfraTarget, error) {
 	for rows.Next() {
 		var it InfraTarget
 		if err := rows.Scan(&it.TenantSlug, &it.TenantID, &it.SubscriptionID, &it.InfraID, &it.ArmTemplate, &it.State,
-			&it.HostingMode, &it.ResourceGroup, &it.VaultName, &it.VaultID); err != nil {
+			&it.HostingMode, &it.ResourceGroup, &it.VaultName, &it.VaultID, &it.DeployedHash); err != nil {
 			return nil, err
 		}
 		out = append(out, it)
 	}
 	return out, rows.Err()
+}
+
+// SetInfraDeployedHash records the template a submit was made with, so a later
+// sweep can tell a fixed template from the one that failed.
+func (s *Store) SetInfraDeployedHash(ctx context.Context, tenantSlug, infraID, hash string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE tenant_infrastructure SET deployed_hash = $3 WHERE tenant_slug = $1 AND infra_id = $2`,
+		tenantSlug, infraID, hash)
+	return err
 }
 
 // SetInfraState records the provisioning state + resolved outputs of an enabled

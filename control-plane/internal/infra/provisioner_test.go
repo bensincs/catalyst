@@ -117,3 +117,23 @@ func TestResourceGroupOf(t *testing.T) {
 		t.Fatalf("expected empty for an unparseable id, got %q", got)
 	}
 }
+
+// A failed ARM deployment is terminal — re-reading it returns the same failure
+// forever. Correcting the module has to be able to trigger a retry, or the only
+// escape is deleting the deployment in Azure by hand.
+func TestTemplateHashDistinguishesAFixFromTheFailure(t *testing.T) {
+	broken := `{"resources":[{"name":"a"}]}`
+	fixed := `{"resources":[{"name":"b"}]}`
+
+	if templateHash(broken) == templateHash(fixed) {
+		t.Fatal("a corrected template hashes the same as the one that failed, so it would never be retried")
+	}
+	if templateHash(broken) != templateHash(broken) {
+		t.Fatal("hash is unstable, so an unchanged template would be resubmitted every sweep")
+	}
+	// An empty template must not compare equal to a recorded hash, or a target
+	// with nothing to deploy would look like a retry.
+	if templateHash("") != "" {
+		t.Fatal("empty template should hash to empty")
+	}
+}
