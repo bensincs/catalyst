@@ -131,3 +131,59 @@ one search replica, standard-tier Key Vault.
 Everything up to the images. When a reachable image source exists, the remaining
 unknowns are the chart's own behaviour: whether the ExternalSecrets bind, whether
 the ten services come up in the right order, and whether the frontend serves.
+
+## Provisioning run — findings
+
+Deployment reached **13 of ~20 resources in swedencentral**. Four defects were
+found and fixed, two blockers remain.
+
+### Fixed
+
+1. **Every private endpoint failed with the cluster vnet "not found".** The
+   application-infrastructure resource group is created in the *provisioner's*
+   region (uaenorth); this tenant's cluster is in swedencentral. A private
+   endpoint must be in the same region as its subnet, so the reference resolved
+   to nothing. `{{region}}` is now the tenant's own region.
+
+2. **Postgres rejected `GP_Standard_D2ds_v5`.** This API version wants a bare
+   SKU name with the tier passed separately, and the module hardcoded
+   `GeneralPurpose`, so a Burstable SKU could never have been selected. The tier
+   is now a parameter.
+
+3. **A failed deployment locked its own Key Vault name.** The module hardcoded
+   purge protection, so the vault created by the first (wrong-region) attempt is
+   recoverable-only until 2026-09-09 and cannot be recreated in the right
+   region. Purge protection is now a parameter (still defaulting to true).
+
+4. **`enablePurgeProtection: false` is rejected outright** — "cannot be set to
+   false ... irreversible". The property must be *absent*, not disabled, so it
+   is now `purgeProtection ? true : null`.
+
+### Blocked
+
+5. **Azure Cache for Redis cannot be created at all** in this subscription:
+   "Azure Cache for Redis is retiring, create Azure Managed Redis instead".
+   Premium *and* Standard are refused. Note `az deployment group validate`
+   returns success for these templates — the block only appears on a real
+   create, so validation cannot be trusted here.
+
+   Moving to Azure Managed Redis is not a SKU swap. It is a different resource
+   type (`Microsoft.Cache/redisEnterprise` plus a `databases` child), a
+   different private-endpoint group id, port 10000, different auth — and it
+   needs a private DNS zone the platform does not create:
+   `privatelink.<region>.redisenterprise.cache.azure.net`. The footprint's zone
+   list (`onboarding/footprint.bicep`) is flat and region-independent, so this
+   is a **platform footprint change**, not just a module change.
+
+6. **The nine first-party InSight images still do not exist anywhere
+   reachable**, so the application cannot run even once its infrastructure is
+   complete. See above.
+
+### Operational note
+
+The control plane's Postgres server (`cortex-cp-pg-6hy6uurw`) was found
+**Stopped** — Azure flexible servers auto-stop after 7 days idle. Symptoms were
+misleading: the API kept serving reads from an already-running revision while
+every write (PATCH) hung until the 240s ingress cap, and a newly deployed
+revision crash-looped on "startup probe failed". Worth a health check that
+distinguishes "cannot reach the database" from "starting".
