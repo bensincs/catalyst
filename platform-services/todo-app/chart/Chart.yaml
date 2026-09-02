@@ -5,9 +5,9 @@ description: FastAPI + PostgreSQL todo app. Database connection values are desig
 type: application
 
 # Chart version — bump on every chart change.
-version: 0.1.1
+version: 0.1.2
 # Version of the app this chart deploys (used as the default image tag).
-appVersion: "0.1.1"
+appVersion: "0.1.2"
 
 keywords:
   - todo

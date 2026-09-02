@@ -36,7 +36,7 @@
     {
       "name": "todo db",
       "description": "Azure Database for PostgreSQL Flexible Server. Reads its admin password from the tenant's own Key Vault at deploy time rather than being handed one.",
-      "bicepModule": "br:cortexcpacr6hy6uurw.azurecr.io/bicep/todo-app:0.1.1",
+      "bicepModule": "br:cortexcpacr6hy6uurw.azurecr.io/bicep/todo-app:0.1.2",
       "bicepParams": {
         "name": "todo-{{tenantHash}}",
         "databaseName": "todos",
@@ -58,7 +58,7 @@
       "namespace": "todo-app",
       "repoURL": "oci://cortexcpacr6hy6uurw.azurecr.io/charts",
       "chart": "todo-app",
-      "targetRevision": "0.1.1",
+      "targetRevision": "0.1.2",
       "values": "image:\n  repository: cortexcpacr6hy6uurw.azurecr.io/images/todo-app\nimagePullSecrets:\n  - name: cortex-registry\n",
       "exposeService": "todo-app",
       "exposePort": 80,
