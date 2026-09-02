@@ -9,8 +9,8 @@ import (
 )
 
 func TestSubstituteTokens(t *testing.T) {
-	arm := `{"name":"cortexkv{{tenantHash}}","tenant":"{{tenant}}","loc":"{{region}}","vault":"{{vaultName}}"}`
-	out := substituteTokens(arm, "t-cff8707ddd78", "uaenorth", "cortex-kv-abc123")
+	arm := `{"name":"cortexkv{{tenantHash}}","tenant":"{{tenant}}","loc":"{{region}}","vault":"{{vaultName}}","vrg":"{{vaultResourceGroup}}"}`
+	out := substituteTokens(arm, "t-cff8707ddd78", "uaenorth", "cortex-kv-abc123", "cortex-t-abc")
 	if strings.Contains(out, "{{") {
 		t.Fatalf("tokens not substituted: %s", out)
 	}
@@ -29,6 +29,12 @@ func TestSubstituteTokens(t *testing.T) {
 	// own credential from it — a name, never a value.
 	if !strings.Contains(out, `"vault":"cortex-kv-abc123"`) {
 		t.Fatalf("vaultName token not applied: %s", out)
+	}
+	// The vault lives in the tenant's footprint resource group, which is NOT the
+	// one an application's infrastructure deploys into — a scope-less `existing`
+	// reference would look in the wrong place.
+	if !strings.Contains(out, `"vrg":"cortex-t-abc"`) {
+		t.Fatalf("vaultResourceGroup token not applied: %s", out)
 	}
 	if !strings.Contains(out, "cortexkv"+h) {
 		t.Fatalf("hash token not applied: %s", out)
@@ -99,5 +105,15 @@ func TestMissingVaultSecretsIgnoresTemplatesThatReadNone(t *testing.T) {
 		`{"resources":[{"properties":{"parameters":{"name":{"value":"x"}},"template":{}}}]}`)
 	if len(got) != 0 {
 		t.Fatalf("held a deployment that reads no vault secret: %v", got)
+	}
+}
+
+func TestResourceGroupOf(t *testing.T) {
+	id := "/subscriptions/s/resourceGroups/cortex-t-abc/providers/Microsoft.KeyVault/vaults/kv"
+	if got := resourceGroupOf(id); got != "cortex-t-abc" {
+		t.Fatalf("resourceGroupOf = %q", got)
+	}
+	if got := resourceGroupOf("nonsense"); got != "" {
+		t.Fatalf("expected empty for an unparseable id, got %q", got)
 	}
 }

@@ -216,7 +216,7 @@ func (p *Provisioner) ensure(ctx context.Context, tgt store.InfraTarget) {
 	// Substitute per-tenant tokens (e.g. {{tenantHash}} for a globally-unique Key
 	// Vault name) into the template before deploying, so a single platform-authored
 	// infra yields tenant-unique resource names instead of colliding across tenants.
-	armStr := substituteTokens(tgt.ArmTemplate, tgt.TenantSlug, p.region, tgt.VaultName)
+	armStr := substituteTokens(tgt.ArmTemplate, tgt.TenantSlug, p.region, tgt.VaultName, resourceGroupOf(tgt.VaultID))
 	var template map[string]any
 	if err := json.Unmarshal([]byte(armStr), &template); err != nil {
 		slog.Warn("infra: template is not valid ARM JSON; skipping", "infra", tgt.InfraID)
@@ -655,13 +655,32 @@ func parseResourceID(id string) (sub, ns, rtype string, ok bool) {
 //	{{tenant}}     — the tenant slug (e.g. t-cff8707ddd78)
 //	{{tenantHash}} — a short, stable hash of the slug (safe for length/charset-limited names)
 //	{{region}}     — the deployment region
-func substituteTokens(arm, slug, region, vaultName string) string {
+func substituteTokens(arm, slug, region, vaultName, vaultRG string) string {
 	return strings.NewReplacer(
 		"{{tenant}}", slug,
 		"{{tenantHash}}", tenantHash(slug),
 		"{{region}}", region,
 		"{{vaultName}}", vaultName,
+		"{{vaultResourceGroup}}", vaultRG,
 	).Replace(arm)
+}
+
+// resourceGroupOf pulls the resource group out of an ARM resource id.
+//
+// Needed because the tenant's vault lives in its FOOTPRINT resource group while
+// an application's infrastructure deploys into a different one. A Bicep
+// `existing` reference with no scope resolves in the deploying resource group,
+// so without this the vault is looked for in the wrong place and ARM answers
+// KeyVaultParameterReferenceNotFound — which reads as a missing vault rather
+// than a misaddressed one.
+func resourceGroupOf(id string) string {
+	parts := strings.Split(strings.Trim(id, "/"), "/")
+	for i, seg := range parts {
+		if strings.EqualFold(seg, "resourceGroups") && i+1 < len(parts) {
+			return parts[i+1]
+		}
+	}
+	return ""
 }
 
 // tenantHash is a short, stable, lowercase-alphanumeric hash of a tenant slug —

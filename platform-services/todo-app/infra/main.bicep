@@ -34,6 +34,9 @@ param administratorLogin string = 'todoadmin'
 @description('The tenant\'s own Key Vault, holding the credential. Pass {{vaultName}} and the control plane fills in the tenant\'s vault.')
 param vaultName string
 
+@description('Resource group holding that vault. Pass {{vaultResourceGroup}}. The vault lives in the tenant\'s footprint resource group, which is NOT the one this deploys into.')
+param vaultResourceGroup string
+
 @description('Name of the vault secret holding the admin password. This is the name a secret store materialises as: set-<secret store id>--<key>.')
 param passwordSecretName string = 'set-todo-database--password'
 
@@ -62,8 +65,16 @@ param allowAzureServices bool = true
 
 // Existing, because the vault belongs to the tenant and is created by its
 // footprint — this module reads from it and never writes to it.
+//
+// The scope is explicit and load-bearing. An application's infrastructure
+// deploys into its own resource group, while the vault sits in the tenant's
+// footprint one; a scope-less `existing` resolves in the DEPLOYING group, so
+// ARM looks for the vault in the wrong place and fails the deployment with
+// KeyVaultParameterReferenceNotFound — which reads as a missing vault rather
+// than a misaddressed one.
 resource vault 'Microsoft.KeyVault/vaults@2023-07-01' existing = {
   name: vaultName
+  scope: resourceGroup(vaultResourceGroup)
 }
 
 module server 'server.bicep' = {

@@ -36,6 +36,7 @@
         "databaseName": "todos",
         "administratorLogin": "todoadmin",
         "vaultName": "{{vaultName}}",
+        "vaultResourceGroup": "{{vaultResourceGroup}}",
         "passwordSecretName": "set-todo-database--password",
         "skuName": "Standard_B1ms",
         "skuTier": "Burstable",
