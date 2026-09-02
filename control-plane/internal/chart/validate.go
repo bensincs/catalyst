@@ -31,6 +31,13 @@ var chartNameRe = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._/-]*$`)
 // leading dash — "-1.0.0" would be read as a flag.
 var versionRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.+_~^*<>=-]*$`)
 
+// ValidateRef checks the three caller-supplied parts of a chart reference.
+// Exported so the authoring API can reject a bad reference at write time: a
+// stored one is handed to Argo later, which runs its own helm with it, so
+// refusing it only at inspection time leaves the value to fail somewhere less
+// obvious.
+func ValidateRef(repoURL, chart, version string) error { return validateRef(repoURL, chart, version) }
+
 // validateRef checks the three caller-supplied parts of a chart reference.
 func validateRef(repoURL, chart, version string) error {
 	repoURL, chart, version = strings.TrimSpace(repoURL), strings.TrimSpace(chart), strings.TrimSpace(version)

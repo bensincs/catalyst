@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/inception42/cortex/control-plane/internal/auth"
+	"github.com/inception42/cortex/control-plane/internal/chart"
 	"github.com/inception42/cortex/control-plane/internal/model"
 	"github.com/inception42/cortex/control-plane/internal/store"
 	"github.com/inception42/cortex/shared"
@@ -92,6 +93,11 @@ func (in appInput) validate() string {
 	}
 	if strings.TrimSpace(in.RepoURL) == "" || strings.TrimSpace(in.Chart) == "" {
 		return "repoURL and chart are required"
+	}
+	// The same rules inspection applies. Without this an app can be stored with
+	// a reference that only fails later, inside Argo's own helm.
+	if err := chart.ValidateRef(in.RepoURL, in.Chart, in.TargetRevision); err != nil {
+		return err.Error()
 	}
 	return ""
 }
