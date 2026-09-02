@@ -61,6 +61,13 @@ type Tenant struct {
 	ResourceGroup         string `json:"resourceGroup,omitempty"`
 	ReconcilerPrincipalID string `json:"-"` // pre-created reconciler MI oid (platform-hosted); internal
 
+	// VaultReady reports whether the tenant's own Key Vault exists yet — it is
+	// created by the footprint, so a tenant that has not finished provisioning
+	// has nowhere to put a secret. Exposed as a boolean and never as the vault's
+	// address, because knowing a secret store can be filled in is the operator's
+	// question; where the values live is not something the console needs to say.
+	VaultReady bool `json:"vaultReady"`
+
 	// Footprint shape: free-form config the admin sets before stamping (AKS node
 	// size/count).
 	FootprintConfig map[string]any `json:"footprintConfig,omitempty"`

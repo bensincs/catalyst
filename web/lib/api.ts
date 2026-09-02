@@ -34,6 +34,7 @@ const API_URL = process.env.CORTEX_API_URL ?? "http://localhost:8080";
 /* ── Raw API shapes (mirror the Go control-plane) ─────────────────────────── */
 
 interface ApiTenant {
+  vaultReady?: boolean | null;
   id: string;
   name: string;
   tenantId: string;
@@ -118,9 +119,15 @@ interface ApiTenantContext {
 // The access token (minted for this API) lives in the encrypted, httpOnly
 // session cookie. We read + decode it on the server and forward it as a Bearer
 // token; the Go API validates it against Entra's JWKS. Never sent to the browser.
-const SESSION_COOKIES = ["authjs.session-token", "__Secure-authjs.session-token"];
+const SESSION_COOKIES = [
+  "authjs.session-token",
+  "__Secure-authjs.session-token",
+];
 
-async function getAccessToken(): Promise<{ token: string; tenantSlug: string }> {
+async function getAccessToken(): Promise<{
+  token: string;
+  tenantSlug: string;
+}> {
   const store = await cookies();
   for (const base of SESSION_COOKIES) {
     let raw = store.get(base)?.value;
@@ -153,9 +160,14 @@ async function getAccessToken(): Promise<{ token: string; tenantSlug: string }> 
 }
 
 // authHeaders builds the Authorization + optional X-Cortex-Tenant headers.
-async function authHeaders(extra?: Record<string, string>): Promise<Record<string, string>> {
+async function authHeaders(
+  extra?: Record<string, string>,
+): Promise<Record<string, string>> {
   const { token, tenantSlug } = await getAccessToken();
-  const h: Record<string, string> = { Authorization: `Bearer ${token}`, ...extra };
+  const h: Record<string, string> = {
+    Authorization: `Bearer ${token}`,
+    ...extra,
+  };
   if (tenantSlug) h["X-Cortex-Tenant"] = tenantSlug;
   return h;
 }
@@ -190,7 +202,11 @@ export async function apiGet<T>(path: string): Promise<T> {
   });
   if (!res.ok) {
     const body = await res.text().catch(() => "");
-    throw new ApiError(res.status, `GET ${path} → ${res.status} ${body}`, errorCode(body));
+    throw new ApiError(
+      res.status,
+      `GET ${path} → ${res.status} ${body}`,
+      errorCode(body),
+    );
   }
   return (await res.json()) as T;
 }
@@ -203,7 +219,9 @@ export async function apiSend<T = unknown>(
 ): Promise<T> {
   const res = await fetch(`${API_URL}${path}`, {
     method,
-    headers: await authHeaders(body !== undefined ? { "Content-Type": "application/json" } : undefined),
+    headers: await authHeaders(
+      body !== undefined ? { "Content-Type": "application/json" } : undefined,
+    ),
     body: body === undefined ? undefined : JSON.stringify(body),
     cache: "no-store",
   });
@@ -253,10 +271,13 @@ function toContext(t: ApiTenant): TenantContextInfo {
     lastHeartbeatMs: ms(t.lastHeartbeat),
     lifecycle: (t.lifecycle ?? "enrolling") as Lifecycle,
     enabled: t.enabled ?? true,
-    hostingMode: (t.hostingMode as TenantContextInfo["hostingMode"]) ?? "delegated",
-    footprintConfig: (t.footprintConfig as Record<string, unknown> | null) ?? {},
+    hostingMode:
+      (t.hostingMode as TenantContextInfo["hostingMode"]) ?? "delegated",
+    footprintConfig:
+      (t.footprintConfig as Record<string, unknown> | null) ?? {},
     ingress: t.ingress ?? { tlsReady: false, oidcSecretSet: false },
     cluster: toCluster(t.cluster),
+    vaultReady: t.vaultReady ?? false,
   };
 }
 
@@ -440,7 +461,14 @@ interface ApiCatalogAgent {
   owner?: string;
   definition?: AgentDefinition;
   latestVersion?: string;
-  versions?: { version: string; channel: string; notes?: string; rolloutPercent: number; definition: AgentDefinition; createdAt: string }[];
+  versions?: {
+    version: string;
+    channel: string;
+    notes?: string;
+    rolloutPercent: number;
+    definition: AgentDefinition;
+    createdAt: string;
+  }[];
   createdAt: string;
   ownerName?: string;
   platform?: boolean;
@@ -454,7 +482,9 @@ function toCatalogAgent(a: ApiCatalogAgent): CatalogAgent {
   // the single current definition from `definition` when present, else the latest
   // version's definition.
   const versions = a.versions ?? [];
-  const latest = versions.find((v) => v.version === a.latestVersion) ?? versions[versions.length - 1];
+  const latest =
+    versions.find((v) => v.version === a.latestVersion) ??
+    versions[versions.length - 1];
   return {
     id: a.id,
     name: a.name,
@@ -472,7 +502,8 @@ function toCatalogAgent(a: ApiCatalogAgent): CatalogAgent {
   };
 }
 
-export const getCatalog = async (): Promise<CatalogAgent[]> => (await getResources()).agents;
+export const getCatalog = async (): Promise<CatalogAgent[]> =>
+  (await getResources()).agents;
 
 interface ApiRegistryRow extends ApiTenant {
   entitledAgents: string[];
@@ -483,28 +514,30 @@ interface ApiRegistryRow extends ApiTenant {
   entitledInfrastructure: string[];
 }
 
-export const getTenantsRegistry = cache(async (): Promise<TenantRegistryRow[]> => {
-  const c = await apiGet<{ tenants: ApiRegistryRow[] }>("/api/tenants");
-  return (c.tenants ?? []).map((t) => ({
-    id: t.id,
-    name: t.name,
-    tenantId: t.tenantId,
-    region: t.region,
-    plan: t.plan as Plan,
-    enrollment: t.enrollment as EnrollmentStatus,
-    agentCount: t.agentCount,
-    lastHeartbeatMs: ms(t.lastHeartbeat),
-    monthlyCalls: t.monthlyCalls,
-    entitledAgents: t.entitledAgents ?? [],
-    entitledCount: t.entitledCount,
-    entitledStores: t.entitledStores ?? [],
-    entitledSecretSets: t.entitledSecretSets ?? [],
-    entitledDeployments: t.entitledDeployments ?? [],
-    entitledInfrastructure: t.entitledInfrastructure ?? [],
-    lifecycle: (t.lifecycle ?? "enrolling") as Lifecycle,
-    enabled: t.enabled ?? true,
-  }));
-});
+export const getTenantsRegistry = cache(
+  async (): Promise<TenantRegistryRow[]> => {
+    const c = await apiGet<{ tenants: ApiRegistryRow[] }>("/api/tenants");
+    return (c.tenants ?? []).map((t) => ({
+      id: t.id,
+      name: t.name,
+      tenantId: t.tenantId,
+      region: t.region,
+      plan: t.plan as Plan,
+      enrollment: t.enrollment as EnrollmentStatus,
+      agentCount: t.agentCount,
+      lastHeartbeatMs: ms(t.lastHeartbeat),
+      monthlyCalls: t.monthlyCalls,
+      entitledAgents: t.entitledAgents ?? [],
+      entitledCount: t.entitledCount,
+      entitledStores: t.entitledStores ?? [],
+      entitledSecretSets: t.entitledSecretSets ?? [],
+      entitledDeployments: t.entitledDeployments ?? [],
+      entitledInfrastructure: t.entitledInfrastructure ?? [],
+      lifecycle: (t.lifecycle ?? "enrolling") as Lifecycle,
+      enabled: t.enabled ?? true,
+    }));
+  },
+);
 
 /* ── Memberships (platform-hosted tenant assignments) ─────────────────────── */
 
@@ -522,12 +555,14 @@ export const getTombstones = cache(async (): Promise<Tombstone[]> => {
   return r.tombstones ?? [];
 });
 
-export const getTenantMembers = cache(async (slug: string): Promise<TenantMember[]> => {
-  const r = await apiGet<{ members: TenantMember[] }>(
-    `/api/tenants/${encodeURIComponent(slug)}/members`,
-  );
-  return r.members ?? [];
-});
+export const getTenantMembers = cache(
+  async (slug: string): Promise<TenantMember[]> => {
+    const r = await apiGet<{ members: TenantMember[] }>(
+      `/api/tenants/${encodeURIComponent(slug)}/members`,
+    );
+    return r.members ?? [];
+  },
+);
 
 export interface UserOption {
   oid: string;
@@ -538,7 +573,9 @@ export interface UserOption {
 /** Search previously-signed-in users (name/email) for the members type-ahead.
  *  Not cached — called live as the admin types. */
 export async function fetchUserSearch(q: string): Promise<UserOption[]> {
-  const r = await apiGet<{ users: UserOption[] }>(`/api/users/search?q=${encodeURIComponent(q)}`);
+  const r = await apiGet<{ users: UserOption[] }>(
+    `/api/users/search?q=${encodeURIComponent(q)}`,
+  );
   return r.users ?? [];
 }
 
@@ -623,7 +660,9 @@ interface ApiMemoryStore {
 
 /** Fill in a complete definition from a possibly-partial API payload, so the UI
  * always has concrete values (matching the server + Foundry defaults). */
-function normalizeStoreDefinition(d?: Partial<MemoryStoreDefinition> | null): MemoryStoreDefinition {
+function normalizeStoreDefinition(
+  d?: Partial<MemoryStoreDefinition> | null,
+): MemoryStoreDefinition {
   return {
     chatModel: d?.chatModel || "gpt-4o",
     embeddingModel: d?.embeddingModel || "text-embedding-3-small",
@@ -676,7 +715,8 @@ const toSecretSet = (s: ApiSecretSet): SecretSet => ({
   detail: s.detail,
 });
 
-export const getSecretSets = async (): Promise<SecretSet[]> => (await getResources()).secretSets;
+export const getSecretSets = async (): Promise<SecretSet[]> =>
+  (await getResources()).secretSets;
 
 /* ── Combined resource fetch (one call powers every catalog view) ─────────── */
 
@@ -720,7 +760,10 @@ export interface Upstream {
   state?: string;
 }
 
-export const getUpstreams = async (): Promise<{ registry: string; upstreams: Upstream[] }> => {
+export const getUpstreams = async (): Promise<{
+  registry: string;
+  upstreams: Upstream[];
+}> => {
   const d = await apiGet<{ registry?: string; upstreams?: Upstream[] | null }>(
     "/api/platform/registry/upstreams",
   );

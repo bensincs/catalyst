@@ -230,7 +230,8 @@ const tenantCols = `id, name, coalesce(tenant_id,''), region, plan, enrollment, 
 	coalesce(hosting_mode,'delegated'), coalesce(resource_group,''), coalesce(reconciler_principal_id,''), coalesce(footprint_config,'{}'),
 	coalesce(apps_domain,''), coalesce(dns_state,''), coalesce(dns_detail,''), coalesce(dns_nameservers,'{}'),
 	(tls_expires_at IS NOT NULL AND tls_expires_at > now()), tls_expires_at, coalesce(tls_detail,''),
-	coalesce(oidc_issuer,''), coalesce(oidc_client_id,''), (coalesce(oidc_client_secret,'') <> '')`
+	coalesce(oidc_issuer,''), coalesce(oidc_client_id,''), (coalesce(oidc_client_secret,'') <> ''),
+	(coalesce(vault_id,'') <> '')`
 
 func scanTenant(row pgx.Row) (model.Tenant, error) {
 	var t model.Tenant
@@ -245,7 +246,8 @@ func scanTenant(row pgx.Row) (model.Tenant, error) {
 		&t.HostingMode, &t.ResourceGroup, &t.ReconcilerPrincipalID, &footprintConfig,
 		&t.Ingress.AppsDomain, &t.Ingress.DNSState, &t.Ingress.DNSDetail, &t.Ingress.DNSNameservers,
 		&t.Ingress.TLSReady, &tlsExpires, &t.Ingress.TLSDetail,
-		&t.Ingress.OIDCIssuer, &t.Ingress.OIDCClientID, &t.Ingress.OIDCSecretSet)
+		&t.Ingress.OIDCIssuer, &t.Ingress.OIDCClientID, &t.Ingress.OIDCSecretSet,
+		&t.VaultReady)
 	if tlsExpires != nil {
 		v := tlsExpires.UTC().Format(time.RFC3339)
 		t.Ingress.TLSExpiresAt = &v
@@ -1237,6 +1239,7 @@ func (s *Store) TenantsRegistry(ctx context.Context) ([]model.TenantRegistryRow,
 			&r.Ingress.AppsDomain, &r.Ingress.DNSState, &r.Ingress.DNSDetail, &r.Ingress.DNSNameservers,
 			&r.Ingress.TLSReady, &rowTLSExpires, &r.Ingress.TLSDetail,
 			&r.Ingress.OIDCIssuer, &r.Ingress.OIDCClientID, &r.Ingress.OIDCSecretSet,
+			&r.VaultReady,
 			&r.EntitledAgents, &r.EntitledStores, &r.EntitledDeployments, &r.EntitledInfrastructure, &r.EntitledSecretSets); err != nil {
 			return nil, err
 		}

@@ -16,7 +16,8 @@ export type Health =
   | "disabled" // inert / not enabled — neutral (gray)
   | "unknown"; // enabled but no live reconciler has confirmed — neutral (gray)
 
-export type EnrollmentStatus = "bound" | "pending" | "suspended" | "offboarding";
+export type EnrollmentStatus =
+  "bound" | "pending" | "suspended" | "offboarding";
 
 /**
  * Operational lifecycle, derived by the control plane from enrollment + how
@@ -27,7 +28,15 @@ export type EnrollmentStatus = "bound" | "pending" | "suspended" | "offboarding"
 // delegation) → provisioning (Cortex building the environment) → enrolling
 // (environment ready, awaiting the reconciler's first heartbeat) → live; degraded
 // when a bound reconciler goes stale or provisioning failed; suspended when cut off.
-export type Lifecycle = "pending" | "draft" | "provisioning" | "failed" | "enrolling" | "live" | "degraded" | "suspended";
+export type Lifecycle =
+  | "pending"
+  | "draft"
+  | "provisioning"
+  | "failed"
+  | "enrolling"
+  | "live"
+  | "degraded"
+  | "suspended";
 
 export type Plan = "enterprise" | "sovereign" | "team";
 
@@ -100,7 +109,8 @@ export interface ClusterInfo {
 }
 
 /** The kinds of catalog entity a dependency edge can point at. */
-export type DepKind = "infrastructure" | "application" | "agent" | "memory_store" | "secret_set";
+export type DepKind =
+  "infrastructure" | "application" | "agent" | "memory_store" | "secret_set";
 
 /** A typed dependency edge in the catalog graph. Allowed edges (enforced in the
  *  UI pickers): infrastructure → infrastructure | secret_set; application →
@@ -159,7 +169,7 @@ export interface ChartInterface {
   description?: string;
   defaults: Record<string, unknown>; // values.yaml → the default value tree
   schema?: Record<string, unknown>; // values.schema.json (JSON Schema), when present
-  services?: ChartService[];        // Services this release renders, for the exposure picker
+  services?: ChartService[]; // Services this release renders, for the exposure picker
 }
 
 /** A typed dependency candidate ({kind,id,name}) offered in a form's dependency
@@ -272,6 +282,10 @@ export interface TenantContextInfo {
   footprintConfig: Record<string, unknown>;
   ingress: TenantIngress;
   cluster: ClusterInfo;
+  /** Whether the tenant's own Key Vault exists yet. It is created by the
+   *  footprint, so a tenant still provisioning has nowhere to put a secret —
+   *  which is why the secret store enable action is held until this is true. */
+  vaultReady: boolean;
 }
 
 export interface FleetStats {
@@ -410,7 +424,11 @@ export const AZURE_REGIONS: { id: string; label: string }[] = [
 
 export const ENV_META: Record<
   Environment,
-  { label: string; short: string; tone: "neutral" | "info" | "warning" | "danger" }
+  {
+    label: string;
+    short: string;
+    tone: "neutral" | "info" | "warning" | "danger";
+  }
 > = {
   dev: { label: "Development", short: "DEV", tone: "neutral" },
   qa: { label: "QA", short: "QA", tone: "info" },

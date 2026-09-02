@@ -29,9 +29,14 @@ import styles from "./secret-stores-view.module.css";
 export function SecretStoresView({
   role,
   sets,
+  vaultReady = true,
 }: {
   role: Role;
   sets: SecretSet[];
+  /** Whether this tenant's own Key Vault exists yet. Values have nowhere to go
+   *  until it does, so offering the action would only produce an error the
+   *  tenant cannot act on. Irrelevant in the platform view. */
+  vaultReady?: boolean;
 }) {
   const router = useRouter();
   const { toast } = useToast();
@@ -79,6 +84,14 @@ export function SecretStoresView({
           </ButtonLink>
         }
       />
+
+      {!platform && !vaultReady && sets.length > 0 && (
+        <p className={styles.noVault}>
+          Your Azure environment is still being set up. Secret values are stored
+          in your own key vault, which is created as part of that — you can fill
+          these in once it finishes.
+        </p>
+      )}
 
       {sets.length === 0 ? (
         <div className={shared.panelEmpty}>
@@ -232,6 +245,12 @@ export function SecretStoresView({
                           variant="primary"
                           icon={Power}
                           loading={pending}
+                          disabled={!vaultReady}
+                          title={
+                            vaultReady
+                              ? undefined
+                              : "Your key vault is still being provisioned"
+                          }
                           onClick={() => setEditing(s)}
                         >
                           Enable
