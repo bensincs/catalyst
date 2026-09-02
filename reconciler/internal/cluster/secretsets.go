@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -71,10 +72,18 @@ func (c *Client) fetchSecret(ctx context.Context, vaultURI, name string) (string
 }
 
 // secretSetSecret renders the Kubernetes Secret for one set.
+//
+// Values go in `data`, base64-encoded, NOT in the friendlier `stringData`.
+// stringData is write-only: the API server folds it into data and clears it, so
+// server-side apply records ownership of a field that does not persist. Dropping
+// a key then removed it from the apply's ownership set while leaving the value
+// sitting in data forever — an author who removed a key from a secret store, or
+// revoked one, would have been told it was gone while the cluster kept serving
+// it. Owning `data` directly is what makes a removed key actually disappear.
 func secretSetSecret(name, namespace, setID string, data map[string]string) *unstructured.Unstructured {
 	sd := make(map[string]any, len(data))
 	for k, v := range data {
-		sd[k] = v
+		sd[k] = base64.StdEncoding.EncodeToString([]byte(v))
 	}
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "v1",
@@ -85,7 +94,7 @@ func secretSetSecret(name, namespace, setID string, data map[string]string) *uns
 			"namespace": namespace,
 			"labels":    sysLabels(map[string]any{labelSecretSet: setID}),
 		},
-		"stringData": sd,
+		"data": sd,
 	}}
 }
 
