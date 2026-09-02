@@ -15,8 +15,12 @@ WORKDIR /app
 
 # Copy only dependency metadata first for better layer caching.
 COPY pyproject.toml uv.lock ./
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-install-project --no-dev
+# No BuildKit cache mount here on purpose. It saves a little time locally but
+# makes the image buildable ONLY under BuildKit — and the platform builds these
+# in ACR Tasks, which uses a classic builder and fails with "the --mount option
+# requires BuildKit". Layer caching on the two files copied above already gives
+# most of the benefit.
+RUN uv sync --frozen --no-install-project --no-dev
 
 # --------------------------------------------------------------------------- #
 # runtime: slim image containing the venv + application source only
