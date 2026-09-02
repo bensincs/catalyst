@@ -1,3 +1,4 @@
+import { secretSetName } from "@/lib/types";
 import type { Application, Dependency } from "@/lib/types";
 
 /** An app's dependency edges, repaired from its wiring.
@@ -76,8 +77,15 @@ const SECRET_KEY_PREFIX = "key:";
  *  believe they had wired a credential when they had wired a label. So the label
  *  says which of the two it is.
  */
-export function outputLabel(output: string): string {
-  if (output === "secretName") return "Secret name";
+export function outputLabel(output: string, secretSetId?: string): string {
+  if (output === "secretName") {
+    // Show the name it actually resolves to, not just that there is one. The key
+    // output already names its key, so leaving this one abstract made the pair
+    // read as different KINDS of thing when they are both just names.
+    return secretSetId
+      ? `Secret name: ${secretSetName(secretSetId)}`
+      : "Secret name";
+  }
   if (output.startsWith(SECRET_KEY_PREFIX)) {
     return `Key name: ${output.slice(SECRET_KEY_PREFIX.length)}`;
   }

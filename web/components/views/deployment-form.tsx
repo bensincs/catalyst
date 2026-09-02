@@ -211,7 +211,10 @@ export function DeploymentForm({
     const { sourceKind, sourceId, output } = parseWireToken(token);
     return {
       tag: depNameByKey.get(`${sourceKind}:${sourceId}`) ?? sourceId,
-      label: labelForOutput(output),
+      label: labelForOutput(
+        output,
+        sourceKind === "secret_set" ? sourceId : undefined,
+      ),
     };
   };
 

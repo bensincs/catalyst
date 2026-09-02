@@ -116,7 +116,15 @@ describe("outputLabel", () => {
     }
   });
 
-  it("reads the Secret name as prose", () => {
+  it("shows the Secret name it resolves to", () => {
+    // Symmetry with the key output: both entries name a concrete thing, so an
+    // author can read what a binding produces without leaving the picker.
+    expect(outputLabel("secretName", "todo-database")).toBe(
+      "Secret name: cortex-secret-todo-database",
+    );
+  });
+
+  it("falls back to the bare label when the store is unknown", () => {
     expect(outputLabel("secretName")).toBe("Secret name");
   });
 });
