@@ -32,7 +32,6 @@ import (
 // off, in which case there are no tenant vaults to write to).
 type SecretWriter interface {
 	WriteTenantSecrets(ctx context.Context, vaultID, setID string, values map[string]string) ([]string, error)
-	DeleteTenantSecrets(ctx context.Context, vaultID, setID string, keys []string)
 }
 
 // SetSecretWriter wires tenant-vault access, which the provisioner owns.
@@ -124,24 +123,18 @@ func (s *Server) enableSecretSet(w http.ResponseWriter, r *http.Request, slug, r
 	return s.store.EnableSecretSet(r.Context(), slug, rid, written, vaultURI)
 }
 
-// disableSecretSet turns a set off and reclaims its values from the tenant's
-// vault. This is the only path that deletes them: an incidental prune leaves
-// them alone, because the control plane cannot read a value back and so could
-// not restore one it removed by mistake.
+// disableSecretSet turns a set off. The reconciler then removes the Kubernetes
+// Secret from every namespace it was delivered to, so nothing can read the
+// values in the cluster any more.
+//
+// The values themselves stay in the tenant's own Key Vault. That is not an
+// oversight: the control plane writes them through the ARM management plane,
+// which offers no delete for a secret, so it has no way to remove them — the
+// same asymmetry that stops it reading them. They are in the tenant's own
+// subscription, under the tenant's own control, and re-enabling the set picks
+// them up again rather than demanding they be typed a second time.
 func (s *Server) disableSecretSet(ctx context.Context, slug, rid string) error {
-	keys, err := s.store.SecretSetKeysSet(ctx, slug, rid)
-	if err != nil {
-		return err
-	}
-	if err := s.store.DisableSecretSet(ctx, slug, rid); err != nil {
-		return err
-	}
-	if s.secrets != nil && len(keys) > 0 {
-		if vaultID, _, err := s.store.TenantVault(ctx, slug); err == nil && vaultID != "" {
-			s.secrets.DeleteTenantSecrets(ctx, vaultID, rid, keys)
-		}
-	}
-	return nil
+	return s.store.DisableSecretSet(ctx, slug, rid)
 }
 
 // secretSetWriteAllowed authorises editing or deleting a secret set: the

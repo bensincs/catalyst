@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/inception42/cortex/shared"
@@ -88,8 +89,9 @@ func secretSetSecret(name, namespace, setID string, data map[string]string) *uns
 	}}
 }
 
-// reconcileSecretSets fetches each set's values and writes them into the
-// namespaces of the applications that depend on it.
+// reconcileSecretSets fetches each set's values, writes them into the namespaces
+// of the applications that depend on it, and removes the ones that should no
+// longer be there.
 //
 // A set is reported blocked rather than partially written when any key fails to
 // read: a Secret missing one key fails later as an obscure crash loop inside
@@ -158,7 +160,44 @@ func (k *kube) reconcileSecretSets(ctx context.Context, c *Client, sets []shared
 		}
 		out = append(out, st)
 	}
+	k.pruneSecretSets(ctx, sets)
 	return out
+}
+
+// pruneSecretSets deletes Secrets this reconciler wrote for a set that is no
+// longer delivered here — the set was disabled, or the application that pulled
+// it into this namespace was removed.
+//
+// This needs its own pass rather than riding the generic prune: that one selects
+// on labelManaged=true,labelSystem!=true, and these carry labelSystem, so they
+// were excluded from every existing GC path. Without this, disabling a secret
+// store left live credentials sitting in the namespace, readable by anything
+// running there — the opposite of what disabling it is for.
+func (k *kube) pruneSecretSets(ctx context.Context, sets []shared.DesiredSecretSet) {
+	// Namespace+name pairs that should exist after this reconcile.
+	keep := map[string]bool{}
+	for _, s := range sets {
+		if !s.Complete || s.VaultURI == "" {
+			continue
+		}
+		for _, ns := range s.Namespaces {
+			keep[ns+"/"+s.SecretName] = true
+		}
+	}
+	// Select on the secret-set label, so a chart's own Secret can never match.
+	list, err := k.dyn.Resource(secGVR).List(ctx, metav1.ListOptions{LabelSelector: labelSecretSet})
+	if err != nil {
+		return
+	}
+	for i := range list.Items {
+		ns, n := list.Items[i].GetNamespace(), list.Items[i].GetName()
+		if keep[ns+"/"+n] {
+			continue
+		}
+		if err := k.dyn.Resource(secGVR).Namespace(ns).Delete(ctx, n, metav1.DeleteOptions{}); err != nil {
+			slog.Warn("cluster: prune secret set failed", "ns", ns, "name", n, "err", trunc(err.Error()))
+		}
+	}
 }
 
 func plural(n int) string {

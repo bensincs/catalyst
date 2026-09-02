@@ -16,12 +16,23 @@ import {
   enableSecretSet,
   type ActionResult,
 } from "@/lib/actions";
-import { outstandingKeys, secretSetName, type Role, type SecretSet } from "@/lib/types";
+import {
+  outstandingKeys,
+  secretSetName,
+  type Role,
+  type SecretSet,
+} from "@/lib/types";
 import { secretSetStatus } from "@/lib/status";
 import shared from "./memory-stores-view.module.css";
 import styles from "./secret-stores-view.module.css";
 
-export function SecretStoresView({ role, sets }: { role: Role; sets: SecretSet[] }) {
+export function SecretStoresView({
+  role,
+  sets,
+}: {
+  role: Role;
+  sets: SecretSet[];
+}) {
   const router = useRouter();
   const { toast } = useToast();
   const [pending, start] = useTransition();
@@ -35,7 +46,11 @@ export function SecretStoresView({ role, sets }: { role: Role; sets: SecretSet[]
         toast({ title: success, tone: "success" });
         router.refresh();
       } else {
-        toast({ title: "Couldn't complete that", description: res.error, tone: "danger" });
+        toast({
+          title: "Couldn't complete that",
+          description: res.error,
+          tone: "danger",
+        });
       }
     });
   };
@@ -76,7 +91,11 @@ export function SecretStoresView({ role, sets }: { role: Role; sets: SecretSet[]
                 : "A secret store holds the credentials your deployments need. Create one, or ask your platform administrator to entitle you to theirs."
             }
             action={
-              <ButtonLink href="/secret-stores/new" variant="primary" icon={Plus}>
+              <ButtonLink
+                href="/secret-stores/new"
+                variant="primary"
+                icon={Plus}
+              >
                 New secret store
               </ButtonLink>
             }
@@ -96,7 +115,11 @@ export function SecretStoresView({ role, sets }: { role: Role; sets: SecretSet[]
                 <div className={shared.rowMain}>
                   <div className={shared.rowTop}>
                     <span className={shared.rowName}>{s.name}</span>
-                    <StatusBadge tone={sc.tone} label={sc.label} variant="soft" />
+                    <StatusBadge
+                      tone={sc.tone}
+                      label={sc.label}
+                      variant="soft"
+                    />
                     {status && (
                       <StatusBadge
                         tone={status.tone}
@@ -106,10 +129,14 @@ export function SecretStoresView({ role, sets }: { role: Role; sets: SecretSet[]
                       />
                     )}
                     {platform && s.owner !== "" && s.ownerName && (
-                      <span className={shared.count}>owned by {s.ownerName}</span>
+                      <span className={shared.count}>
+                        owned by {s.ownerName}
+                      </span>
                     )}
                   </div>
-                  {s.description && <p className={shared.rowDesc}>{s.description}</p>}
+                  {s.description && (
+                    <p className={shared.rowDesc}>{s.description}</p>
+                  )}
 
                   {/* Keys are the whole substance of a secret store, so they are
                       the row's content rather than a detail behind a click. For
@@ -122,7 +149,9 @@ export function SecretStoresView({ role, sets }: { role: Role; sets: SecretSet[]
                         <span
                           key={k}
                           className={styles.key}
-                          data-filled={!platform && s.enabled ? filled : undefined}
+                          data-filled={
+                            !platform && s.enabled ? filled : undefined
+                          }
                           title={
                             platform || !s.enabled
                               ? undefined
@@ -135,20 +164,34 @@ export function SecretStoresView({ role, sets }: { role: Role; sets: SecretSet[]
                         </span>
                       );
                     })}
-                    {s.keys.length === 0 && <span className={shared.chip}>no keys declared</span>}
+                    {s.keys.length === 0 && (
+                      <span className={shared.chip}>no keys declared</span>
+                    )}
                   </div>
 
                   {usable(s) && s.enabled && missing.length > 0 && (
                     <p className={styles.needs}>
-                      {missing.length} key{missing.length === 1 ? "" : "s"} still need
-                      {missing.length === 1 ? "s" : ""} a value. Deployments that depend on this
-                      wait until then.
+                      {missing.length} key{missing.length === 1 ? "" : "s"}{" "}
+                      still need
+                      {missing.length === 1 ? "s" : ""} a value. Deployments
+                      that depend on this wait until then.
                     </p>
                   )}
                   {usable(s) && s.enabled && missing.length === 0 && (
                     <p className={styles.mounted}>
-                      Delivered as <span className="mono">{secretSetName(s.id)}</span> to the
+                      Delivered as{" "}
+                      <span className="mono">{secretSetName(s.id)}</span> to the
                       deployments that depend on it.
+                    </p>
+                  )}
+                  {usable(s) && !s.enabled && (s.keysSet?.length ?? 0) > 0 && (
+                    // Disabling stops delivery but leaves the values in the
+                    // tenant's own vault — Cortex cannot delete them, for the
+                    // same reason it cannot read them. Saying so is what stops
+                    // "disabled" being mistaken for "destroyed".
+                    <p className={styles.mounted}>
+                      Values you supplied earlier are still in your vault, so
+                      enabling this again won&rsquo;t ask for them twice.
                     </p>
                   )}
                 </div>
@@ -165,7 +208,9 @@ export function SecretStoresView({ role, sets }: { role: Role; sets: SecretSet[]
                             loading={pending}
                             onClick={() => setEditing(s)}
                           >
-                            {missing.length > 0 ? "Add values" : "Update values"}
+                            {missing.length > 0
+                              ? "Add values"
+                              : "Update values"}
                           </Button>
                           <Button
                             size="sm"
@@ -174,7 +219,7 @@ export function SecretStoresView({ role, sets }: { role: Role; sets: SecretSet[]
                             onClick={() =>
                               runAction(
                                 () => disableSecretSet(s.id),
-                                `Disabled ${s.name} and deleted its values`,
+                                `Disabled ${s.name}`,
                               )
                             }
                           >
@@ -209,7 +254,10 @@ export function SecretStoresView({ role, sets }: { role: Role; sets: SecretSet[]
                           noun="secret store"
                           pending={pending}
                           onConfirm={() =>
-                            runAction(() => deleteSecretSet(s.id), `Deleted ${s.name}`)
+                            runAction(
+                              () => deleteSecretSet(s.id),
+                              `Deleted ${s.name}`,
+                            )
                           }
                         />
                       </>
@@ -231,7 +279,9 @@ export function SecretStoresView({ role, sets }: { role: Role; sets: SecretSet[]
           onSubmit={(values) =>
             runAction(
               () => enableSecretSet(editing.id, values),
-              editing.enabled ? `Updated ${editing.name}` : `Enabled ${editing.name}`,
+              editing.enabled
+                ? `Updated ${editing.name}`
+                : `Enabled ${editing.name}`,
             )
           }
         />

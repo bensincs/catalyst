@@ -57,21 +57,23 @@ func (p *Provisioner) WriteTenantSecrets(ctx context.Context, vaultID, setID str
 	return written, nil
 }
 
-// DeleteTenantSecrets removes a set's values from a tenant's vault. Called only
-// on an explicit disable — never on an incidental prune, because the control
-// plane cannot read a value back and so could not restore one it destroyed by
-// mistake.
-func (p *Provisioner) DeleteTenantSecrets(ctx context.Context, vaultID, setID string, keys []string) {
-	if strings.TrimSpace(vaultID) == "" {
-		return
-	}
-	for _, key := range keys {
-		if err := p.armDelete(ctx, fmt.Sprintf(
-			"https://management.azure.com%s/secrets/%s?api-version=2023-07-01", vaultID, shared.VaultSecretName(setID, key))); err != nil {
-			slog.Warn("secrets: delete failed", "set", setID, "key", key, "err", trunc(err.Error()))
-		}
-	}
-}
+// Deleting a tenant's secret values is deliberately NOT implemented here, and
+// cannot be: the ARM management plane answers DeleteNotSupported for a Key Vault
+// secret (verified against the live API — the write succeeds and the delete does
+// not), so removal requires the vault's data plane, which the control plane has
+// no credential for.
+//
+// An earlier version of this called armDelete and logged a warning on failure,
+// which meant disabling a secret set reported success while the values stayed
+// exactly where they were. Claiming to destroy a secret and not doing so is
+// worse than not offering it, so the operation is gone and the product says what
+// actually happens instead: delivery stops, and the values remain in the
+// TENANT's own vault, where only the tenant can remove them.
+//
+// The reconciler could delete them — it holds a data-plane role — but only with
+// Key Vault Secrets Officer instead of Secrets User, which would let anything
+// that compromised the cluster destroy the tenant's credentials. Read-only there
+// is worth more than automatic cleanup here.
 
 // recordVault stores the tenant's vault coordinates from its footprint outputs,
 // so the control plane knows where to write and the reconciler where to read.

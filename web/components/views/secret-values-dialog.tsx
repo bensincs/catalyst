@@ -94,8 +94,11 @@ export function SecretValuesDialog({
       <p className={styles.assurance}>
         <ShieldCheck size={15} strokeWidth={2.2} aria-hidden />
         <span>
-          Once saved, <strong>nobody can read these back</strong> — not this console, not your
-          platform administrator. Keep your own copy of anything you can&rsquo;t regenerate.
+          Stored in your tenant&rsquo;s own Azure Key Vault. Once saved,{" "}
+          <strong>nobody can read these back</strong> — not this console, not
+          your platform administrator. Keep your own copy of anything you
+          can&rsquo;t regenerate. Disabling this stops delivery but leaves the
+          values in your vault, where only you can remove them.
         </span>
       </p>
 
@@ -125,8 +128,14 @@ export function SecretValuesDialog({
                   // reveal toggle already covers shoulder-surfing.
                   type={visible ? "text" : "password"}
                   value={values[key] ?? ""}
-                  onChange={(e) => setValues((v) => ({ ...v, [key]: e.target.value }))}
-                  placeholder={isSet ? "Leave blank to keep the current value" : "Enter a value…"}
+                  onChange={(e) =>
+                    setValues((v) => ({ ...v, [key]: e.target.value }))
+                  }
+                  placeholder={
+                    isSet
+                      ? "Leave blank to keep the current value"
+                      : "Enter a value…"
+                  }
                   spellCheck={false}
                   autoComplete="off"
                   data-1p-ignore
@@ -154,7 +163,10 @@ export function SecretValuesDialog({
       {set.keys.length === 0 && (
         <p className={styles.none}>
           <KeyRound size={15} strokeWidth={2} aria-hidden />
-          <span>This secret store declares no keys yet, so there is nothing to fill in.</span>
+          <span>
+            This secret store declares no keys yet, so there is nothing to fill
+            in.
+          </span>
         </p>
       )}
     </Modal>
