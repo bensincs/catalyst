@@ -4,8 +4,8 @@ Cortex is a control plane over a fleet of customer **tenants**. The database sto
 three things:
 
 1. **Who** — the `tenants`, and the `users` who sign in.
-2. **A catalog** of three kinds of thing that can run inside a tenant: **agents**,
-   **memory stores**, and **deployments**.
+2. **A catalog** of the kinds of thing that can run inside a tenant: **agents**,
+   **memory stores**, **deployments**, **infrastructure**, and **secret stores**.
 3. **What each tenant turned on** — the running instances and their reconcile status.
 
 Everything the catalog touches follows **one lifecycle: author → entitle → enable.**
@@ -18,11 +18,13 @@ erDiagram
     tenants ||--o{ agents             : "enabled agent"
     tenants ||--o{ tenant_stores      : "enabled store"
     tenants ||--o{ tenant_deployments : "enabled deployment"
+    tenants ||--o{ tenant_secret_sets  : "enabled secret store"
 
     catalog_agents ||--o{ catalog_versions   : "versions"
     catalog_agents ||--o{ agents             : "runs as"
     memory_stores  ||--o{ tenant_stores      : "runs as"
     applications   ||--o{ tenant_deployments  : "runs as"
+    secret_sets    ||--o{ tenant_secret_sets  : "filled in as"
 ```
 
 `tenants` sits in the middle. On one side is the **catalog** (`catalog_agents`,
@@ -32,19 +34,59 @@ item and carry its live status.
 
 ## The one pattern
 
-The three catalog kinds are deliberately identical:
+The catalog kinds are deliberately identical:
 
 | Kind | Catalog | Entitlement | Enabled instance |
 |---|---|---|---|
 | **Agent** | `catalog_agents` + `catalog_versions` | `tenants.entitled_agents` | `agents` |
 | **Memory store** | `memory_stores` | `tenants.entitled_stores` | `tenant_stores` |
 | **Deployment** | `applications` | `tenants.entitled_deployments` | `tenant_deployments` |
+| **Secret store** | `secret_sets` | `tenants.entitled_secret_sets` | `tenant_secret_sets` |
 
 - **Author** — create the catalog item. `owner_tenant = ''` = platform-authored
   (shareable); `owner_tenant = <slug>` = authored by a tenant, private to it.
 - **Entitle** — add the catalog id to a tenant's `entitled_*` array (platform grant).
 - **Enable** — a tenant turns it on, creating the instance row. The in-tenant
   reconciler provisions it and heartbeats status back: `reconciling → live → blocked`.
+
+### Secret stores are the one kind that carries a value
+
+Every other kind stores its whole definition here. A secret store deliberately
+stores only **key names**, and the values live somewhere this database cannot
+reach — the tenant's own Azure Key Vault, created by its footprint.
+
+This works because of an asymmetry in the Azure API that the design leans on
+directly:
+
+| Plane | Create a secret | Read its value | Delete it |
+|---|---|---|---|
+| ARM management (what the control plane can reach) | yes | **no** | **no** |
+| Key Vault data plane (what the reconciler can reach) | — | yes | — |
+
+So the control plane accepts a secret from a tenant and puts it beyond its own
+reach in the same call. Nothing here — and no platform administrator — can read
+it back afterwards. The reconciler reads the values, because it runs inside the
+tenant's own subscription and its managed identity holds *Key Vault Secrets User*
+on that vault; that is an ordinary same-directory grant, which a vault in the
+platform's subscription could not have offered.
+
+Three consequences worth knowing before changing any of this:
+
+- `tenant_secret_sets.keys_set` is the **only** record of what a tenant supplied,
+  and it holds names. A key is reported outstanding until it appears there.
+- **Disabling does not delete the values.** The control plane has no delete, so
+  they stay in the tenant's own vault where only the tenant can remove them.
+  Delivery stops: the reconciler removes the Kubernetes Secret.
+- A value **never reaches an application's Helm values.** Wiring exposes a secret
+  store's `secretName` (the Kubernetes Secret the reconciler writes), and a chart
+  reads the value through that. `spec.source.helm.values` is copied verbatim into
+  the Argo Application, so anything wireable is effectively public.
+
+For infrastructure, a Bicep parameter binds to a key as
+`{"$secret":{"setId":…,"key":…}}` in `bicep_params`. Such parameters are *not*
+baked into `arm_template` as literals — they become `@secure()` parameters, and
+the deployment passes ARM a Key Vault *reference* which ARM resolves itself. That
+is the only way the control plane can supply a parameter it cannot read.
 
 ## Tables
 
@@ -89,6 +131,21 @@ The three catalog kinds are deliberately identical:
   `sync_status` / `health_status`, `infra_state` + `infra_outputs` (the Bicep the
   control plane provisioned via Lighthouse), and `waiting` (held for unmet deps).
 
+### Secret stores
+
+- **`secret_sets`** — an authored set of secret **key names** (`keys text[]`).
+  There is no column for a value, which is the point rather than an omission.
+- **`tenant_secret_sets`** — a set **enabled in a tenant**: `keys_set` (the keys
+  a value was supplied for — names only), `vault_uri` (the tenant's own vault the
+  values went to), `health`, `detail`, and `auto` (true when it was pulled in by
+  an application or infrastructure that depends on it). An auto row is created
+  `blocked`, not `reconciling`, because nothing can supply its values but the
+  tenant, deliberately.
+- **`tenants.vault_name` / `vault_uri` / `vault_id`** — where that tenant's values
+  live, recorded from its footprint outputs.
+- **`infrastructure.secret_params`** — which Bicep parameters are fed from a
+  secret store key, as bindings (`{param,setId,key}`) and never values.
+
 ## Conventions
 
 - **One idempotent schema file** — `control-plane/internal/store/schema.sql`,
@@ -99,6 +156,6 @@ The three catalog kinds are deliberately identical:
   `applications.bicep_params` / `wiring`, `tenant_deployments.infra_outputs`.
 - **Derived, not stored** — a tenant's lifecycle (from enrollment + heartbeat
   freshness) is computed in Go, not persisted.
-- **Ownership vocabulary is shared** — agents, memory stores, and deployments all
-  use `owner_tenant` (`''` = platform, else tenant slug) and the same
-  `reconciling → live → blocked` instance health.
+- **Ownership vocabulary is shared** — agents, memory stores, deployments,
+  infrastructure and secret stores all use `owner_tenant` (`''` = platform, else
+  tenant slug) and the same `reconciling → live → blocked` instance health.
