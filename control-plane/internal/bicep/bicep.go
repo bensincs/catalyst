@@ -615,6 +615,14 @@ func parseModuleInterface(arm []byte) ([]ParamSpec, []OutputSpec) {
 	})
 	outputs := make([]OutputSpec, 0, len(t.Outputs))
 	for name, o := range t.Outputs {
+		// A secure output is not offered for wiring, and must not be: the
+		// resolver refuses to re-export one (re-exporting strips the secureness
+		// and publishes the value in the deployment's outputs), so listing it
+		// here would advertise a binding that silently resolves to nothing.
+		// The two paths have to agree about what a module exposes.
+		if secureOutput(o.Type) {
+			continue
+		}
 		outputs = append(outputs, OutputSpec{Name: name, Type: strings.ToLower(o.Type)})
 	}
 	sort.Slice(outputs, func(i, j int) bool { return outputs[i].Name < outputs[j].Name })

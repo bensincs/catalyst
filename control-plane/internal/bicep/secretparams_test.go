@@ -128,3 +128,24 @@ func TestArmTypeToBicepKeepsObjectShape(t *testing.T) {
 		t.Errorf("array → %q, want array", got)
 	}
 }
+
+// Inspect drives the authoring form's list of wireable outputs, and Resolve
+// decides what the deployment actually exports. They must agree: an output the
+// console offers but the deployment drops is a binding that silently resolves to
+// nothing at runtime.
+func TestInspectAndResolveAgreeOnSecureOutputs(t *testing.T) {
+	module := []byte(`{"parameters":{},"outputs":{
+	  "host":{"type":"string"},
+	  "connectionString":{"type":"securestring"},
+	  "helmValues":{"type":"secureObject"}}}`)
+
+	_, outs := parseModuleInterface(module)
+	for _, o := range outs {
+		if o.Name == "connectionString" || o.Name == "helmValues" {
+			t.Errorf("Inspect offers secure output %q for wiring, but the deployment will not export it", o.Name)
+		}
+	}
+	if len(outs) != 1 || outs[0].Name != "host" {
+		t.Fatalf("ordinary outputs must still be offered, got %+v", outs)
+	}
+}
