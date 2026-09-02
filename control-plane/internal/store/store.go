@@ -1614,15 +1614,19 @@ func (s *Store) SyncDesired(ctx context.Context, t model.Tenant) (shared.Desired
 		deployable := ready(a.da.ID)
 		_, _ = s.pool.Exec(ctx, `UPDATE tenant_deployments SET waiting = $3 WHERE tenant_slug = $1 AND app_id = $2`,
 			t.ID, a.da.ID, !deployable)
-		if !deployable {
-			continue
-		}
 		da := a.da
 		da.Values = applyWiring(da.Values, a.wiring, sources)
 		for _, dep := range a.deps { // only app→app edges gate cluster ordering
 			if dep.Kind == model.DepApplication {
 				da.DependsOn = append(da.DependsOn, dep.ID)
 			}
+		}
+		// A held app is still sent, flagged. Omitting it made the reconciler
+		// prune the Application — and with it the running workloads — the moment
+		// a dependency stopped being satisfied. See DesiredApplication.Held.
+		if !deployable {
+			da.Held = true
+			da.HoldReason = holdReason(a.deps, infraState, liveAgents, enabledApp, completeSets)
 		}
 		out.Applications = append(out.Applications, da)
 	}
@@ -2036,6 +2040,36 @@ func depsArray(d []string) []string {
 		return []string{}
 	}
 	return d
+}
+
+// holdReason names the first unsatisfied dependency, so an app that is not
+// moving says why instead of just sitting there.
+func holdReason(deps []model.Dependency, infraState map[string]string, liveAgents, enabledApp, completeSets map[string]bool) string {
+	for _, d := range deps {
+		switch d.Kind {
+		case model.DepInfrastructure:
+			if infraState[d.ID] != "ready" {
+				st := infraState[d.ID]
+				if st == "" {
+					st = "not provisioned"
+				}
+				return "Waiting for infrastructure " + d.ID + " (" + st + ")."
+			}
+		case model.DepAgent:
+			if !liveAgents[d.ID] {
+				return "Waiting for agent " + d.ID + " to be live."
+			}
+		case model.DepApplication:
+			if !enabledApp[d.ID] {
+				return "Waiting for deployment " + d.ID + ", which is not enabled."
+			}
+		case model.DepSecretSet:
+			if !completeSets[d.ID] {
+				return "Waiting for secret store " + d.ID + " — some keys still need a value."
+			}
+		}
+	}
+	return "Waiting for a dependency."
 }
 
 // assignWaves sets each application's Wave to 1 + the max Wave of its enabled

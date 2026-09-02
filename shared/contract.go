@@ -133,6 +133,19 @@ type DesiredApplication struct {
 	// control-plane-side, by holding the app until they're ready/live.)
 	DependsOn []string `json:"dependsOn,omitempty"`
 	Wave      int      `json:"wave,omitempty"`
+
+	// Held marks an app whose dependencies are not satisfied yet — infrastructure
+	// still provisioning, a dependency app not live, a secret set missing values.
+	//
+	// A held app is still SENT, which is the point. It used to be omitted from
+	// the sync entirely, and the reconciler prunes any Application it does not
+	// see, so an app that became held was deleted and its workloads cascade-
+	// deleted with it. Something as ordinary as adding a dependency to a running
+	// app would take it down. Held means "do not change this", not "remove it".
+	Held bool `json:"held,omitempty"`
+	// HoldReason says which dependency is unsatisfied, so the operator is not
+	// left guessing why a deployment stopped moving.
+	HoldReason string `json:"holdReason,omitempty"`
 }
 
 // IngressJWTRule is one accepted token issuer for the cluster's ingress gateway:

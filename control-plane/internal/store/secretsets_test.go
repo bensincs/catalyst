@@ -223,3 +223,84 @@ func TestSecretSetLifecycle(t *testing.T) {
 func randSuffix() string {
 	return time.Now().Format("150405.000000")[:6] + "x"
 }
+
+// A held application must still be SENT, flagged, not omitted.
+//
+// The reconciler deletes any Argo Application it does not see on the sync, and
+// Argo's finalizer cascade-deletes the workloads with it. So omitting a held app
+// meant that adding a dependency to a running deployment — or a dependency
+// merely regressing — tore the running app down instead of pausing it. This test
+// exists because that failure is invisible until it happens in production.
+func TestHeldApplicationIsSentNotOmitted(t *testing.T) {
+	st, ctx := testStore(t)
+
+	sfx := randSuffix()
+	slug, tid := "t-held-"+sfx, "tid-held-"+sfx
+	if _, err := st.pool.Exec(ctx,
+		`INSERT INTO tenants (id, name, tenant_id, enabled) VALUES ($1,$1,$2,true)`, slug, tid); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	t.Cleanup(func() { _, _ = st.pool.Exec(ctx, `DELETE FROM tenants WHERE id = $1`, slug) })
+
+	setID, appID := "creds-"+sfx, "app-"+sfx
+	if _, err := st.Apply(ctx, "tester", ApplyBatch{
+		SecretSets: []model.SecretSet{{ID: setID, Name: "Creds", Keys: []string{"password"}}},
+		Applications: []model.Application{{
+			ID: appID, Name: "App", Namespace: "held-ns",
+			RepoURL: "https://charts.example.com", Chart: "app", TargetRevision: "1.0.0",
+			Dependencies: []model.Dependency{{Kind: model.DepSecretSet, ID: setID}},
+		}},
+	}); err != nil {
+		t.Fatalf("author: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = st.DeleteApplication(ctx, appID)
+		_ = st.DeleteSecretSet(ctx, setID)
+	})
+
+	if err := st.SetSecretSetEntitlements(ctx, slug, []string{setID}); err != nil {
+		t.Fatalf("entitle set: %v", err)
+	}
+	if err := st.SetDeploymentEntitlements(ctx, slug, []string{appID}); err != nil {
+		t.Fatalf("entitle app: %v", err)
+	}
+	// Enable the app. Its secret set is pulled in automatically, with no values.
+	if err := st.EnableDeployment(ctx, slug, appID); err != nil {
+		t.Fatalf("enable app: %v", err)
+	}
+
+	ds, err := st.SyncDesired(ctx, mustTenantByTID(t, ctx, st, tid))
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+
+	var got *shared.DesiredApplication
+	for i := range ds.Applications {
+		if ds.Applications[i].ID == appID {
+			got = &ds.Applications[i]
+		}
+	}
+	if got == nil {
+		t.Fatal("held app was omitted from the sync — the reconciler would delete it and its workloads")
+	}
+	if !got.Held {
+		t.Error("app is deployable despite its secret set having no values")
+	}
+	if got.HoldReason == "" {
+		t.Error("no hold reason, so an operator cannot tell why it stopped")
+	}
+
+	// Once the value exists the app becomes deployable, without being recreated.
+	if err := st.EnableSecretSet(ctx, slug, setID, []string{"password"}, "https://kv/"); err != nil {
+		t.Fatalf("enable set: %v", err)
+	}
+	ds2, err := st.SyncDesired(ctx, mustTenantByTID(t, ctx, st, tid))
+	if err != nil {
+		t.Fatalf("sync 2: %v", err)
+	}
+	for _, a := range ds2.Applications {
+		if a.ID == appID && a.Held {
+			t.Fatalf("app still held after every key was supplied: %s", a.HoldReason)
+		}
+	}
+}

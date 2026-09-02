@@ -150,6 +150,30 @@ func (k *kube) reconcileApplications(ctx context.Context, apps []shared.DesiredA
 	for _, a := range apps {
 		name := appName(a.ID)
 		desired[name] = true
+
+		// A held app has an unsatisfied dependency. Change nothing about it — not
+		// the Application, not its route, not its proxy — but keep every name in
+		// the "still wanted" sets so none of the GC passes below remove it.
+		//
+		// This is the whole reason a held app is sent at all. Anything absent
+		// from `desired` is deleted, and Argo's finalizer cascade-deletes the
+		// workloads with it, so an app that merely gained a dependency would be
+		// torn down rather than paused.
+		if a.Held {
+			if strings.TrimSpace(a.ExposeService) != "" {
+				exposed[name] = true
+			}
+			if a.AuthRequired {
+				authed[authName(name)] = true
+			}
+			out = append(out, shared.ApplicationStatus{
+				ID:           a.ID,
+				SyncStatus:   "pending",
+				HealthStatus: "pending",
+				Detail:       a.HoldReason,
+			})
+			continue
+		}
 		// Any OCI-registry repoURL (no http(s):// scheme) gets an auto-registered
 		// Argo Helm repo so the chart pulls over OCI — public ones with no creds.
 		if url := ociRegistryURL(a.RepoURL); url != "" {
