@@ -89,15 +89,24 @@ jobs:
           [ -d "$dir" ] || exit 0
           # A chart that can ONLY take a literal credential cannot be used by the
           # platform: values are copied verbatim into the Argo Application, so a
-          # password set there is readable by anyone with cluster access. Charts
-          # that take no credential at all are fine and skip this.
-          if grep -rqi "password\|secretKey\|apiKey" "$dir/values.yaml"; then
-            grep -qi "existingSecret" "$dir/values.yaml" || {
-              echo "::error::$dir takes a credential but offers no existingSecret option."
-              echo "Add one, or the credential has to be written into the deployment's values."
-              exit 1
-            }
+          # password set there is readable by anyone with cluster access.
+          #
+          # What matters is that the credential reaches the pod FROM A SECRET,
+          # not which mechanism gets it there. An earlier version of this check
+          # looked for `existingSecret` specifically and failed the insight
+          # chart, which uses External Secrets — a reference, just a different
+          # one. Charts that take no credential at all skip this.
+          if ! grep -rqiE "password|secretkey|apikey|api_key" "$dir/values.yaml"; then
+            echo "no credential in values — nothing to check"; exit 0
           fi
+          if grep -rqE "existingSecret|secretKeyRef|secretRef|kind:\s*ExternalSecret|externalSecrets" "$dir"; then
+            echo "credential is taken by reference"; exit 0
+          fi
+          echo "::error::$dir takes a credential but never reads one from a Secret."
+          echo "Offer an existingSecret value, or ship ExternalSecrets — otherwise the"
+          echo "credential has to be written into the deployment's values, where it is"
+          echo "copied verbatim into the Argo Application."
+          exit 1
 
       - name: Bicep module compiles
         run: |
