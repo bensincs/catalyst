@@ -15,10 +15,11 @@ import (
 // that keeps authoring, entitlements, and per-tenant enablement consistent with
 // them. Allowed edges:
 //
-//	infrastructure → infrastructure
-//	application    → infrastructure | application | agent
+//	infrastructure → infrastructure | secret_set
+//	application    → infrastructure | application | agent | secret_set
 //	agent          → memory_store
 //	memory_store   → (leaf)
+//	secret_set     → (leaf)
 //
 // Enforced at four points: author (edge allowed, target exists + accessible, no
 // cycles), entitle (cascade to transitive deps), enable (auto-enable transitive
@@ -40,10 +41,11 @@ var (
 
 // allowedEdges maps an entity kind to the kinds it may depend on.
 var allowedEdges = map[model.DepKind]map[model.DepKind]bool{
-	model.DepInfrastructure: {model.DepInfrastructure: true},
-	model.DepApplication:    {model.DepInfrastructure: true, model.DepApplication: true, model.DepAgent: true},
+	model.DepInfrastructure: {model.DepInfrastructure: true, model.DepSecretSet: true},
+	model.DepApplication:    {model.DepInfrastructure: true, model.DepApplication: true, model.DepAgent: true, model.DepSecretSet: true},
 	model.DepAgent:          {model.DepMemoryStore: true},
 	model.DepMemoryStore:    {},
+	model.DepSecretSet:      {},
 }
 
 func edgeAllowed(from, to model.DepKind) bool { return allowedEdges[from][to] }
@@ -54,10 +56,21 @@ var entitlementColumn = map[model.DepKind]string{
 	model.DepApplication:    "entitled_deployments",
 	model.DepAgent:          "entitled_agents",
 	model.DepMemoryStore:    "entitled_stores",
+	model.DepSecretSet:      "entitled_secret_sets",
+}
+
+// catalogTable maps a kind to the table its catalog entities live in. One map,
+// not two: a second copy went stale between the two call sites that needed it.
+var catalogTable = map[model.DepKind]string{
+	model.DepInfrastructure: "infrastructure",
+	model.DepApplication:    "applications",
+	model.DepAgent:          "catalog_agents",
+	model.DepMemoryStore:    "memory_stores",
+	model.DepSecretSet:      "secret_sets",
 }
 
 // allKinds is the fixed set of entity kinds, for closures over the whole graph.
-var allKinds = []model.DepKind{model.DepInfrastructure, model.DepApplication, model.DepAgent, model.DepMemoryStore}
+var allKinds = []model.DepKind{model.DepInfrastructure, model.DepApplication, model.DepAgent, model.DepMemoryStore, model.DepSecretSet}
 
 /* ── jsonb (de)serialization ────────────────────────────────────────────── */
 
@@ -126,12 +139,7 @@ func (s *Store) depsColumn(ctx context.Context, table, id string) ([]model.Depen
 
 // entityOwner returns the owner_tenant of an entity and whether it exists.
 func (s *Store) entityOwner(ctx context.Context, kind model.DepKind, id string) (owner string, exists bool, err error) {
-	table := map[model.DepKind]string{
-		model.DepInfrastructure: "infrastructure",
-		model.DepApplication:    "applications",
-		model.DepAgent:          "catalog_agents",
-		model.DepMemoryStore:    "memory_stores",
-	}[kind]
+	table := catalogTable[kind]
 	if table == "" {
 		return "", false, fmt.Errorf("%w: unknown kind %q", ErrBadDependency, kind)
 	}
@@ -305,14 +313,7 @@ func (s *Store) ensureEntitled(ctx context.Context, slug string, kind model.DepK
 	return err
 }
 
-func tableFor(kind model.DepKind) string {
-	return map[model.DepKind]string{
-		model.DepInfrastructure: "infrastructure",
-		model.DepApplication:    "applications",
-		model.DepAgent:          "catalog_agents",
-		model.DepMemoryStore:    "memory_stores",
-	}[kind]
-}
+func tableFor(kind model.DepKind) string { return catalogTable[kind] }
 
 // setEntitlements is the single write path for a tenant's entitlements of one
 // kind. It enforces the un-entitle guard (symmetric with the disable guard),
@@ -384,6 +385,7 @@ func (s *Store) enabledInTenant(ctx context.Context, slug string, kind model.Dep
 		model.DepApplication:    `SELECT EXISTS(SELECT 1 FROM tenant_deployments WHERE tenant_slug=$1 AND app_id=$2)`,
 		model.DepAgent:          `SELECT EXISTS(SELECT 1 FROM agents WHERE tenant_slug=$1 AND agent_id=$2)`,
 		model.DepMemoryStore:    `SELECT EXISTS(SELECT 1 FROM tenant_stores WHERE tenant_slug=$1 AND store_id=$2)`,
+		model.DepSecretSet:      `SELECT EXISTS(SELECT 1 FROM tenant_secret_sets WHERE tenant_slug=$1 AND set_id=$2)`,
 	}[kind]
 	var ok bool
 	err := s.pool.QueryRow(ctx, q, slug, id).Scan(&ok)
@@ -396,8 +398,8 @@ func (s *Store) entitledDependents(ctx context.Context, slug string, kind model.
 	edge := string(depsJSON([]model.Dependency{{Kind: kind, ID: id}}))
 	var out []model.Dependency
 
-	// Entitled applications depending on it (apps depend on infra/app/agent).
-	if kind == model.DepInfrastructure || kind == model.DepApplication || kind == model.DepAgent {
+	// Entitled applications depending on it (apps depend on infra/app/agent/secret_set).
+	if kind == model.DepInfrastructure || kind == model.DepApplication || kind == model.DepAgent || kind == model.DepSecretSet {
 		rows, err := s.pool.Query(ctx,
 			`SELECT a.id FROM applications a
 			 WHERE a.id IN (SELECT unnest(entitled_deployments) FROM tenants WHERE id=$1)
@@ -415,8 +417,8 @@ func (s *Store) entitledDependents(ctx context.Context, slug string, kind model.
 		}
 		rows.Close()
 	}
-	// Entitled infrastructure depending on it (infra → infra).
-	if kind == model.DepInfrastructure {
+	// Entitled infrastructure depending on it (infra → infra | secret_set).
+	if kind == model.DepInfrastructure || kind == model.DepSecretSet {
 		rows, err := s.pool.Query(ctx,
 			`SELECT i.id FROM infrastructure i
 			 WHERE i.id IN (SELECT unnest(entitled_infrastructure) FROM tenants WHERE id=$1)
@@ -513,6 +515,18 @@ func (s *Store) autoEnableOne(ctx context.Context, slug string, kind model.DepKi
 		if err := s.autoEnableStores(ctx, slug, []string{id}); err != nil {
 			return err
 		}
+	case model.DepSecretSet:
+		// Auto-enabling cannot supply values — only the tenant can, and only
+		// deliberately. The row is created blocked rather than reconciling, so a
+		// set pulled in by an application it depends on shows up as needing
+		// attention instead of silently never converging.
+		if _, err := s.pool.Exec(ctx,
+			`INSERT INTO tenant_secret_sets (tenant_slug, set_id, health, auto, detail, sort_order)
+			 VALUES ($1,$2,'blocked',true,'Waiting for values.',
+			         coalesce((SELECT max(sort_order)+1 FROM tenant_secret_sets WHERE tenant_slug=$1),1))
+			 ON CONFLICT (tenant_slug, set_id) DO NOTHING`, slug, id); err != nil {
+			return err
+		}
 	}
 	return s.autoEnableDeps(ctx, slug, kind, id)
 }
@@ -525,8 +539,8 @@ func (s *Store) enabledDependents(ctx context.Context, slug string, kind model.D
 	var out []model.Dependency
 	edge := string(depsJSON([]model.Dependency{{Kind: kind, ID: id}}))
 
-	// Enabled applications that depend on it (apps may depend on infra/app/agent).
-	if kind == model.DepInfrastructure || kind == model.DepApplication || kind == model.DepAgent {
+	// Enabled applications that depend on it (apps may depend on infra/app/agent/secret_set).
+	if kind == model.DepInfrastructure || kind == model.DepApplication || kind == model.DepAgent || kind == model.DepSecretSet {
 		rows, err := s.pool.Query(ctx,
 			`SELECT a.id FROM applications a
 			 JOIN tenant_deployments td ON td.app_id = a.id AND td.tenant_slug = $1
@@ -544,8 +558,8 @@ func (s *Store) enabledDependents(ctx context.Context, slug string, kind model.D
 		}
 		rows.Close()
 	}
-	// Enabled infrastructure that depends on it (infra → infra).
-	if kind == model.DepInfrastructure {
+	// Enabled infrastructure that depends on it (infra → infra | secret_set).
+	if kind == model.DepInfrastructure || kind == model.DepSecretSet {
 		rows, err := s.pool.Query(ctx,
 			`SELECT i.id FROM infrastructure i
 			 JOIN tenant_infrastructure ti ON ti.infra_id = i.id AND ti.tenant_slug = $1
@@ -630,6 +644,23 @@ func (s *Store) pruneAutoDeps(ctx context.Context, slug string) error {
 		 AND NOT EXISTS (
 		   SELECT 1 FROM applications a JOIN tenant_deployments td ON td.app_id=a.id AND td.tenant_slug=$1
 		   WHERE a.dependencies @> jsonb_build_array(jsonb_build_object('kind','agent','id',ag.agent_id)))`,
+		slug); err != nil {
+		return err
+	}
+	// Auto secret sets no longer depended on by an enabled application or
+	// infrastructure. The vault secrets are deliberately NOT deleted here: the
+	// control plane cannot read them back to restore them, so removing them on
+	// an incidental prune would destroy something the tenant cannot recover and
+	// the platform cannot reproduce. They are cleaned up only on an explicit
+	// disable.
+	if _, err := s.pool.Exec(ctx,
+		`DELETE FROM tenant_secret_sets ts WHERE ts.tenant_slug = $1 AND ts.auto = true
+		 AND NOT EXISTS (
+		   SELECT 1 FROM applications a JOIN tenant_deployments td ON td.app_id=a.id AND td.tenant_slug=$1
+		   WHERE a.dependencies @> jsonb_build_array(jsonb_build_object('kind','secret_set','id',ts.set_id)))
+		 AND NOT EXISTS (
+		   SELECT 1 FROM infrastructure i JOIN tenant_infrastructure ti ON ti.infra_id=i.id AND ti.tenant_slug=$1
+		   WHERE i.dependencies @> jsonb_build_array(jsonb_build_object('kind','secret_set','id',ts.set_id)))`,
 		slug); err != nil {
 		return err
 	}

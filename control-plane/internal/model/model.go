@@ -197,6 +197,58 @@ type TenantRegistryRow struct {
 	EntitledStores         []string `json:"entitledStores"`
 	EntitledDeployments    []string `json:"entitledDeployments"`
 	EntitledInfrastructure []string `json:"entitledInfrastructure"`
+	EntitledSecretSets     []string `json:"entitledSecretSets"`
+}
+
+// SecretSet is a named collection of secret KEYS — never values. The platform
+// author declares the shape; the tenant supplies the values when it enables the
+// set. Values are written to the tenant's own Key Vault and are not readable
+// from here, by anyone, ever: the control plane writes them through the ARM
+// management plane, which has no read-back of a secret's value.
+//
+// KeysSet is therefore the most that can be known about a tenant's values — the
+// names of the keys a value was supplied for. It exists so the console can show
+// a key as outstanding without being able to show what was entered.
+type SecretSet struct {
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	Owner       string    `json:"owner"` // "" = platform-authored; else tenant slug
+	Keys        []string  `json:"keys"`  // declared key names
+	CreatedBy   string    `json:"createdBy,omitempty"`
+	CreatedAt   time.Time `json:"createdAt"`
+
+	// Populated in the tenant view:
+	Platform bool     `json:"platform"`
+	Owned    bool     `json:"owned"`
+	Entitled bool     `json:"entitled"`
+	Enabled  bool     `json:"enabled"`
+	Health   string   `json:"health,omitempty"` // reconciling | live | blocked
+	KeysSet  []string `json:"keysSet,omitempty"`
+	Detail   string   `json:"detail,omitempty"`
+	// Populated in the platform view:
+	OwnerName string `json:"ownerName,omitempty"`
+}
+
+// SecretName is the fixed name of the Kubernetes Secret a set materialises as,
+// in every namespace that needs it. Fixed and documented rather than generated,
+// for the same reason the image pull secret's name is: a chart author has to be
+// able to write it into their values by hand.
+func (s SecretSet) SecretName() string { return "cortex-secret-" + s.ID }
+
+// Outstanding returns the declared keys the tenant has not supplied a value for.
+func (s SecretSet) Outstanding() []string {
+	set := make(map[string]bool, len(s.KeysSet))
+	for _, k := range s.KeysSet {
+		set[k] = true
+	}
+	var out []string
+	for _, k := range s.Keys {
+		if !set[k] {
+			out = append(out, k)
+		}
+	}
+	return out
 }
 
 // MemoryStore is a reusable Foundry memory configuration that agents connect to.
@@ -248,11 +300,13 @@ const (
 	DepApplication    DepKind = "application"
 	DepAgent          DepKind = "agent"
 	DepMemoryStore    DepKind = "memory_store"
+	DepSecretSet      DepKind = "secret_set"
 )
 
 // Dependency is one typed edge: the owning entity depends on (Kind, ID). Allowed
-// edges (enforced): infrastructure→infrastructure, application→{infrastructure,
-// application, agent}, agent→memory_store.
+// edges (enforced): infrastructure→{infrastructure, secret_set},
+// application→{infrastructure, application, agent, secret_set},
+// agent→memory_store.
 type Dependency struct {
 	Kind DepKind `json:"kind"`
 	ID   string  `json:"id"`

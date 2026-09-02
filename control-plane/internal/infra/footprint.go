@@ -194,9 +194,14 @@ func (p *Provisioner) ensureFootprint(ctx context.Context, t store.FootprintTarg
 		// fresh (idempotent, Incremental) submit instead of the short-circuit below.
 		_ = p.store.ClearFootprintReprovision(ctx, t.Slug)
 		slog.Info("provision: re-provisioning footprint", "tenant", t.Slug)
-	} else if _, state, found := p.deploymentState(ctx, url); found {
+	} else if outs, state, found := p.deploymentState(ctx, url); found {
 		switch {
 		case strings.EqualFold(state, "Succeeded"):
+			// Record the tenant's vault before declaring the footprint ready:
+			// the control plane cannot accept a secret from this tenant until it
+			// knows where to write it, so a "ready" footprint with no vault
+			// recorded would fail the first enable rather than the deployment.
+			p.recordVault(ctx, t.Slug, outs)
 			_ = p.store.SetFootprintState(ctx, t.Slug, "ready", "Reconciler + Foundry provisioned.")
 		case strings.EqualFold(state, "Failed") || strings.EqualFold(state, "Canceled"):
 			_ = p.store.SetFootprintState(ctx, t.Slug, "failed", "Footprint deployment "+state+".")

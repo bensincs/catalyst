@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -193,6 +194,59 @@ func (in storeInput) build(id, owner string) model.MemoryStore {
 	}
 }
 
+// secretSetInput authors a secret set: a name and the KEYS it declares. There is
+// deliberately no field for values — an author declares the shape, and only the
+// tenant that enables the set ever supplies what goes in it.
+type secretSetInput struct {
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Keys        []string `json:"keys"`
+}
+
+func (in secretSetInput) validate() string {
+	if slugify(in.Name) == "" {
+		return "name is required"
+	}
+	if len(in.cleanKeys()) == 0 {
+		return "at least one key is required"
+	}
+	for _, k := range in.cleanKeys() {
+		if !validSecretKey.MatchString(k) {
+			return "key " + k + " must be alphanumerics, dashes, underscores or dots"
+		}
+	}
+	return ""
+}
+
+// validSecretKey is the charset a key may use. Constrained because a key becomes
+// both a Kubernetes Secret data key and part of an Azure Key Vault secret name,
+// and the intersection of those two is narrower than either alone.
+var validSecretKey = regexp.MustCompile(`^[a-zA-Z0-9._-]{1,200}$`)
+
+// cleanKeys trims, drops blanks, and de-duplicates while preserving order. A
+// duplicate key is a silent overwrite rather than an error the author would see,
+// so it is removed here.
+func (in secretSetInput) cleanKeys() []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, k := range in.Keys {
+		k = strings.TrimSpace(k)
+		if k == "" || seen[k] {
+			continue
+		}
+		seen[k] = true
+		out = append(out, k)
+	}
+	return out
+}
+
+func (in secretSetInput) build(id, owner string) model.SecretSet {
+	return model.SecretSet{
+		ID: id, Name: strings.TrimSpace(in.Name), Description: strings.TrimSpace(in.Description),
+		Owner: owner, Keys: in.cleanKeys(),
+	}
+}
+
 /* ── Per-kind registry: the store calls each generic verb dispatches to ────── */
 
 // resourceOps captures everything that genuinely differs per kind. The generic
@@ -302,6 +356,26 @@ var resourceOpsByKind = map[model.DepKind]resourceOps{
 			return s.store.DisableStore(ctx, slug, rid)
 		},
 	},
+
+	model.DepSecretSet: {
+		writeAllowed: (*Server).secretSetWriteAllowed,
+		update: func(s *Server, w http.ResponseWriter, r *http.Request, rid, owner string) (bool, error) {
+			in, ok := decodeValid[secretSetInput](w, r)
+			if !ok {
+				return false, nil
+			}
+			return true, s.store.UpdateSecretSet(r.Context(), in.build(rid, owner))
+		},
+		remove: func(s *Server, ctx context.Context, rid string) error { return s.store.DeleteSecretSet(ctx, rid) },
+		// Enable is where a tenant supplies its values — the only place in the
+		// product that accepts a secret. They go straight to the tenant's own
+		// vault and are never returned to the store layer, so `keysSet` (names)
+		// is all that is recorded.
+		enable: (*Server).enableSecretSet,
+		disable: func(s *Server, ctx context.Context, slug, rid string) error {
+			return s.disableSecretSet(ctx, slug, rid)
+		},
+	},
 }
 
 // opsFor looks up the registry entry for a URL {kind}, writing a 404 when the
@@ -327,10 +401,12 @@ func (s *Server) mapStoreErr(w http.ResponseWriter, r *http.Request, err error) 
 	case errors.Is(err, store.ErrNotEntitled),
 		errors.Is(err, store.ErrStoreNotAccessible),
 		errors.Is(err, store.ErrDeploymentNotAccessible),
-		errors.Is(err, store.ErrInfrastructureNotAccessible):
+		errors.Is(err, store.ErrInfrastructureNotAccessible),
+		errors.Is(err, store.ErrSecretSetNotAccessible):
 		writeErr(w, http.StatusForbidden, "not available to your tenant")
 	case errors.Is(err, store.ErrInUse),
 		errors.Is(err, store.ErrStoreInUse),
+		errors.Is(err, store.ErrSecretSetInUse),
 		errors.Is(err, store.ErrEntitlementInUse):
 		writeErr(w, http.StatusConflict, err.Error())
 	default:
@@ -350,6 +426,7 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 		apps   []model.Application
 		agents []model.CatalogAgent
 		stores []model.MemoryStore
+		sets   []model.SecretSet
 		err    error
 	)
 
@@ -367,6 +444,10 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if stores, err = s.store.MemoryStoreList(ctx); err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		if sets, err = s.store.SecretSetList(ctx); err != nil {
 			s.fail(w, r, err)
 			return
 		}
@@ -391,6 +472,10 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 			s.fail(w, r, err)
 			return
 		}
+		if sets, err = s.store.SecretSetsForTenant(ctx, t.ID); err != nil {
+			s.fail(w, r, err)
+			return
+		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -398,6 +483,7 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 		"applications":   apps,
 		"agents":         agents,
 		"memoryStores":   stores,
+		"secretSets":     sets,
 	})
 }
 
@@ -491,6 +577,7 @@ func (s *Server) handleSetAllEntitlements(w http.ResponseWriter, r *http.Request
 		Applications   []string `json:"applications"`
 		Agents         []string `json:"agents"`
 		MemoryStores   []string `json:"memoryStores"`
+		SecretSets     []string `json:"secretSets"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
@@ -507,6 +594,7 @@ func (s *Server) handleSetAllEntitlements(w http.ResponseWriter, r *http.Request
 		},
 		func() error { return s.store.SetEntitlements(r.Context(), slug, nilToEmpty(body.Agents)) },
 		func() error { return s.store.SetStoreEntitlements(r.Context(), slug, nilToEmpty(body.MemoryStores)) },
+		func() error { return s.store.SetSecretSetEntitlements(r.Context(), slug, nilToEmpty(body.SecretSets)) },
 	} {
 		if s.mapStoreErr(w, r, set()) {
 			return

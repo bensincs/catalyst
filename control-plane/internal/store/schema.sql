@@ -615,3 +615,59 @@ UPDATE applications a
 -- that is already using it.
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS registry_username text NOT NULL DEFAULT '';
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS registry_password text NOT NULL DEFAULT '';
+
+-- ── Secret sets ────────────────────────────────────────────────────────────
+-- A secret set is a named collection of KEYS — never values. The platform
+-- author declares the shape ("this deployment needs db-password and api-key");
+-- the tenant supplies the values when it enables the set, and only ever there.
+--
+-- Nothing in this database ever holds a value. Values live in the tenant's OWN
+-- Key Vault, in the tenant's own subscription, written by the control plane
+-- through the ARM management plane. The management plane can WRITE a secret but
+-- cannot read one back — reading requires the vault's data plane, which the
+-- control plane deliberately has no access to. That asymmetry is the security
+-- property this design is built on: the platform can accept a secret from a
+-- tenant and can never afterwards read it. The reconciler, which runs inside
+-- the tenant's own subscription, reads the values and materialises them as a
+-- Kubernetes Secret.
+--
+-- Consequently the only per-tenant state here is WHICH keys have been set, so
+-- the console can show a key as filled in or outstanding without ever being
+-- able to display it.
+CREATE TABLE IF NOT EXISTS secret_sets (
+  id           text PRIMARY KEY,                -- slug
+  name         text NOT NULL,
+  description  text NOT NULL DEFAULT '',
+  owner_tenant text NOT NULL DEFAULT '',        -- '' = platform-authored; else tenant slug
+  keys         text[] NOT NULL DEFAULT '{}',    -- declared key names — the shape, never values
+  created_by   text NOT NULL DEFAULT '',
+  created_at   timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS secret_sets_owner_idx ON secret_sets(owner_tenant);
+
+-- Which platform secret sets a tenant is entitled to.
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS entitled_secret_sets text[] NOT NULL DEFAULT '{}';
+
+-- Per-tenant enablement. `keys_set` records which declared keys the tenant has
+-- supplied a value for, so an outstanding key can be reported without the value
+-- being knowable here. `vault_uri` is the tenant vault the values were written
+-- to, recorded so a later vault move is detectable.
+CREATE TABLE IF NOT EXISTS tenant_secret_sets (
+  tenant_slug text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  set_id      text NOT NULL,
+  health      text NOT NULL DEFAULT 'reconciling', -- reconciling | live | blocked
+  auto        boolean NOT NULL DEFAULT false,      -- true = auto-enabled via a dependency
+  keys_set    text[] NOT NULL DEFAULT '{}',        -- declared keys a value was supplied for
+  vault_uri   text NOT NULL DEFAULT '',
+  detail      text NOT NULL DEFAULT '',
+  sort_order  int  NOT NULL DEFAULT 0,
+  PRIMARY KEY (tenant_slug, set_id)
+);
+CREATE INDEX IF NOT EXISTS tenant_secret_sets_tenant_idx ON tenant_secret_sets(tenant_slug);
+
+-- The tenant's own Key Vault, provisioned as part of its footprint. Recorded
+-- here so the control plane knows where to write and the reconciler knows where
+-- to read. Empty until the footprint that creates it has been deployed.
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS vault_name text NOT NULL DEFAULT '';
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS vault_uri  text NOT NULL DEFAULT '';
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS vault_id   text NOT NULL DEFAULT '';

@@ -33,6 +33,8 @@ func usageQueryFor(kind model.DepKind) (entitleCol, enabledSQL string, ok bool) 
 		return "entitled_agents", `SELECT count(*) FROM agents WHERE agent_id = $1`, true
 	case model.DepMemoryStore:
 		return "entitled_stores", `SELECT count(*) FROM tenant_stores WHERE store_id = $1`, true
+	case model.DepSecretSet:
+		return "entitled_secret_sets", `SELECT count(*) FROM tenant_secret_sets WHERE set_id = $1`, true
 	}
 	return "", "", false
 }

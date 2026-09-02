@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -590,6 +591,7 @@ func (s *Store) DeleteTenant(ctx context.Context, slug, deletedBy string) error 
 	for _, q := range []string{
 		`DELETE FROM catalog_agents WHERE owner_tenant = $1`,
 		`DELETE FROM memory_stores  WHERE owner_tenant = $1`,
+		`DELETE FROM secret_sets    WHERE owner_tenant = $1`,
 		`DELETE FROM applications   WHERE owner_tenant = $1`,
 		`DELETE FROM infrastructure WHERE owner_tenant = $1`,
 	} {
@@ -1212,7 +1214,7 @@ func (s *Store) autoEntitleStores(ctx context.Context, slug string, agentIDs []s
 
 func (s *Store) TenantsRegistry(ctx context.Context) ([]model.TenantRegistryRow, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT `+tenantCols+`, entitled_agents, entitled_stores, entitled_deployments, entitled_infrastructure FROM tenants WHERE is_platform = false ORDER BY name`)
+		`SELECT `+tenantCols+`, entitled_agents, entitled_stores, entitled_deployments, entitled_infrastructure, entitled_secret_sets FROM tenants WHERE is_platform = false ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -1233,7 +1235,7 @@ func (s *Store) TenantsRegistry(ctx context.Context) ([]model.TenantRegistryRow,
 			&r.Ingress.AppsDomain, &r.Ingress.DNSState, &r.Ingress.DNSDetail, &r.Ingress.DNSNameservers,
 			&r.Ingress.TLSReady, &rowTLSExpires, &r.Ingress.TLSDetail,
 			&r.Ingress.OIDCIssuer, &r.Ingress.OIDCClientID, &r.Ingress.OIDCSecretSet,
-			&r.EntitledAgents, &r.EntitledStores, &r.EntitledDeployments, &r.EntitledInfrastructure); err != nil {
+			&r.EntitledAgents, &r.EntitledStores, &r.EntitledDeployments, &r.EntitledInfrastructure, &r.EntitledSecretSets); err != nil {
 			return nil, err
 		}
 		if installedAt != "" {
@@ -1254,6 +1256,9 @@ func (s *Store) TenantsRegistry(ctx context.Context) ([]model.TenantRegistryRow,
 		}
 		if r.EntitledInfrastructure == nil {
 			r.EntitledInfrastructure = []string{}
+		}
+		if r.EntitledSecretSets == nil {
+			r.EntitledSecretSets = []string{}
 		}
 		r.EntitledCount = len(r.EntitledAgents)
 		out = append(out, r)
@@ -1497,6 +1502,38 @@ func (s *Store) SyncDesired(ctx context.Context, t model.Tenant) (shared.Desired
 	for _, a := range apps {
 		byID[a.da.ID] = a
 	}
+	// The tenant's secret sets. Key names and a vault to read them from; the
+	// values stay in the tenant's vault and are fetched by the reconciler.
+	secretSets, err := s.desiredSecretSets(ctx, t.ID)
+	if err != nil {
+		return out, err
+	}
+	out.SecretSets = secretSets
+	completeSets := make(map[string]bool, len(secretSets))
+	for _, ss := range secretSets {
+		completeSets[ss.ID] = ss.Complete
+	}
+	// Scope each set's delivery to the namespaces of the applications that
+	// declared a dependency on it. A set nothing depends on is delivered
+	// nowhere, which is the correct answer rather than an oversight.
+	setNamespaces := map[string]map[string]bool{}
+	for _, a := range apps {
+		for _, dep := range a.deps {
+			if dep.Kind != model.DepSecretSet || a.da.Namespace == "" {
+				continue
+			}
+			if setNamespaces[dep.ID] == nil {
+				setNamespaces[dep.ID] = map[string]bool{}
+			}
+			setNamespaces[dep.ID][a.da.Namespace] = true
+		}
+	}
+	for i := range out.SecretSets {
+		for ns := range setNamespaces[out.SecretSets[i].ID] {
+			out.SecretSets[i].Namespaces = append(out.SecretSets[i].Namespaces, ns)
+		}
+		sort.Strings(out.SecretSets[i].Namespaces)
+	}
 	memo := map[string]bool{}
 	visiting := map[string]bool{}
 	var ready func(id string) bool
@@ -1521,6 +1558,14 @@ func (s *Store) SyncDesired(ctx context.Context, t model.Tenant) (shared.Desired
 				}
 			case model.DepApplication:
 				if !enabledApp[dep.ID] || !ready(dep.ID) {
+					ok = false
+				}
+			case model.DepSecretSet:
+				// Hold the app until every declared key has a value. Deploying
+				// against a half-filled set would produce a chart wired to a
+				// Secret that is missing the key it reads, which fails as an
+				// obscure CrashLoopBackOff rather than as "you owe a value".
+				if !completeSets[dep.ID] {
 					ok = false
 				}
 			}
@@ -1549,6 +1594,15 @@ func (s *Store) SyncDesired(ctx context.Context, t model.Tenant) (shared.Desired
 	}
 	for _, ag := range out.Agents {
 		sources["agent:"+ag.AgentID] = map[string]any{"agentId": ag.AgentID, "name": ag.Name}
+	}
+	// A secret set contributes only non-secret facts — the name of the Secret it
+	// materialises as, and its key names. That is deliberate: wiring merges a
+	// source's outputs into the app's Helm values, which are carried verbatim
+	// into the Argo Application, so anything exposed here would be published in
+	// cleartext. Binding the Secret's NAME is what lets a chart consume the
+	// value without the value ever entering this path.
+	for k, v := range secretSetSources(secretSets) {
+		sources[k] = v
 	}
 
 	for _, a := range apps {
@@ -1856,6 +1910,17 @@ func (s *Store) ApplyHeartbeat(ctx context.Context, t model.Tenant, hb shared.He
 		if _, err := s.pool.Exec(ctx,
 			`UPDATE tenant_stores SET health = $3 WHERE tenant_slug = $1 AND store_id = $2`,
 			t.ID, ms.StoreID, ms.Health); err != nil {
+			return err
+		}
+	}
+	// Record each secret set's outcome. The reconciler is the only component
+	// that can observe this: it alone can read the tenant's vault, so whether a
+	// value actually made it into the cluster is knowable only from here.
+	for _, ss := range hb.SecretSets {
+		if _, err := s.pool.Exec(ctx,
+			`UPDATE tenant_secret_sets SET health = $3, detail = $4
+			  WHERE tenant_slug = $1 AND set_id = $2`,
+			t.ID, ss.ID, ss.Health, trunc256(ss.Detail)); err != nil {
 			return err
 		}
 	}

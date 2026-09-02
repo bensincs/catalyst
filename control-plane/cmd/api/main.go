@@ -113,6 +113,10 @@ func main() {
 		// owns the ARM credential, so the server borrows it.
 		srv.SetTenantTeardown(prov.TeardownTenant)
 		srv.SetUpstreamManager(prov)
+		// Tenant secret values are written to each tenant's OWN vault, which
+		// needs the provisioner's ARM credential. Without it a secret set can be
+		// declared but not given values, which the enable path reports.
+		srv.SetSecretWriter(prov)
 		slog.Info("cross-tenant provisioning enabled (managed identity + Lighthouse)", "footprintRG", cfg.FootprintRG, "infraRG", cfg.InfraResourceGroup, "region", cfg.InfraRegion)
 	}
 

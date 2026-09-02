@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.40.2.10011",
-      "templateHash": "3397105412414290299"
+      "templateHash": "5698165485857639020"
     }
   },
   "parameters": {
@@ -274,6 +274,13 @@
       "metadata": {
         "description": "The Cortex tenant slug (platform-hosted tenants), surfaced to the reconciler for observability."
       }
+    },
+    "vaultName": {
+      "type": "string",
+      "defaultValue": "[format('cortex-kv-{0}', uniqueString(resourceGroup().id))]",
+      "metadata": {
+        "description": "Name of the tenant's Key Vault. Must be globally unique, 3-24 chars."
+      }
     }
   },
   "variables": {
@@ -293,7 +300,8 @@
     "clusterEnabled": "[parameters('deployCluster')]",
     "helmOciSecretName": "helm-oci-password",
     "helmOciSecrets": "[if(empty(parameters('helmOciPassword')), createArray(), createArray(createObject('name', variables('helmOciSecretName'), 'value', parameters('helmOciPassword'))))]",
-    "helmOciEnv": "[if(empty(parameters('helmOciPassword')), createArray(), createArray(createObject('name', 'HELM_OCI_PASSWORD', 'secretRef', variables('helmOciSecretName'))))]"
+    "helmOciEnv": "[if(empty(parameters('helmOciPassword')), createArray(), createArray(createObject('name', 'HELM_OCI_PASSWORD', 'secretRef', variables('helmOciSecretName'))))]",
+    "keyVaultSecretsUserRoleId": "4633458b-17de-408a-b874-0445c86b69e6"
   },
   "resources": [
     {
@@ -576,6 +584,47 @@
       ]
     },
     {
+      "type": "Microsoft.KeyVault/vaults",
+      "apiVersion": "2023-07-01",
+      "name": "[parameters('vaultName')]",
+      "location": "[parameters('location')]",
+      "tags": {
+        "SecurityControl": "Ignore"
+      },
+      "properties": {
+        "sku": {
+          "family": "A",
+          "name": "standard"
+        },
+        "tenantId": "[variables('tenantId')]",
+        "enableRbacAuthorization": true,
+        "enableSoftDelete": true,
+        "softDeleteRetentionInDays": 7,
+        "enablePurgeProtection": null,
+        "publicNetworkAccess": "Enabled",
+        "networkAcls": {
+          "defaultAction": "Allow",
+          "bypass": "AzureServices"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.KeyVault/vaults', parameters('vaultName'))]",
+      "name": "[guid(resourceId('Microsoft.KeyVault/vaults', parameters('vaultName')), variables('reconIdentityId'), variables('keyVaultSecretsUserRoleId'))]",
+      "properties": {
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('keyVaultSecretsUserRoleId'))]",
+        "principalId": "[if(variables('createReconIdentity'), reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix'))), '2023-01-31').principalId, reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('reconIdentityName')), '2023-01-31').principalId)]",
+        "principalType": "ServicePrincipal",
+        "delegatedManagedIdentityResourceId": "[if(parameters('isDelegated'), variables('reconIdentityId'), null())]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix')))]",
+        "[resourceId('Microsoft.KeyVault/vaults', parameters('vaultName'))]"
+      ]
+    },
+    {
       "condition": "[parameters('deployCluster')]",
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2025-04-01",
@@ -691,6 +740,18 @@
     "foundryProjectEndpoint": {
       "type": "string",
       "value": "[variables('foundryProjectEndpoint')]"
+    },
+    "vaultName": {
+      "type": "string",
+      "value": "[parameters('vaultName')]"
+    },
+    "vaultUri": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.KeyVault/vaults', parameters('vaultName')), '2023-07-01').vaultUri]"
+    },
+    "vaultId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.KeyVault/vaults', parameters('vaultName'))]"
     }
   }
 }

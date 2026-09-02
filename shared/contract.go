@@ -181,6 +181,49 @@ type DesiredState struct {
 	// footprint, and until then the cluster held one the registry no longer
 	// accepted. nil ⇒ no platform registry, and public artifacts still pull.
 	Registry *RegistryAuth `json:"registry,omitempty"`
+
+	// SecretSets are the tenant's enabled secret sets. Note what is NOT here:
+	// the values. The control plane cannot read them — it writes them to the
+	// tenant's own Key Vault through the ARM management plane, which has no
+	// read-back — so it can only say which keys exist and which vault holds
+	// them. The reconciler, which runs inside the tenant's own subscription,
+	// reads the values on the vault's data plane and materialises them as a
+	// Kubernetes Secret. That is why a secret never travels on this sync, unlike
+	// the OIDC client secret and registry password above.
+	SecretSets []DesiredSecretSet `json:"secretSets,omitempty"`
+}
+
+// DesiredSecretSet tells the reconciler which secrets to fetch and what to call
+// the Secret it writes. It carries key names, never values.
+type DesiredSecretSet struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// SecretName is the Kubernetes Secret to write, in every namespace that
+	// needs it. Fixed and documented rather than generated, because a chart
+	// author has to be able to name it in their values by hand.
+	SecretName string `json:"secretName"`
+	// VaultURI is the tenant's own Key Vault, e.g. https://foo.vault.azure.net/.
+	VaultURI string `json:"vaultUri"`
+	// Keys are the declared keys that actually have a value. A key the tenant
+	// has not filled in is omitted rather than sent and 404'd.
+	Keys []string `json:"keys"`
+	// Namespaces are the workload namespaces the Secret is written into — the
+	// namespaces of the applications that declared a dependency on this set, and
+	// only those. Writing it everywhere (as the image pull secret is) would hand
+	// every app credentials belonging to another, so delivery is scoped to the
+	// dependency graph the author actually declared.
+	Namespaces []string `json:"namespaces,omitempty"`
+	// Complete is false when the tenant still owes a value for some declared
+	// key, so the reconciler can report the set as blocked rather than writing a
+	// Secret that is quietly missing what a chart is about to ask for.
+	Complete bool `json:"complete"`
+}
+
+// SecretSetStatus is the reconciler's report on one set (heartbeat).
+type SecretSetStatus struct {
+	ID     string `json:"id"`
+	Health string `json:"health"` // reconciling | live | blocked
+	Detail string `json:"detail,omitempty"`
 }
 
 // RegistryAuth is pull access to the platform registry for one tenant. The token
@@ -324,4 +367,7 @@ type Heartbeat struct {
 	// Cluster + Applications report the tenant's Kubernetes/GitOps layer.
 	Cluster      *ClusterStatus      `json:"cluster,omitempty"`
 	Applications []ApplicationStatus `json:"applications,omitempty"`
+	// SecretSets reports whether each set's values were successfully read from
+	// the tenant's vault and written into the cluster.
+	SecretSets []SecretSetStatus `json:"secretSets,omitempty"`
 }

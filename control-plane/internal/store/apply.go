@@ -58,6 +58,16 @@ func insertMemoryStore(ctx context.Context, q querier, id, name, description, ow
 	return err
 }
 
+// A secret set holds only declared key names — never a value. Inserting one is
+// therefore an ordinary catalog write with nothing sensitive in it.
+func insertSecretSet(ctx context.Context, q querier, x model.SecretSet, createdBy string) error {
+	_, err := q.Exec(ctx,
+		`INSERT INTO secret_sets (id, name, description, owner_tenant, keys, created_by)
+		 VALUES ($1,$2,$3,$4,$5,$6)`,
+		x.ID, x.Name, x.Description, x.Owner, x.Keys, createdBy)
+	return err
+}
+
 func insertCatalogAgent(ctx context.Context, q querier, id, name, description, agentType, agentModel, owner, createdBy string, def shared.AgentDefinition) error {
 	if _, err := q.Exec(ctx,
 		`INSERT INTO catalog_agents (id, name, description, type, model, owner_tenant, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
@@ -94,6 +104,7 @@ type ApplyBatch struct {
 	MemoryStores   []model.MemoryStore
 	Agents         []ApplyAgent
 	Applications   []model.Application
+	SecretSets     []model.SecretSet
 }
 
 // ApplyResult is the ids of the created resources, by kind.
@@ -102,6 +113,7 @@ type ApplyResult struct {
 	MemoryStores   []string `json:"memoryStores"`
 	Agents         []string `json:"agents"`
 	Applications   []string `json:"applications"`
+	SecretSets     []string `json:"secretSets"`
 }
 
 type applyItem struct {
@@ -114,15 +126,19 @@ type applyItem struct {
 // Apply validates + creates a batch of resources in a single transaction. It's the
 // one write path for creation (the single-resource create endpoints send a batch
 // of one; a future CLI can send a whole application graph). Resources are inserted
-// in dependency order (infrastructure → memory stores → agents → applications), and
+// in dependency order (secret sets → infrastructure → memory stores → agents →
+// applications), and
 // the batch's own members satisfy each other's dependencies.
 func (s *Store) Apply(ctx context.Context, createdBy string, b ApplyBatch) (ApplyResult, error) {
-	items := make([]applyItem, 0, len(b.Infrastructure)+len(b.MemoryStores)+len(b.Agents)+len(b.Applications))
+	items := make([]applyItem, 0, len(b.Infrastructure)+len(b.MemoryStores)+len(b.Agents)+len(b.Applications)+len(b.SecretSets))
 	for _, i := range b.Infrastructure {
 		items = append(items, applyItem{model.DepInfrastructure, i.ID, i.Owner, i.Dependencies})
 	}
 	for _, m := range b.MemoryStores {
 		items = append(items, applyItem{model.DepMemoryStore, m.ID, m.Owner, nil})
+	}
+	for _, ss := range b.SecretSets {
+		items = append(items, applyItem{model.DepSecretSet, ss.ID, ss.Owner, nil})
 	}
 	for _, a := range b.Agents {
 		var deps []model.Dependency
@@ -145,6 +161,14 @@ func (s *Store) Apply(ctx context.Context, createdBy string, b ApplyBatch) (Appl
 	defer tx.Rollback(ctx)
 
 	var res ApplyResult
+	// Secret sets first: they are leaves that infrastructure and applications in
+	// this same batch may depend on.
+	for _, ss := range b.SecretSets {
+		if err := insertSecretSet(ctx, tx, ss, createdBy); err != nil {
+			return ApplyResult{}, err
+		}
+		res.SecretSets = append(res.SecretSets, ss.ID)
+	}
 	for _, i := range b.Infrastructure {
 		if err := insertInfrastructure(ctx, tx, i, createdBy); err != nil {
 			return ApplyResult{}, err

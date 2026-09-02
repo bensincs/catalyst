@@ -59,10 +59,11 @@ const (
 // mutates or prunes Applications it owns. System resources (the ingress) also
 // carry labelSystem so the tenant-app prune never removes them.
 const (
-	labelManaged = "cortex.io/managed"  // "true"
-	labelSystem  = "cortex.io/system"   // "true" for the ingress/system resources
-	labelAppID   = "cortex.io/app-id"   // control-plane application id
-	labelOCIRepo = "cortex.io/oci-repo" // "true" for auto-registered Argo OCI Helm repos
+	labelManaged   = "cortex.io/managed"    // "true"
+	labelSystem    = "cortex.io/system"     // "true" for the ingress/system resources
+	labelAppID     = "cortex.io/app-id"     // control-plane application id
+	labelSecretSet = "cortex.io/secret-set" // control-plane secret set id
+	labelOCIRepo   = "cortex.io/oci-repo"   // "true" for auto-registered Argo OCI Helm repos
 )
 
 var (
@@ -150,7 +151,7 @@ func New(cred azcore.TokenCredential, o Options) *Client {
 // stamped as Argo Applications, then returns cluster + per-app status. Apps are
 // exposed through the AKS-managed Azure Application Gateway (AGIC) — the edge no
 // longer enforces identity, so the auth policy is accepted but ignored.
-func (c *Client) Reconcile(ctx context.Context, apps []shared.DesiredApplication, _ *shared.IngressAuth, ing *shared.IngressConfig, reg *shared.RegistryAuth) (shared.ClusterStatus, []shared.ApplicationStatus) {
+func (c *Client) Reconcile(ctx context.Context, apps []shared.DesiredApplication, _ *shared.IngressAuth, ing *shared.IngressConfig, reg *shared.RegistryAuth, sets []shared.DesiredSecretSet) (shared.ClusterStatus, []shared.ApplicationStatus, []shared.SecretSetStatus) {
 	status := shared.ClusterStatus{Name: c.o.ClusterName, Phase: shared.ClusterProvisioning}
 
 	// The control plane serves the registry credential on every sync, so a
@@ -166,38 +167,38 @@ func (c *Client) Reconcile(ctx context.Context, apps []shared.DesiredApplication
 	if err != nil {
 		status.Phase = shared.ClusterUnreachable
 		status.Detail = trunc(err.Error())
-		return status, pending(apps)
+		return status, pending(apps), pendingSets(sets)
 	}
 	status.KubernetesVer = m.k8sVersion
 	status.NodeCount = m.nodeCount
 	if !strings.EqualFold(m.provisioningState, "Succeeded") {
 		status.Detail = "cluster provisioning: " + m.provisioningState
-		return status, pending(apps)
+		return status, pending(apps), pendingSets(sets)
 	}
 
 	k, err := c.kubeClient(ctx)
 	if err != nil {
 		status.Phase = shared.ClusterUnreachable
 		status.Detail = trunc(err.Error())
-		return status, pending(apps)
+		return status, pending(apps), pendingSets(sets)
 	}
 
 	installed, err := k.argoInstalled(ctx)
 	if err != nil {
 		status.Phase = shared.ClusterUnreachable
 		status.Detail = trunc(err.Error())
-		return status, pending(apps)
+		return status, pending(apps), pendingSets(sets)
 	}
 	if !installed {
 		if err := c.installArgo(ctx, k); err != nil {
 			status.Detail = "installing Argo CD: " + trunc(err.Error())
-			return status, pending(apps)
+			return status, pending(apps), pendingSets(sets)
 		}
 		slog.Info("cluster: applied Argo CD install manifest", "version", c.o.ArgoVersion)
 		// CRDs need a moment to establish; converge Applications next cycle.
 		status.ArgoInstalled = true
 		status.Detail = "Argo CD installing"
-		return status, pending(apps)
+		return status, pending(apps), pendingSets(sets)
 	}
 	status.ArgoInstalled = true
 	status.Phase = shared.ClusterReady
@@ -236,6 +237,13 @@ func (c *Client) Reconcile(ctx context.Context, apps []shared.DesiredApplication
 	}
 	k.ensureGateway(ctx, subnet, domain, tlsReady)
 
+	// Secret sets before the Argo Applications that consume them, so a chart's
+	// first reconcile already finds the Secret it references. Stamping the app
+	// first would produce a guaranteed initial failure that resolves itself a
+	// cycle later — the same ordering reason the image pull secret is written
+	// before the Application.
+	setStatuses := k.reconcileSecretSets(ctx, c, sets)
+
 	appStatuses := k.reconcileApplications(ctx, apps, c.o, ing, tlsReady)
 	if tlsReady && ing.OIDCConfigured() {
 		status.IngressIssuer = ing.OIDCIssuer
@@ -249,7 +257,17 @@ func (c *Client) Reconcile(ctx context.Context, apps []shared.DesiredApplication
 	// Each app's Azure infra is provisioned by the control plane (via Lighthouse)
 	// and its outputs are already merged into the Helm values by the time an app
 	// is served here — the reconciler just stamps the Argo CD Application.
-	return status, appStatuses
+	return status, appStatuses, setStatuses
+}
+
+// pendingSets reports every set as still reconciling, for the early returns
+// where the cluster could not be reached at all.
+func pendingSets(sets []shared.DesiredSecretSet) []shared.SecretSetStatus {
+	out := make([]shared.SecretSetStatus, 0, len(sets))
+	for _, s := range sets {
+		out = append(out, shared.SecretSetStatus{ID: s.ID, Health: shared.StatusReconciling})
+	}
+	return out
 }
 
 // --- ARM (cluster metadata + kubeconfig) ------------------------------------

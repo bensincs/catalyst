@@ -533,6 +533,68 @@ resource reconciler 'Microsoft.App/containerApps@2024-03-01' = if (deployReconci
   dependsOn: [ foundryRoleAssignment, modelDeployment, embeddingDeployment ]
 }
 
+// ── The tenant's secret vault ───────────────────────────────────────────────
+//
+// Secret sets are stored here, in the tenant's OWN subscription — not in the
+// platform's. That placement is what makes the security model work:
+//
+//   • The control plane WRITES secrets through the ARM management plane, which
+//     it can reach via its subscription access. The management plane has no
+//     read-back of a secret's value, so the platform can accept a secret from a
+//     tenant and can never afterwards read it.
+//   • The reconciler READS them on the vault's data plane. It runs inside this
+//     same subscription and directory, so the Key Vault Secrets User assignment
+//     below is an ordinary same-directory grant — the cross-directory wall that
+//     blocks granting a customer identity access to a platform resource simply
+//     does not apply.
+//
+// A vault in the platform's subscription could not have offered either property.
+//
+// RBAC authorization (not access policies) so the grant is a role assignment
+// like every other one in this template. Purge protection is deliberately off:
+// a tenant that is torn down and re-created must be able to reuse its vault
+// name, and a soft-deleted vault holding the name would block that for 90 days.
+@description('Name of the tenant\'s Key Vault. Must be globally unique, 3-24 chars.')
+param vaultName string = 'cortex-kv-${uniqueString(resourceGroup().id)}'
+
+var keyVaultSecretsUserRoleId = '4633458b-17de-408a-b874-0445c86b69e6'
+
+resource vault 'Microsoft.KeyVault/vaults@2023-07-01' = {
+  name: vaultName
+  location: location
+  tags: {
+    // Subscription governance disables public network access on untagged
+    // resources, which would break both the management-plane write and the
+    // reconciler's data-plane read. This tag is the sanctioned exemption and is
+    // load-bearing, not cosmetic.
+    SecurityControl: 'Ignore'
+  }
+  properties: {
+    sku: { family: 'A', name: 'standard' }
+    tenantId: tenantId
+    enableRbacAuthorization: true
+    enableSoftDelete: true
+    softDeleteRetentionInDays: 7
+    enablePurgeProtection: null
+    publicNetworkAccess: 'Enabled'
+    networkAcls: { defaultAction: 'Allow', bypass: 'AzureServices' }
+  }
+}
+
+// The reconciler reads secret values from the vault's data plane and writes them
+// into the cluster as Kubernetes Secrets. Read-only by design: nothing inside
+// the tenant's cluster should be able to alter what the tenant supplied.
+resource vaultReadAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(vault.id, reconIdentityId, keyVaultSecretsUserRoleId)
+  scope: vault
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', keyVaultSecretsUserRoleId)
+    principalId: reconIdentityPrincipalId
+    principalType: 'ServicePrincipal'
+    delegatedManagedIdentityResourceId: isDelegated ? reconIdentityId : null
+  }
+}
+
 output reconcilerPrincipalId string = reconIdentityPrincipalId
 output reconcilerClientId string = reconIdentityClientId
 output reconcilerIdentity string = reconIdentityName
@@ -541,3 +603,6 @@ output subscriptionId string = subscriptionId
 output foundryAccountName string = foundryAccountName
 output foundryProjectName string = foundryProjectName
 output foundryProjectEndpoint string = foundryProjectEndpoint
+output vaultName string = vault.name
+output vaultUri string = vault.properties.vaultUri
+output vaultId string = vault.id

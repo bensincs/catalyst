@@ -63,9 +63,10 @@ func (r *Reconciler) once(ctx context.Context) {
 	// deployments into its cluster, and report cluster + app status.
 	clusterPhase := "disabled"
 	if r.cluster != nil {
-		cs, appStatuses := r.cluster.Reconcile(ctx, desired.Applications, desired.IngressAuth, desired.Ingress, desired.Registry)
+		cs, appStatuses, setStatuses := r.cluster.Reconcile(ctx, desired.Applications, desired.IngressAuth, desired.Ingress, desired.Registry, desired.SecretSets)
 		hb.Cluster = &cs
 		hb.Applications = appStatuses
+		hb.SecretSets = setStatuses
 		clusterPhase = cs.Phase
 	}
 
@@ -76,7 +77,7 @@ func (r *Reconciler) once(ctx context.Context) {
 	slog.Info("reconciled",
 		"agents", len(desired.Agents), "agentsLive", countLive(statuses),
 		"stores", len(desired.MemoryStores), "storesLive", countStoresLive(storeStatuses),
-		"apps", len(desired.Applications), "cluster", clusterPhase)
+		"apps", len(desired.Applications), "secretSets", len(desired.SecretSets), "cluster", clusterPhase)
 }
 
 func (r *Reconciler) heartbeat(statuses []shared.AgentStatus, storeStatuses []shared.MemoryStoreStatus) shared.Heartbeat {

@@ -72,6 +72,11 @@ type Server struct {
 	// provisioning is off, since there is then no registry to manage.
 	upstreams UpstreamManager
 
+	// secrets stores tenant secret values in each tenant's own Key Vault. Nil
+	// when cross-tenant provisioning is off, in which case there are no tenant
+	// vaults and a secret set cannot be given values.
+	secrets SecretWriter
+
 	// tenantTeardown deletes a tenant's Azure resource groups. Injected by main
 	// from the infra provisioner (which owns the ARM credential); nil when
 	// cross-tenant provisioning is off, in which case deleting a tenant removes
@@ -581,10 +586,11 @@ func gateAgentHealth(t model.Tenant, agents []model.Agent) []model.Agent {
 func (s *Server) handleApply(w http.ResponseWriter, r *http.Request) {
 	id, _ := auth.IdentityFrom(r.Context())
 	var body struct {
-		Infrastructure []infraInput `json:"infrastructure"`
-		MemoryStores   []storeInput `json:"memoryStores"`
-		Agents         []agentInput `json:"agents"`
-		Applications   []appInput   `json:"applications"`
+		Infrastructure []infraInput     `json:"infrastructure"`
+		MemoryStores   []storeInput     `json:"memoryStores"`
+		Agents         []agentInput     `json:"agents"`
+		Applications   []appInput       `json:"applications"`
+		SecretSets     []secretSetInput `json:"secretSets"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
@@ -635,6 +641,13 @@ func (s *Server) handleApply(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		batch.Applications = append(batch.Applications, in.build(prefix+slugify(in.Name), owner))
+	}
+	for _, in := range body.SecretSets {
+		if msg := in.validate(); msg != "" {
+			writeErr(w, http.StatusBadRequest, msg)
+			return
+		}
+		batch.SecretSets = append(batch.SecretSets, in.build(prefix+slugify(in.Name), owner))
 	}
 
 	res, err := s.store.Apply(r.Context(), id.OID, batch)
