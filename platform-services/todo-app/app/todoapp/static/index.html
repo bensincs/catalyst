@@ -59,6 +59,9 @@
 
       /* Not an inversion — a separate, tuned set, exactly as the console does it,
          so the islands still read as raised against the page. */
+      /* An explicit theme (set by the console when embedded) takes precedence
+         over the OS preference — otherwise a console in dark mode on a light
+         desktop would show a light app inside a dark page. */
       @media (prefers-color-scheme: dark) {
         :root {
           --canvas: #1a1a1a;
@@ -85,6 +88,79 @@
           --danger-ink: #ff8a85;
           --danger-bg: rgb(255 107 98 / 0.16);
         }
+      }
+
+      :root[data-theme="dark"] {
+        --canvas: #1a1a1a;
+        --surface: #232323;
+        --surface-sunken: #1a1a1a;
+        --surface-hover: rgb(237 237 237 / 0.06);
+
+        --text: #ededed;
+        --text-secondary: rgb(237 237 237 / 0.76);
+        --text-muted: rgb(237 237 237 / 0.7);
+
+        --border: rgb(237 237 237 / 0.1);
+        --border-strong: rgb(237 237 237 / 0.2);
+        --field-border: rgb(237 237 237 / 0.22);
+
+        --primary: #ededed;
+        --primary-hover: #ffffff;
+        --on-primary: #1a1a1a;
+
+        --accent: #a964f7;
+        --accent-bg: rgb(169 100 247 / 0.18);
+
+        --success-ink: #3cbd7d;
+        --danger-ink: #ff8a85;
+        --danger-bg: rgb(255 107 98 / 0.16);
+      }
+      :root[data-theme="light"] {
+        --canvas: #f6f6f7;
+        --surface: #ffffff;
+        --surface-sunken: #ededed;
+        --surface-hover: rgb(41 41 41 / 0.05);
+
+        --text: #292929;
+        --text-secondary: rgb(41 41 41 / 0.74);
+        --text-muted: rgb(41 41 41 / 0.68);
+
+        --border: rgb(41 41 41 / 0.08);
+        --border-strong: rgb(41 41 41 / 0.16);
+        --field-border: rgb(41 41 41 / 0.24);
+
+        --primary: #292929;
+        --primary-hover: #1f1f1f;
+        --on-primary: #ffffff;
+
+        --accent: #a964f7;
+        --accent-bg: rgb(169 100 247 / 0.12);
+
+        --success-ink: #126e40;
+        --danger-ink: #b5231b;
+        --danger-bg: rgb(181 35 27 / 0.1);
+      }
+
+      /* Embedded in the console: it already shows the app's name and its own
+         page padding, so repeating either is what makes an embed look like an
+         embed. The content picks up directly under the console's header. */
+      :root[data-embedded="true"] body {
+        padding: 0;
+        background: transparent;
+      }
+      :root[data-embedded="true"] header,
+      :root[data-embedded="true"] footer {
+        display: none;
+      }
+      :root[data-embedded="true"] main {
+        max-width: none;
+      }
+      :root[data-embedded="true"] .panel {
+        border: none;
+        box-shadow: none;
+        border-radius: 0;
+        background: transparent;
+        padding: var(--space-lg) var(--space-xl);
       }
 
       * {
@@ -332,6 +408,17 @@
     </main>
 
     <script>
+      // The console tells an embedded app that it is embedded, and which theme
+      // to match. Opened directly, none of this fires and the app keeps its own
+      // chrome and follows the operating system.
+      window.addEventListener("message", (ev) => {
+        const d = ev.data;
+        if (!d || d.source !== "cortex") return;
+        const root = document.documentElement;
+        if (d.embedded) root.dataset.embedded = "true";
+        if (d.theme === "dark" || d.theme === "light") root.dataset.theme = d.theme;
+      });
+
       const api = "/api/todos";
       const listEl = document.getElementById("list");
       const errEl = document.getElementById("error");

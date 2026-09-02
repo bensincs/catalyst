@@ -1,81 +1,73 @@
+/* An installed application, rendered as a page of the console rather than as
+   something being hosted inside it. No bordered frame, no host bar: the header
+   above is the console's own furniture, and the app's content continues
+   directly beneath it the way any other view's content does. */
+
 .wrap {
   display: flex;
   flex-direction: column;
-  /* Fill the content area so the app gets the height it expects, rather than a
-     short box that makes every embedded app look broken. */
   min-height: 0;
-  flex: 1;
 }
 
 .actions {
   display: flex;
-  gap: var(--space-sm);
+  gap: var(--space-xs);
 }
 
-.frameWrap {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 480px;
-  overflow: hidden;
-  background: var(--surface);
-  border: 1px solid var(--border);
+/* Fills the rest of the viewport below the header. Calculated rather than
+   flex-grown because the shell's content area is not itself a flex column, so
+   there is no height for a flex child to take a share of. */
+.surface {
+  position: relative;
+  min-height: 420px;
+  height: calc(100vh - var(--topbar-h) - 132px);
   border-radius: var(--radius-lg);
-}
-
-/* A deliberate seam. The bar says whose software is below it — without one, a
-   page served by the app is indistinguishable from a page served by Cortex. */
-.frameBar {
-  display: flex;
-  align-items: center;
-  gap: var(--space-sm);
-  padding: var(--space-sm) var(--space-md);
-  background: var(--surface-sunken);
-  border-bottom: 1px solid var(--border);
-}
-
-.frameIcon {
-  display: grid;
-  place-items: center;
-  color: var(--text-muted);
-}
-
-.frameHost {
-  font-size: var(--text-caption);
-  color: var(--text-secondary);
-}
-
-.frameNote {
-  margin-left: auto;
-  font-size: var(--text-caption);
-  color: var(--text-muted);
+  overflow: hidden;
+  /* The app paints its own background; matching the surface avoids a flash of
+     the console's canvas showing through before it does. */
+  background: var(--surface);
 }
 
 .frame {
-  flex: 1;
+  display: block;
   width: 100%;
+  height: 100%;
   border: 0;
-  /* The app paints its own background; white avoids a flash of the console's
-     canvas colour showing through before it does. */
-  background: #ffffff;
 }
 
-.footnote {
+/* Only appears once loading has taken long enough to be worth mentioning — an
+   app that refuses framing is indistinguishable from a slow one, so this is a
+   suggestion rather than a diagnosis. */
+.fallback {
+  position: absolute;
+  inset: 0;
   display: flex;
-  align-items: flex-start;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
   gap: var(--space-sm);
-  margin: var(--space-md) 0 0;
+  padding: var(--space-xl);
+  text-align: center;
+  background: var(--surface);
+}
+
+.fallbackTitle {
+  margin: 0;
+  font-size: var(--text-h3);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.fallbackBody {
+  margin: 0 0 var(--space-sm);
+  max-width: 46ch;
   font-size: var(--text-body-sm);
   color: var(--text-muted);
-  line-height: 1.5;
-}
-.footnote svg {
-  flex: none;
-  margin-top: 2px;
+  line-height: 1.55;
 }
 
-@media (max-width: 720px) {
-  .frameNote {
-    display: none;
+@media (max-width: 900px) {
+  .surface {
+    height: calc(100vh - var(--topbar-h) - 168px);
   }
 }

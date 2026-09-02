@@ -1,45 +1,67 @@
 "use client";
 
-import { useState } from "react";
-import { ArrowUpRight, RefreshCw, ShieldAlert } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { ArrowUpRight, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useConsole } from "@/components/providers/console-provider";
 import { PageHeader } from "@/components/ui/page-header";
-import { appIcon } from "@/lib/app-icons";
 import type { PinnedApp } from "@/lib/types";
 import styles from "./embedded-app.module.css";
 
-/** Renders an installed application inside the console.
+/** Renders an installed application as a page of the console.
  *
- *  The frame is deliberately not invisible. What is on screen is the tenant's
- *  own software running in their cluster, on their domain, under their
- *  identity — not part of Cortex. A chrome-less iframe would imply the console
- *  vouches for what is inside it, and would leave no way to tell a page served
- *  by the app from a page served by us. The header names the app and shows
- *  where it actually lives.
+ *  Presented first-party on purpose. This is not arbitrary third-party content:
+ *  it comes from a catalog the platform publishes, the tenant chose to install
+ *  it, and it runs on their own domain under their own identity. Wrapping it in
+ *  a browser-chrome frame made the console look like it was hosting something it
+ *  distrusted, which is the wrong signal for software we ship.
  *
- *  Two properties this relies on rather than enforces:
+ *  The isolation that matters is not visual and does not depend on any of this:
+ *  the app is a different origin, so the browser will not let it reach the
+ *  console's session whatever it is dressed as. The sandbox still withholds
+ *  everything an application does not need to render.
  *
- *  - The app is on a different origin, so it cannot read the console's session.
- *    That is browser-enforced and holds regardless of what the app does.
- *  - The app must permit framing. Many do not, by default or by policy, and
- *    there is no way to detect that from here — a blocked frame looks exactly
- *    like a slow one. Rather than guess, the escape hatch is always present.
+ *  One thing genuinely cannot be detected from here: an app that refuses to be
+ *  framed produces a blank area that is indistinguishable from one still
+ *  loading. Rather than pre-empt that with a permanent warning, the fallback
+ *  appears only once it has taken long enough to be worth mentioning.
  */
 export function EmbeddedApp({ app }: { app: PinnedApp }) {
+  const { theme } = useConsole();
   const [nonce, setNonce] = useState(0);
-  const Icon = appIcon(app.icon);
-  let host = app.url;
-  try {
-    host = new URL(app.url).host;
-  } catch {
-    /* keep the raw value — it is only shown, never followed */
-  }
+  const [loaded, setLoaded] = useState(false);
+  const [slow, setSlow] = useState(false);
+  const frameRef = useRef<HTMLIFrameElement | null>(null);
+
+  useEffect(() => {
+    setLoaded(false);
+    setSlow(false);
+    const t = setTimeout(() => setSlow(true), 6000);
+    return () => clearTimeout(t);
+  }, [nonce]);
+
+  // Tell the app it is embedded, and which theme to match. Sent as a message
+  // rather than a query parameter so a theme toggle does not reload the frame
+  // and throw away whatever the person was in the middle of. An app that does
+  // not listen simply keeps its own appearance.
+  useEffect(() => {
+    const w = frameRef.current?.contentWindow;
+    if (!w || !loaded) return;
+    let origin = "*";
+    try {
+      origin = new URL(app.url).origin;
+    } catch {
+      return; // never broadcast to an origin we could not parse
+    }
+    w.postMessage({ source: "cortex", embedded: true, theme }, origin);
+  }, [loaded, theme, app.url, nonce]);
+
+  const open = () => window.open(app.url, "_blank", "noopener,noreferrer");
 
   return (
     <div className={styles.wrap}>
       <PageHeader
         title={app.name}
-        description={`Running in your tenant at ${host}`}
         actions={
           <div className={styles.actions}>
             <Button
@@ -50,49 +72,41 @@ export function EmbeddedApp({ app }: { app: PinnedApp }) {
             >
               Reload
             </Button>
-            <Button
-              size="sm"
-              variant="secondary"
-              icon={ArrowUpRight}
-              onClick={() => window.open(app.url, "_blank", "noopener,noreferrer")}
-            >
+            <Button size="sm" variant="ghost" icon={ArrowUpRight} onClick={open}>
               Open in a new tab
             </Button>
           </div>
         }
       />
 
-      <div className={styles.frameWrap}>
-        <div className={styles.frameBar}>
-          <span className={styles.frameIcon} aria-hidden>
-            <Icon size={14} strokeWidth={2} />
-          </span>
-          <span className={`${styles.frameHost} mono`}>{host}</span>
-          <span className={styles.frameNote}>your tenant&rsquo;s application</span>
-        </div>
-
+      <div className={styles.surface}>
         <iframe
           key={nonce}
+          ref={frameRef}
           src={app.url}
           title={app.name}
           className={styles.frame}
+          onLoad={() => setLoaded(true)}
           // allow-same-origin is required or the app cannot use its own cookies
-          // or storage and most apps simply break. It does NOT grant access to
-          // the console: the app is a different origin, so the browser isolates
-          // it either way. Everything not needed to render an app is withheld.
+          // or storage and most apps simply break. It grants nothing across
+          // origins: the browser isolates it from the console either way.
           sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-downloads"
           referrerPolicy="no-referrer"
-          loading="lazy"
         />
-      </div>
 
-      <p className={styles.footnote}>
-        <ShieldAlert size={14} strokeWidth={2} aria-hidden />
-        <span>
-          This is your own application, not part of Cortex. If it doesn&rsquo;t appear, it may
-          not allow being embedded — open it in a new tab instead.
-        </span>
-      </p>
+        {!loaded && slow && (
+          <div className={styles.fallback} role="status">
+            <p className={styles.fallbackTitle}>This is taking a while</p>
+            <p className={styles.fallbackBody}>
+              Some applications don&rsquo;t allow being shown inside another page. If nothing
+              appears, open it directly.
+            </p>
+            <Button size="sm" variant="secondary" icon={ArrowUpRight} onClick={open}>
+              Open {app.name}
+            </Button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
