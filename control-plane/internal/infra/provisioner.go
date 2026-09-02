@@ -199,8 +199,11 @@ func (p *Provisioner) ensure(ctx context.Context, tgt store.InfraTarget) {
 	// Vault name) into the template before deploying, so a single platform-authored
 	// infra yields tenant-unique resource names instead of colliding across tenants.
 	armStr := substituteTokens(tgt.ArmTemplate, tenantTokens{
-		Slug:          tgt.TenantSlug,
-		Region:        p.region,
+		Slug: tgt.TenantSlug,
+		// The tenant's own region when it has one. Falling back to the
+		// provisioner default put private endpoints in a different region from
+		// the subnet they attach to, which ARM rejects as "not found".
+		Region:        firstNonEmpty(strings.TrimSpace(tgt.Region), p.region),
 		VaultName:     tgt.VaultName,
 		VaultRG:       resourceGroupOf(tgt.VaultID),
 		PESubnetID:    tgt.PESubnetID,

@@ -52,7 +52,10 @@ param keyVaultSku string = 'premium'
 @description('PostgreSQL major version.')
 param postgresVersion string = '16'
 @description('PostgreSQL Flexible Server SKU.')
-param postgresSkuName string = 'GP_Standard_D4ds_v5'
+param postgresSkuName string = 'Standard_D4ds_v5'
+
+@description('Postgres compute tier; must match the SKU family.')
+param postgresSkuTier string = 'GeneralPurpose'
 @description('PostgreSQL storage in MB.')
 param postgresStorageMb int = 131072
 @description('PostgreSQL backup retention (7-35 days).')
@@ -284,6 +287,7 @@ module postgres 'modules/postgres.bicep' = {
     tags: tags
     version: postgresVersion
     skuName: postgresSkuName
+    skuTier: postgresSkuTier
     storageMb: postgresStorageMb
     administratorLogin: administratorLogin
     administratorPassword: tenantVault.getSecret('set-${secretSetId}--postgres-password')

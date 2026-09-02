@@ -11,7 +11,15 @@ param tags object = {}
 param version string = '16'
 
 @description('Compute SKU name for the flexible server.')
-param skuName string = 'GP_Standard_D4ds_v5'
+param skuName string = 'Standard_D4ds_v5'
+
+@description('Compute tier. Must match the SKU family — a Standard_B* name is Burstable, a Standard_D*/E* is GeneralPurpose or MemoryOptimized.')
+@allowed([
+  'Burstable'
+  'GeneralPurpose'
+  'MemoryOptimized'
+])
+param skuTier string = 'GeneralPurpose'
 
 @description('Allocated storage in megabytes.')
 param storageMb int = 131072
@@ -50,7 +58,7 @@ resource server 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' = {
   tags: tags
   sku: {
     name: skuName
-    tier: 'GeneralPurpose'
+    tier: skuTier
   }
   properties: {
     version: version
