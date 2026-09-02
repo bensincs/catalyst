@@ -9,20 +9,20 @@ import (
 func TestResolvePassthroughAndEmpty(t *testing.T) {
 	// An inline ARM template passes through, with its output names.
 	arm := `{"outputs":{"host":{"type":"string"},"port":{"type":"int"}}}`
-	got, outs, err := Resolve(context.Background(), arm, nil)
+	got, outs, _, err := Resolve(context.Background(), arm, nil)
 	if err != nil || got != arm {
 		t.Fatalf("passthrough: got %q err %v", got, err)
 	}
 	if len(outs) != 2 || outs[0] != "host" || outs[1] != "port" {
 		t.Fatalf("output names: %v", outs)
 	}
-	if g, o, e := Resolve(context.Background(), "  ", nil); e != nil || g != "" || o != nil {
+	if g, o, _, e := Resolve(context.Background(), "  ", nil); e != nil || g != "" || o != nil {
 		t.Fatalf("empty: %q %v %v", g, o, e)
 	}
 }
 
 func TestResolveBadRef(t *testing.T) {
-	if _, _, err := Resolve(context.Background(), "not a ref", nil); err != ErrBadRef {
+	if _, _, _, err := Resolve(context.Background(), "not a ref", nil); err != ErrBadRef {
 		t.Fatalf("want ErrBadRef, got %v", err)
 	}
 }
@@ -36,7 +36,7 @@ func TestModuleOutputsAndWrapper(t *testing.T) {
 		t.Fatalf("output types not mapped to bicep: %v", outs)
 	}
 
-	w := wrapper("br:acr.azurecr.io/bicep/db:1.0.0", outs, nil)
+	w := wrapperT("br:acr.azurecr.io/bicep/db:1.0.0", outs, nil)
 	for _, want := range []string{
 		"module infra 'br:acr.azurecr.io/bicep/db:1.0.0'",
 		"name: '${deployment().name}-m'",                 // unique nested-deployment name (no cross-infra collision)
@@ -59,7 +59,7 @@ func TestWrapperParams(t *testing.T) {
 		"zones":    []any{"1", "2"},
 		"weird-id": "x",
 	}
-	w := wrapper("br:acr/db:1", nil, params)
+	w := wrapperT("br:acr/db:1", nil, params)
 	for _, want := range []string{
 		"params: {",
 		"name: 'cortex-db'",
@@ -73,7 +73,7 @@ func TestWrapperParams(t *testing.T) {
 		}
 	}
 	// No params → no params: block (works for zero-param modules).
-	if strings.Contains(wrapper("br:acr/db:1", nil, nil), "params:") {
+	if strings.Contains(wrapperT("br:acr/db:1", nil, nil), "params:") {
 		t.Fatalf("empty params should omit the params block")
 	}
 }
@@ -148,4 +148,9 @@ func TestSplitModuleRef(t *testing.T) {
 	if _, _, _, err := splitModuleRef("not-a-ref"); err != ErrBadRef {
 		t.Fatalf("want ErrBadRef, got %v", err)
 	}
+}
+
+// wrapperT keeps the existing tests on the pre-secret signature.
+func wrapperT(ref string, outputs map[string]string, params map[string]any) string {
+	return wrapper(ref, outputs, params, nil)
 }

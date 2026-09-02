@@ -24,7 +24,9 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 
+	"github.com/inception42/cortex/control-plane/internal/bicep"
 	"github.com/inception42/cortex/control-plane/internal/store"
+	"github.com/inception42/cortex/shared"
 )
 
 const (
@@ -238,7 +240,20 @@ func (p *Provisioner) ensure(ctx context.Context, tgt store.InfraTarget) {
 	// state check above to find on the next sweep — record the rejection here or
 	// it is invisible. ARM preflight failures (quota, unsupported SKU, a name
 	// already taken) surface at exactly this point.
-	if err := p.submit(ctx, tgt.SubscriptionID, rg, name, template); err != nil {
+	// Bind @secure() parameters to the tenant's vault. If the infra declares
+	// secret params but the tenant has no vault yet, the deployment would fail
+	// with an opaque ARM error about a missing parameter, so it is held with a
+	// reason instead.
+	var params map[string]any
+	if len(tgt.SecretParams) > 0 {
+		if strings.TrimSpace(tgt.VaultID) == "" {
+			_ = p.store.SetInfraState(ctx, tgt.TenantSlug, tgt.InfraID, "", nil,
+				"Waiting for the tenant's vault to finish provisioning.")
+			return
+		}
+		params = bicep.KeyVaultParameters(tgt.VaultID, tgt.SecretParams, shared.VaultSecretName)
+	}
+	if err := p.submit(ctx, tgt.SubscriptionID, rg, name, template, params); err != nil {
 		slog.Warn("infra: submit deployment failed", "infra", tgt.InfraID, "tenant", tgt.TenantSlug, "err", trunc(err.Error()))
 		_ = p.store.SetInfraState(ctx, tgt.TenantSlug, tgt.InfraID, stateFailed, nil, armMessage(err.Error()))
 		return
@@ -303,9 +318,18 @@ func (p *Provisioner) appInfraRGFor(hostingMode, tenantRG string) string {
 	return p.infraRG
 }
 
-func (p *Provisioner) submit(ctx context.Context, sub, rg, name string, template map[string]any) error {
+// submit PUTs a deployment. params is normally empty — an author's values are
+// baked into the template — but carries ARM Key Vault REFERENCES for any
+// @secure() parameter bound to a secret set. ARM resolves those itself against
+// the tenant's vault, which is how the control plane supplies a secret it has no
+// ability to read.
+func (p *Provisioner) submit(ctx context.Context, sub, rg, name string, template map[string]any, params map[string]any) error {
+	props := map[string]any{"mode": "Incremental", "template": template}
+	if len(params) > 0 {
+		props["parameters"] = params
+	}
 	payload, err := json.Marshal(map[string]any{
-		"properties": map[string]any{"mode": "Incremental", "template": template},
+		"properties": props,
 	})
 	if err != nil {
 		return err

@@ -2,6 +2,7 @@
 package model
 
 import (
+	"github.com/inception42/cortex/control-plane/internal/bicep"
 	"time"
 
 	"github.com/inception42/cortex/shared"
@@ -325,9 +326,13 @@ type Infrastructure struct {
 	BicepParams  map[string]any `json:"bicepParams,omitempty"`
 	ArmTemplate  string         `json:"-"` // resolved ARM template; worker-only
 	BicepOutputs []string       `json:"bicepOutputs"`
-	Dependencies []Dependency   `json:"dependencies"` // infrastructure → infrastructure only
-	CreatedBy    string         `json:"createdBy,omitempty"`
-	CreatedAt    time.Time      `json:"createdAt"`
+	Dependencies []Dependency   `json:"dependencies"` // infrastructure → infrastructure | secret_set
+	// SecretParams are the module parameters fed from a secret set rather than
+	// baked into the template. They carry the binding, never a value — the value
+	// is fetched by ARM itself from the tenant's vault at deploy time.
+	SecretParams []bicep.SecretBinding `json:"secretParams,omitempty"`
+	CreatedBy    string                `json:"createdBy,omitempty"`
+	CreatedAt    time.Time             `json:"createdAt"`
 
 	// Populated in the tenant view (per-tenant enablement + runtime status):
 	Platform   bool   `json:"platform"`

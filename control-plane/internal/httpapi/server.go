@@ -27,17 +27,41 @@ import (
 // wiring UI). A bad reference or invalid module is a 400; a missing toolchain
 // degrades gracefully — the definition still saves, infra is just unresolved.
 func (s *Server) resolveInfra(w http.ResponseWriter, r *http.Request, i *model.Infrastructure) bool {
-	arm, outputs, err := bicep.Resolve(r.Context(), i.BicepModule, i.BicepParams)
+	arm, outputs, secrets, err := bicep.Resolve(r.Context(), i.BicepModule, i.BicepParams)
 	if err != nil {
 		if errors.Is(err, bicep.ErrNoCompiler) {
-			i.ArmTemplate, i.BicepOutputs = "", nil
+			i.ArmTemplate, i.BicepOutputs, i.SecretParams = "", nil, nil
 			return true
 		}
 		writeErr(w, http.StatusBadRequest, "bicep module: "+err.Error())
 		return false
 	}
-	i.ArmTemplate, i.BicepOutputs = arm, outputs
+	// Every secret a param binds to must be a set this author may actually use,
+	// or an author could bind to another tenant's secrets by guessing an id.
+	for _, b := range secrets {
+		if !s.validateDeps(w, r, model.DepInfrastructure, i.ID, i.Owner,
+			[]model.Dependency{{Kind: model.DepSecretSet, ID: b.SetID}}) {
+			return false
+		}
+	}
+	i.ArmTemplate, i.BicepOutputs, i.SecretParams = arm, outputs, secrets
+	// A secret-bound param is a dependency on that set, whether or not the author
+	// also declared one. Deriving it here is what makes the set auto-enable with
+	// the infrastructure, and stops it being un-entitled out from under it.
+	for _, b := range secrets {
+		i.Dependencies = appendDep(i.Dependencies, model.Dependency{Kind: model.DepSecretSet, ID: b.SetID})
+	}
 	return true
+}
+
+// appendDep adds an edge if it is not already present.
+func appendDep(deps []model.Dependency, d model.Dependency) []model.Dependency {
+	for _, x := range deps {
+		if x.Kind == d.Kind && x.ID == d.ID {
+			return deps
+		}
+	}
+	return append(deps, d)
 }
 
 // validateDeps runs author-time dependency validation (allowed edge, existing +

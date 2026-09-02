@@ -29,29 +29,36 @@ var ErrBadRef = errors.New("not an OCI Bicep module reference (br:… / oci://�
 // Resolve turns an infra reference into a deployable ARM template + the names of
 // its outputs (for wiring). The reference is either an OCI Bicep module
 // (br:registry/repo:tag or oci://…) or an inline ARM JSON template. params are
-// the module's input parameters (author-supplied); they're baked into the
-// resolved template as literals, so the reconciler deploys it without needing to
-// pass parameters. Empty input yields ("", nil, nil). Returns ErrNoCompiler when
-// a module ref needs a toolchain that isn't present, or a build error (with the
-// compiler message — e.g. which required params are missing) for an invalid
-// module.
-func Resolve(ctx context.Context, ref string, params map[string]any) (arm string, outputs []string, err error) {
+// the module's input parameters (author-supplied).
+//
+// Ordinary params are baked into the resolved template as literals, so the
+// deployment needs no parameters. Params bound to a secret set are NOT baked —
+// they become @secure() parameters, supplied at deploy time by an ARM Key Vault
+// reference. That difference is the point: a literal is preserved in the Azure
+// deployment history permanently and is readable by anyone with reader access,
+// which is exactly the wrong place for a database password.
+//
+// Empty input yields ("", nil, nil, nil). Returns ErrNoCompiler when a module ref
+// needs a toolchain that isn't present, or a build error (with the compiler
+// message — e.g. which required params are missing) for an invalid module.
+func Resolve(ctx context.Context, ref string, params map[string]any) (arm string, outputs []string, secrets []SecretBinding, err error) {
 	s := strings.TrimSpace(ref)
 	if s == "" {
-		return "", nil, nil
+		return "", nil, nil, nil
 	}
 	if strings.HasPrefix(s, "{") { // already an ARM template
-		return s, armOutputNames(s), nil
+		return s, armOutputNames(s), nil, nil
 	}
 	if !isModuleRef(s) {
-		return "", nil, ErrBadRef
+		return "", nil, nil, ErrBadRef
 	}
 	if !Available() {
-		return "", nil, ErrNoCompiler
+		return "", nil, nil, ErrNoCompiler
 	}
+	params, secrets = splitSecretParams(params)
 	dir, err := os.MkdirTemp("", "cortex-bicep-")
 	if err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
 	defer os.RemoveAll(dir)
 
@@ -62,35 +69,35 @@ func Resolve(ctx context.Context, ref string, params map[string]any) (arm string
 	if ociHosted(s) {
 		mod, ferr := fetchOCIModule(ctx, s)
 		if ferr != nil {
-			return "", nil, ferr
+			return "", nil, nil, ferr
 		}
 		if werr := os.WriteFile(filepath.Join(dir, localModuleFile), mod, 0o600); werr != nil {
-			return "", nil, werr
+			return "", nil, nil, werr
 		}
 		moduleRef = localModuleFile
 	}
 
 	// Pass 1: build a wrapper that references the module, to discover its outputs.
-	arm1, err := build(ctx, dir, wrapper(moduleRef, nil, params))
+	arm1, err := build(ctx, dir, wrapper(moduleRef, nil, params, secrets))
 	if err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
 	outs := moduleOutputTypes(arm1)
 	if len(outs) == 0 {
-		return arm1, nil, nil // module has no outputs — nothing to wire
+		return arm1, nil, secrets, nil // module has no outputs — nothing to wire
 	}
 	// Pass 2: re-export the module's outputs at the top level so the deployment
 	// surfaces them (that's what the reconciler reads + wires).
-	arm2, err := build(ctx, dir, wrapper(moduleRef, outs, params))
+	arm2, err := build(ctx, dir, wrapper(moduleRef, outs, params, secrets))
 	if err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
 	names := make([]string, 0, len(outs))
 	for k := range outs {
 		names = append(names, k)
 	}
 	sort.Strings(names)
-	return arm2, names, nil
+	return arm2, names, secrets, nil
 }
 
 // Available reports whether a Bicep toolchain is on PATH.
@@ -108,8 +115,25 @@ func isModuleRef(s string) bool {
 
 // wrapper generates a Bicep file that instantiates the OCI module with the
 // author's params and re-exports the given outputs (name → Bicep type).
-func wrapper(ref string, outputs map[string]string, params map[string]any) string {
+//
+// Secret-bound params are emitted as @secure() parameter DECLARATIONS and passed
+// through by reference, so no literal for them exists anywhere in the compiled
+// template. Everything else is still baked, which keeps the blast radius of this
+// off infrastructure that uses no secrets at all.
+func wrapper(ref string, outputs map[string]string, params map[string]any, secrets []SecretBinding) string {
 	var b strings.Builder
+	decls, passthrough := secureParamDecls(secrets)
+	b.WriteString(decls)
+	if len(passthrough) > 0 {
+		merged := make(map[string]any, len(params)+len(passthrough))
+		for k, v := range params {
+			merged[k] = v
+		}
+		for k, v := range passthrough {
+			merged[k] = v
+		}
+		params = merged
+	}
 	// Unique nested-deployment name per infra: each Bicep module compiles to a
 	// nested Microsoft.Resources/deployments, and two infra entities deploying into
 	// the same resource group must not collide on a shared 'infra' name. deployment()
@@ -205,6 +229,10 @@ func bicepValue(v any, indent int) string {
 		return "null"
 	case bool:
 		return strconv.FormatBool(x)
+	case rawBicep:
+		// An expression, not a literal — this is how a @secure() parameter is
+		// referenced without its value appearing in the template.
+		return string(x)
 	case string:
 		return "'" + escapeBicepString(x) + "'"
 	case json.Number:
@@ -270,6 +298,12 @@ func moduleOutputTypes(arm string) map[string]string {
 		if strings.EqualFold(r.Type, "Microsoft.Resources/deployments") && len(r.Properties.Template.Outputs) > 0 {
 			out := make(map[string]string, len(r.Properties.Template.Outputs))
 			for k, v := range r.Properties.Template.Outputs {
+				if secureOutput(v.Type) {
+					// Re-exporting it would strip the secureness and publish the
+					// value in the deployment's outputs, and from there into a
+					// dependent app's Helm values.
+					continue
+				}
 				out[k] = armTypeToBicep(v.Type)
 			}
 			return out
@@ -302,17 +336,29 @@ func armTypeToBicep(t string) string {
 		return "bool"
 	case "array":
 		return "array"
-	case "object", "securestring", "secureobject":
-		if strings.EqualFold(t, "array") {
-			return "array"
-		}
-		if strings.HasPrefix(strings.ToLower(t), "sec") {
-			return "string"
-		}
+	case "securestring":
+		return "string"
+	case "secureobject":
+		return "object"
+	case "object":
 		return "object"
 	default:
 		return "string"
 	}
+}
+
+// secureOutput reports whether a module output is declared secure.
+//
+// It matters because a secure output re-exported at the top level is NOT secure
+// — it is written in cleartext into the deployment's properties.outputs, read
+// back by the provisioner, stored in tenant_infrastructure.infra_outputs, and
+// then merged into a dependent app's Helm values by wiring. So a module that
+// carefully declares its connection string @secure() had that protection
+// removed by the re-export. Such outputs are dropped instead: an author who
+// needs the value binds it through a secret set, which is the path that keeps
+// it out of the values.
+func secureOutput(armType string) bool {
+	return strings.HasPrefix(strings.ToLower(armType), "secure")
 }
 
 func build(ctx context.Context, dir, source string) (string, error) {

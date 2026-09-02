@@ -573,6 +573,13 @@ resource vault 'Microsoft.KeyVault/vaults@2023-07-01' = {
     sku: { family: 'A', name: 'standard' }
     tenantId: tenantId
     enableRbacAuthorization: true
+    // Lets ARM resolve a Key Vault reference in a deployment's parameters. This
+    // is how a secret reaches a Bicep @secure() parameter without the control
+    // plane reading it: the control plane passes a pointer, ARM fetches the
+    // value. Without this flag the reference fails and the password would have
+    // to be baked into the template as a literal — which is what this exists to
+    // stop.
+    enabledForTemplateDeployment: true
     enableSoftDelete: true
     softDeleteRetentionInDays: 7
     enablePurgeProtection: null
