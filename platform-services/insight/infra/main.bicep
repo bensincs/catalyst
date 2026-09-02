@@ -13,6 +13,9 @@ param tenantName string
 @description('Environment name (dev, qa, uat). Used as a name suffix and App Config key label.')
 param env string
 
+@description('Purge protection on the application Key Vault. See the keyvault module — leaving this on locks the vault name for the retention period after a failed deployment.')
+param keyVaultPurgeProtection bool = true
+
 @description('Azure region for all resources.')
 param location string = resourceGroup().location
 
@@ -218,6 +221,7 @@ module kv 'modules/keyvault.bicep' = {
     location: location
     tags: tags
     skuName: keyVaultSku
+    purgeProtection: keyVaultPurgeProtection
     peSubnetId: peSubnetId
     dnsZoneId: kvDnsZoneId
     workloadPrincipalId: uai.properties.principalId

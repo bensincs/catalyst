@@ -40,10 +40,10 @@
     {
       "name": "insight infra",
       "description": "InSight's Azure footprint: Key Vault with customer-managed keys, Postgres, Redis, Service Bus, Storage, AI Search, three Cognitive accounts and App Configuration \u2014 all reachable only over Private Link \u2014 plus the workload identity and federated credentials its pods authenticate with.",
-      "bicepModule": "br:cortexcpacr6hy6uurw.azurecr.io/bicep/insight:0.1.0",
+      "bicepModule": "br:cortexcpacr6hy6uurw.azurecr.io/bicep/insight:0.1.2",
       "bicepParams": {
         "tenantName": "{{tenant}}",
-        "env": "dev",
+        "env": "dev2",
         "tenantNamespace": "insight",
         "workspaceSubdomain": "{{tenant}}",
         "routingDomain": "apps.msft.ae",
@@ -63,7 +63,8 @@
         "location": "{{region}}",
         "postgresSkuTier": "Burstable",
         "redisFamily": "C",
-        "redisSkuName": "Standard"
+        "redisSkuName": "Standard",
+        "keyVaultPurgeProtection": false
       },
       "dependencies": []
     }

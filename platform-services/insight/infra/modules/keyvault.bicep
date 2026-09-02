@@ -13,6 +13,9 @@ param tenantId string = subscription().tenantId
 @description('SKU name for the Key Vault.')
 param skuName string = 'premium'
 
+@description('Purge protection. True is the safe default, but it makes the vault NAME unrecoverable for the retention period: a deployment that fails after creating the vault cannot be retried under the same name until the window expires. Disable it for throwaway environments.')
+param purgeProtection bool = true
+
 @description('Resource ID of the subnet used for the private endpoint.')
 param peSubnetId string
 
@@ -41,7 +44,7 @@ resource vault 'Microsoft.KeyVault/vaults@2023-07-01' = {
     enableRbacAuthorization: true
     enableSoftDelete: true
     softDeleteRetentionInDays: 7
-    enablePurgeProtection: true
+    enablePurgeProtection: purgeProtection
     publicNetworkAccess: 'Disabled'
     networkAcls: {
       defaultAction: 'Deny'
