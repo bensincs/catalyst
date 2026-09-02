@@ -1,0 +1,11 @@
+# Patterns to ignore when building packages.
+*.tmproj
+.vscode/
+.idea/
+.git/
+.gitignore
+.DS_Store
+*.orig
+*.bak
+# CI and docs that need not ship inside the chart package
+ci/

@@ -1,0 +1,16 @@
+{
+  "moduleAliases": {
+    "br": {
+      "ghcr": {
+        "registry": "ghcr.io",
+        "modulePath": "bensincs/bicep"
+      }
+    }
+  },
+  "analyzers": {
+    "core": {
+      "enabled": true,
+      "verbose": false
+    }
+  }
+}

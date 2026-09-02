@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "todo-app chart values",
+  "type": "object",
+  "required": ["image", "database"],
+  "properties": {
+    "replicaCount": { "type": "integer", "minimum": 0 },
+    "image": {
+      "type": "object",
+      "required": ["repository"],
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] },
+        "tag": { "type": "string" }
+      }
+    },
+    "database": {
+      "type": "object",
+      "required": ["host", "port", "name", "user", "sslMode"],
+      "properties": {
+        "host": { "type": "string", "description": "Bicep output: host" },
+        "port": { "type": "integer", "description": "Bicep output: port" },
+        "name": { "type": "string", "description": "Bicep output: databaseName" },
+        "user": { "type": "string", "description": "Bicep output: administratorLogin" },
+        "sslMode": { "type": "string", "description": "Bicep output: sslMode" },
+        "password": { "type": "string" },
+        "existingSecret": { "type": "string" },
+        "existingSecretPasswordKey": { "type": "string" }
+      }
+    },
+    "service": {
+      "type": "object",
+      "properties": {
+        "type": { "type": "string", "enum": ["ClusterIP", "NodePort", "LoadBalancer"] },
+        "port": { "type": "integer" }
+      }
+    },
+    "ingress": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" }
+      }
+    },
+    "autoscaling": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" }
+      }
+    }
+  }
+}

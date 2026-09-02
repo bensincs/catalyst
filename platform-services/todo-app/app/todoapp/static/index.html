@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Todo</title>
+    <style>
+      :root {
+        --bg: #0f172a;
+        --panel: #1e293b;
+        --panel-2: #273449;
+        --text: #e2e8f0;
+        --muted: #94a3b8;
+        --accent: #38bdf8;
+        --danger: #f87171;
+        --done: #64748b;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        display: flex;
+        justify-content: center;
+        padding: 3rem 1rem;
+      }
+      main { width: 100%; max-width: 34rem; }
+      h1 { font-weight: 650; letter-spacing: -0.02em; margin: 0 0 1.25rem; }
+      h1 span { color: var(--accent); }
+      form { display: flex; gap: 0.5rem; margin-bottom: 1.25rem; }
+      input[type="text"] {
+        flex: 1;
+        padding: 0.7rem 0.85rem;
+        border-radius: 0.6rem;
+        border: 1px solid #334155;
+        background: var(--panel);
+        color: var(--text);
+        font-size: 1rem;
+      }
+      input[type="text"]:focus { outline: 2px solid var(--accent); border-color: transparent; }
+      button {
+        border: none;
+        border-radius: 0.6rem;
+        padding: 0.7rem 1.1rem;
+        font-size: 1rem;
+        font-weight: 600;
+        cursor: pointer;
+        background: var(--accent);
+        color: #062331;
+      }
+      button:disabled { opacity: 0.5; cursor: default; }
+      ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.5rem; }
+      li {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        background: var(--panel);
+        border: 1px solid #273449;
+        border-radius: 0.6rem;
+        padding: 0.7rem 0.85rem;
+      }
+      li .title { flex: 1; font-size: 1rem; }
+      li.done .title { text-decoration: line-through; color: var(--done); }
+      li input[type="checkbox"] { width: 1.15rem; height: 1.15rem; accent-color: var(--accent); cursor: pointer; }
+      li .delete {
+        background: transparent;
+        color: var(--danger);
+        padding: 0.25rem 0.5rem;
+        font-size: 1.1rem;
+        line-height: 1;
+      }
+      .empty { color: var(--muted); text-align: center; padding: 2rem 0; }
+      .error { color: var(--danger); min-height: 1.25rem; margin-bottom: 0.75rem; font-size: 0.9rem; }
+      footer { margin-top: 1.5rem; color: var(--muted); font-size: 0.8rem; text-align: center; }
+      footer a { color: var(--muted); }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>todo<span>.</span></h1>
+      <div id="error" class="error" role="alert"></div>
+      <form id="new-todo-form">
+        <input id="new-todo" type="text" placeholder="What needs doing?" maxlength="255" autocomplete="off" />
+        <button type="submit">Add</button>
+      </form>
+      <ul id="list"></ul>
+      <footer>API docs at <a href="/docs">/docs</a> &middot; health at <a href="/healthz">/healthz</a></footer>
+    </main>
+
+    <script>
+      const api = "/api/todos";
+      const listEl = document.getElementById("list");
+      const errEl = document.getElementById("error");
+      const form = document.getElementById("new-todo-form");
+      const input = document.getElementById("new-todo");
+
+      function showError(msg) {
+        errEl.textContent = msg || "";
+      }
+
+      async function request(url, options) {
+        const res = await fetch(url, options);
+        if (!res.ok) {
+          throw new Error("Request failed (" + res.status + ")");
+        }
+        return res.status === 204 ? null : res.json();
+      }
+
+      function render(todos) {
+        listEl.innerHTML = "";
+        if (!todos.length) {
+          const li = document.createElement("li");
+          li.className = "empty-wrap";
+          li.style.background = "transparent";
+          li.style.border = "none";
+          li.innerHTML = '<div class="empty">Nothing here yet. Add your first todo.</div>';
+          listEl.appendChild(li);
+          return;
+        }
+        for (const t of todos) {
+          const li = document.createElement("li");
+          if (t.completed) li.className = "done";
+
+          const cb = document.createElement("input");
+          cb.type = "checkbox";
+          cb.checked = t.completed;
+          cb.addEventListener("change", () => toggle(t, cb.checked));
+
+          const span = document.createElement("span");
+          span.className = "title";
+          span.textContent = t.title;
+
+          const del = document.createElement("button");
+          del.className = "delete";
+          del.type = "button";
+          del.innerHTML = "&times;";
+          del.title = "Delete";
+          del.addEventListener("click", () => remove(t));
+
+          li.append(cb, span, del);
+          listEl.appendChild(li);
+        }
+      }
+
+      async function load() {
+        try {
+          showError("");
+          render(await request(api));
+        } catch (e) {
+          showError(e.message);
+        }
+      }
+
+      async function toggle(todo, completed) {
+        try {
+          await request(api + "/" + todo.id, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ completed }),
+          });
+          await load();
+        } catch (e) {
+          showError(e.message);
+        }
+      }
+
+      async function remove(todo) {
+        try {
+          await request(api + "/" + todo.id, { method: "DELETE" });
+          await load();
+        } catch (e) {
+          showError(e.message);
+        }
+      }
+
+      form.addEventListener("submit", async (ev) => {
+        ev.preventDefault();
+        const title = input.value.trim();
+        if (!title) return;
+        try {
+          await request(api, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ title }),
+          });
+          input.value = "";
+          await load();
+        } catch (e) {
+          showError(e.message);
+        }
+      });
+
+      load();
+    </script>
+  </body>
+</html>

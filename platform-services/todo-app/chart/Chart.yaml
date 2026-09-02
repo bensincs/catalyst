@@ -1,0 +1,26 @@
+apiVersion: v2
+name: todo-app
+description: FastAPI + PostgreSQL todo app. Database connection values are designed
+  to be wired directly from the outputs of the companion Bicep PostgreSQL module.
+type: application
+
+# Chart version — bump on every chart change.
+version: 0.1.0
+# Version of the app this chart deploys (used as the default image tag).
+appVersion: "0.1.0"
+
+keywords:
+  - todo
+  - fastapi
+  - postgresql
+  - example
+
+home: https://github.com/bensincs/project-shisha-example
+sources:
+  - https://github.com/bensincs/project-shisha-example
+
+maintainers:
+  - name: bensincs
+
+annotations:
+  category: Application
