@@ -82,11 +82,12 @@ Three consequences worth knowing before changing any of this:
   reads the value through that. `spec.source.helm.values` is copied verbatim into
   the Argo Application, so anything wireable is effectively public.
 
-For infrastructure, a Bicep parameter binds to a key as
-`{"$secret":{"setId":…,"key":…}}` in `bicep_params`. Such parameters are *not*
-baked into `arm_template` as literals — they become `@secure()` parameters, and
-the deployment passes ARM a Key Vault *reference* which ARM resolves itself. That
-is the only way the control plane can supply a parameter it cannot read.
+**A secret store binds to a Helm chart only — never to a Bicep parameter.** A
+parameter value is baked into `arm_template` as a literal and preserved in the
+Azure deployment history permanently, readable by anyone with reader access on
+the resource group, so there is no safe way to pass one. Infrastructure that
+needs a credential should have the module generate it and keep it out of its
+outputs. Only an application can depend on a secret store.
 
 ## Tables
 
@@ -143,8 +144,6 @@ is the only way the control plane can supply a parameter it cannot read.
   tenant, deliberately.
 - **`tenants.vault_name` / `vault_uri` / `vault_id`** — where that tenant's values
   live, recorded from its footprint outputs.
-- **`infrastructure.secret_params`** — which Bicep parameters are fed from a
-  secret store key, as bindings (`{param,setId,key}`) and never values.
 
 ## Conventions
 

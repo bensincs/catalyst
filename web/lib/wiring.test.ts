@@ -1,4 +1,4 @@
-import { dependenciesFor } from "./wiring";
+import { dependenciesFor, secretSetOutputs } from "./wiring";
 
 // Wiring implies a dependency: an app that binds a source's output into its Helm
 // values necessarily depends on that source. Records exist carrying wiring with
@@ -65,5 +65,30 @@ describe("dependenciesFor", () => {
   it("handles an absent app, so a create form starts empty", () => {
     expect(dependenciesFor(undefined)).toEqual([]);
     expect(dependenciesFor({ dependencies: [], wiring: [] } as never)).toEqual([]);
+  });
+});
+
+// A secret store offers names, never values — and offers BOTH halves a chart
+// needs: which Secret, and which key inside it.
+describe("secretSetOutputs", () => {
+  it("offers the Secret name and one output per key", () => {
+    expect(secretSetOutputs(["password", "apiKey"])).toEqual([
+      "secretName",
+      "key:password",
+      "key:apiKey",
+    ]);
+  });
+
+  it("offers the Secret name even for a store with no keys", () => {
+    expect(secretSetOutputs([])).toEqual(["secretName"]);
+  });
+
+  it("never offers anything that could be a value", () => {
+    // The outputs are merged into spec.source.helm.values verbatim, so anything
+    // here is published to anyone with cluster access. Every entry must be a
+    // name: the Secret's, or a key's.
+    for (const o of secretSetOutputs(["password"])) {
+      expect(o === "secretName" || o.startsWith("key:")).toBe(true);
+    }
   });
 });

@@ -2,9 +2,9 @@
 
 import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Boxes, Cloud, GitBranch, KeyRound, Package, SlidersHorizontal } from "lucide-react";
+import { Boxes, Cloud, GitBranch, Package, SlidersHorizontal } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Field, Select, TextInput, Textarea } from "@/components/ui/form";
+import { Field, TextInput, Textarea } from "@/components/ui/form";
 import { StatusBadge } from "@/components/ui/status";
 import { useToast } from "@/components/providers/toast-provider";
 import { FormShell, FormSection } from "./form-shell";
@@ -23,30 +23,17 @@ import type {
   Dependency,
   DepOption,
   Infrastructure,
-  SecretSet,
 } from "@/lib/types";
 import styles from "./form-shell.module.css";
-import inf from "./infrastructure-form.module.css";
 
 type Obj = Record<string, unknown>;
-
-/** A Bicep param bound to a secret store key, as stored in bicepParams. */
-type SecretRef = { $secret: { setId: string; key: string } };
-
-const isSecretRef = (v: unknown): v is SecretRef =>
-  typeof v === "object" &&
-  v !== null &&
-  "$secret" in v &&
-  typeof (v as SecretRef).$secret?.setId === "string";
 
 export function InfrastructureForm({
   infra,
   depOptions = [],
-  secretSets = [],
 }: {
   infra?: Infrastructure;
   depOptions?: DepOption[];
-  secretSets?: SecretSet[];
 }) {
   const router = useRouter();
   const { toast } = useToast();
@@ -92,58 +79,26 @@ export function InfrastructureForm({
     };
   }, [bicepModule]);
 
-  // A @secure() parameter is not typed in — it is bound to a secret store key,
-  // and the value is fetched by Azure at deploy time. Keeping it out of the
-  // ordinary inputs board is the point: anything entered there is baked into the
-  // template as a literal and preserved in the deployment history forever, which
-  // is precisely where a password must not go.
-  const secureParams = inspect.params.filter((p) => p.secure);
-  const secureNames = new Set(secureParams.map((p) => p.name));
-  const paramNames = inspect.params.filter((p) => !p.secure).map((p) => p.name);
-
-  const [bindings, setBindings] = useState<Record<string, { setId: string; key: string }>>(() => {
-    const out: Record<string, { setId: string; key: string }> = {};
-    for (const [k, v] of Object.entries(infra?.bicepParams ?? {})) {
-      if (isSecretRef(v)) out[k] = { setId: v.$secret.setId, key: v.$secret.key };
-    }
-    return out;
-  });
+  const paramNames = inspect.params.map((p) => p.name);
   // Seed the Bicep inputs board from the entity being edited (once; the board
   // owns its state after mount).
   const bicepInitialStatic = Object.fromEntries(
-    Object.entries(infra?.bicepParams ?? {})
-      .filter(([, v]) => !isSecretRef(v))
-      .map(([k, v]) => [k, toText(v)]),
+    Object.entries(infra?.bicepParams ?? {}).map(([k, v]) => [k, toText(v)]),
   );
 
   const hasModule = bicepModule.trim() !== "";
   // A resolved module's required inputs must be set, or the save-time `bicep build`
   // fails (BCP035). paramValues only holds inputs that were given a value.
-  const requiredParams = inspect.params
-    .filter((p) => p.required && !p.secure)
-    .map((p) => p.name);
+  const requiredParams = inspect.params.filter((p) => p.required).map((p) => p.name);
   const missingRequired = requiredParams.filter((n) => !(n in paramValues));
-  // A required secure param with no binding would fail the deployment with an
-  // opaque ARM error about a missing parameter, so it is caught here instead.
-  const missingSecrets = secureParams
-    .filter((p) => p.required && !bindings[p.name]?.key)
-    .map((p) => p.name);
-  const valid =
-    name.trim().length >= 2 && hasModule && missingRequired.length === 0 && missingSecrets.length === 0;
+  const valid = name.trim().length >= 2 && hasModule && missingRequired.length === 0;
 
   const submit = () => {
     const input = {
       name: name.trim(),
       description: description.trim(),
       bicepModule: bicepModule.trim(),
-      bicepParams: {
-        ...paramValues,
-        ...Object.fromEntries(
-          Object.entries(bindings)
-            .filter(([, b]) => b.setId && b.key)
-            .map(([param, b]) => [param, { $secret: { setId: b.setId, key: b.key } }]),
-        ),
-      },
+      bicepParams: paramValues,
       dependencies,
     };
     start(async () => {
@@ -249,79 +204,6 @@ export function InfrastructureForm({
             <p className={styles.note}>
               {missingRequired.length} required input{missingRequired.length === 1 ? "" : "s"} still unset — set{" "}
               <span className="mono">{missingRequired.join(", ")}</span> before saving.
-            </p>
-          )}
-        </FormSection>
-      )}
-
-      {hasModule && secureParams.length > 0 && (
-        <FormSection
-          icon={KeyRound}
-          title="Secrets"
-          desc="These parameters are declared @secure() by the module. Bind each one to a secret store key — Azure reads the value from the tenant's vault at deploy time, so it is never written into the template."
-        >
-          <ul className={inf.bindings} role="list">
-            {secureParams.map((p) => {
-              const b = bindings[p.name] ?? { setId: "", key: "" };
-              const chosen = secretSets.find((s) => s.id === b.setId);
-              return (
-                <li key={p.name} className={inf.binding}>
-                  <div className={inf.bindingHead}>
-                    <span className={`${inf.param} mono`}>{p.name}</span>
-                    {p.required && <span className={inf.required}>required</span>}
-                  </div>
-                  {p.description && <p className={inf.paramDesc}>{p.description}</p>}
-                  <div className={inf.bindingRow}>
-                    <Select
-                      aria-label={`Secret store for ${p.name}`}
-                      value={b.setId}
-                      onChange={(e) =>
-                        setBindings((v) => ({
-                          ...v,
-                          [p.name]: { setId: e.target.value, key: "" },
-                        }))
-                      }
-                    >
-                      <option value="">Choose a secret store…</option>
-                      {secretSets.map((s) => (
-                        <option key={s.id} value={s.id}>
-                          {s.name}
-                        </option>
-                      ))}
-                    </Select>
-                    <Select
-                      aria-label={`Key for ${p.name}`}
-                      value={b.key}
-                      disabled={!chosen}
-                      onChange={(e) =>
-                        setBindings((v) => ({
-                          ...v,
-                          [p.name]: { setId: b.setId, key: e.target.value },
-                        }))
-                      }
-                    >
-                      <option value="">{chosen ? "Choose a key…" : "Choose a store first"}</option>
-                      {(chosen?.keys ?? []).map((k) => (
-                        <option key={k} value={k}>
-                          {k}
-                        </option>
-                      ))}
-                    </Select>
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-          {secretSets.length === 0 && (
-            <p className={styles.note}>
-              No secret stores available yet. Create one first, then come back to bind these
-              parameters.
-            </p>
-          )}
-          {missingSecrets.length > 0 && secretSets.length > 0 && (
-            <p className={styles.note}>
-              <span className="mono">{missingSecrets.join(", ")}</span>{" "}
-              {missingSecrets.length === 1 ? "is" : "are"} required and still unbound.
             </p>
           )}
         </FormSection>

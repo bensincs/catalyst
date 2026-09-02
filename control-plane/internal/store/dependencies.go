@@ -15,11 +15,15 @@ import (
 // that keeps authoring, entitlements, and per-tenant enablement consistent with
 // them. Allowed edges:
 //
-//	infrastructure → infrastructure | secret_set
+//	infrastructure → infrastructure
 //	application    → infrastructure | application | agent | secret_set
 //	agent          → memory_store
 //	memory_store   → (leaf)
 //	secret_set     → (leaf)
+//
+// A secret store is reachable only from an application. It is delivered as a
+// Kubernetes Secret for a Helm chart to read, which is a thing only a workload
+// has; a Bicep parameter has nowhere to put one that is not the template itself.
 //
 // Enforced at four points: author (edge allowed, target exists + accessible, no
 // cycles), entitle (cascade to transitive deps), enable (auto-enable transitive
@@ -41,7 +45,7 @@ var (
 
 // allowedEdges maps an entity kind to the kinds it may depend on.
 var allowedEdges = map[model.DepKind]map[model.DepKind]bool{
-	model.DepInfrastructure: {model.DepInfrastructure: true, model.DepSecretSet: true},
+	model.DepInfrastructure: {model.DepInfrastructure: true},
 	model.DepApplication:    {model.DepInfrastructure: true, model.DepApplication: true, model.DepAgent: true, model.DepSecretSet: true},
 	model.DepAgent:          {model.DepMemoryStore: true},
 	model.DepMemoryStore:    {},
@@ -417,8 +421,8 @@ func (s *Store) entitledDependents(ctx context.Context, slug string, kind model.
 		}
 		rows.Close()
 	}
-	// Entitled infrastructure depending on it (infra → infra | secret_set).
-	if kind == model.DepInfrastructure || kind == model.DepSecretSet {
+	// Entitled infrastructure depending on it (infra → infra).
+	if kind == model.DepInfrastructure {
 		rows, err := s.pool.Query(ctx,
 			`SELECT i.id FROM infrastructure i
 			 WHERE i.id IN (SELECT unnest(entitled_infrastructure) FROM tenants WHERE id=$1)
@@ -558,8 +562,8 @@ func (s *Store) enabledDependents(ctx context.Context, slug string, kind model.D
 		}
 		rows.Close()
 	}
-	// Enabled infrastructure that depends on it (infra → infra | secret_set).
-	if kind == model.DepInfrastructure || kind == model.DepSecretSet {
+	// Enabled infrastructure that depends on it (infra → infra).
+	if kind == model.DepInfrastructure {
 		rows, err := s.pool.Query(ctx,
 			`SELECT i.id FROM infrastructure i
 			 JOIN tenant_infrastructure ti ON ti.infra_id = i.id AND ti.tenant_slug = $1
@@ -658,9 +662,7 @@ func (s *Store) pruneAutoDeps(ctx context.Context, slug string) error {
 		 AND NOT EXISTS (
 		   SELECT 1 FROM applications a JOIN tenant_deployments td ON td.app_id=a.id AND td.tenant_slug=$1
 		   WHERE a.dependencies @> jsonb_build_array(jsonb_build_object('kind','secret_set','id',ts.set_id)))
-		 AND NOT EXISTS (
-		   SELECT 1 FROM infrastructure i JOIN tenant_infrastructure ti ON ti.infra_id=i.id AND ti.tenant_slug=$1
-		   WHERE i.dependencies @> jsonb_build_array(jsonb_build_object('kind','secret_set','id',ts.set_id)))`,
+`,
 		slug); err != nil {
 		return err
 	}

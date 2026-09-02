@@ -9,20 +9,20 @@ import (
 func TestResolvePassthroughAndEmpty(t *testing.T) {
 	// An inline ARM template passes through, with its output names.
 	arm := `{"outputs":{"host":{"type":"string"},"port":{"type":"int"}}}`
-	got, outs, _, err := Resolve(context.Background(), arm, nil)
+	got, outs, err := Resolve(context.Background(), arm, nil)
 	if err != nil || got != arm {
 		t.Fatalf("passthrough: got %q err %v", got, err)
 	}
 	if len(outs) != 2 || outs[0] != "host" || outs[1] != "port" {
 		t.Fatalf("output names: %v", outs)
 	}
-	if g, o, _, e := Resolve(context.Background(), "  ", nil); e != nil || g != "" || o != nil {
+	if g, o, e := Resolve(context.Background(), "  ", nil); e != nil || g != "" || o != nil {
 		t.Fatalf("empty: %q %v %v", g, o, e)
 	}
 }
 
 func TestResolveBadRef(t *testing.T) {
-	if _, _, _, err := Resolve(context.Background(), "not a ref", nil); err != ErrBadRef {
+	if _, _, err := Resolve(context.Background(), "not a ref", nil); err != ErrBadRef {
 		t.Fatalf("want ErrBadRef, got %v", err)
 	}
 }
@@ -150,7 +150,7 @@ func TestSplitModuleRef(t *testing.T) {
 	}
 }
 
-// wrapperT keeps the existing tests on the pre-secret signature.
+// wrapperT keeps the call sites terse.
 func wrapperT(ref string, outputs map[string]string, params map[string]any) string {
-	return wrapper(ref, outputs, params, nil)
+	return wrapper(ref, outputs, params)
 }

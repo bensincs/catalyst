@@ -27,3 +27,35 @@ export function dependenciesFor(
   }
   return deps;
 }
+
+
+/* ── Wireable outputs, by dependency kind ─────────────────────────────────────
+ *
+ * These live here rather than in the deployment form because the form is a
+ * "use client" module: every export of one becomes a client reference, so a
+ * Server Component that CALLS one gets "Attempted to call ... from the server"
+ * at request time. The pages that build the dependency list are server
+ * components, so this vocabulary has to be plain shared code.
+ */
+
+/** Derived outputs a dependency application exposes for wiring. */
+export const APP_OUTPUTS = ["name", "namespace", "serviceHost"];
+
+/** Derived outputs a dependency agent exposes for wiring. */
+export const AGENT_OUTPUTS = ["agentId", "name"];
+
+/** A secret store's wireable outputs are NAMES, never values.
+ *
+ *  A chart needs two things to read a secret, not one: which Secret to look in
+ *  and which key inside it — e.g. `existingSecret` and
+ *  `existingSecretPasswordKey`. So a store offers `secretName` plus one output
+ *  per declared key.
+ *
+ *  What is deliberately absent is the value. Wiring is merged into
+ *  spec.source.helm.values verbatim and copied into the Argo Application, so
+ *  anything offered here is readable by anyone with cluster access.
+ */
+export const secretSetOutputs = (keys: string[]): string[] => [
+  "secretName",
+  ...keys.map((k) => `key:${k}`),
+];

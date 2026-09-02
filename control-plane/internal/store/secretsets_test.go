@@ -97,13 +97,15 @@ func TestSecretSetName(t *testing.T) {
 }
 
 func TestSecretSetIsALeafAndIsDependable(t *testing.T) {
-	// Applications and infrastructure may depend on a secret set; a secret set
-	// depends on nothing (there is nothing for it to need).
+	// Only an application may depend on a secret set. A set is delivered as a
+	// Kubernetes Secret for a chart to read, which is a thing only a workload
+	// has — and a Bicep parameter has nowhere to put one except the template
+	// itself, where it would be preserved in the deployment history forever.
 	if !edgeAllowed(model.DepApplication, model.DepSecretSet) {
 		t.Error("an application must be able to depend on a secret set")
 	}
-	if !edgeAllowed(model.DepInfrastructure, model.DepSecretSet) {
-		t.Error("infrastructure must be able to depend on a secret set")
+	if edgeAllowed(model.DepInfrastructure, model.DepSecretSet) {
+		t.Error("infrastructure must NOT depend on a secret set — a Bicep parameter cannot hold one safely")
 	}
 	for _, k := range allKinds {
 		if edgeAllowed(model.DepSecretSet, k) {

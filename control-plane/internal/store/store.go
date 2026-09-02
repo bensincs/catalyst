@@ -18,8 +18,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"sigs.k8s.io/yaml"
 
-	"github.com/inception42/cortex/control-plane/internal/bicep"
-
 	"github.com/inception42/cortex/control-plane/internal/model"
 	"github.com/inception42/cortex/shared"
 )
@@ -1671,13 +1669,6 @@ type InfraTarget struct {
 	State          string // current infra_state
 	HostingMode    string // 'delegated' | 'platform'
 	ResourceGroup  string // the tenant's footprint RG (platform-hosted); '' ⇒ config default
-	// SecretParams are the module's @secure() parameters and the secret-set keys
-	// they bind to. VaultID is the tenant's own vault holding those values.
-	// Neither carries a value: the deployment passes ARM a reference and ARM
-	// fetches the secret itself, which is what lets the control plane supply a
-	// password it cannot read.
-	SecretParams []bicep.SecretBinding
-	VaultID      string
 }
 
 // InfraTargets returns every enabled infrastructure entity (across tenants) that
@@ -1685,8 +1676,7 @@ type InfraTarget struct {
 func (s *Store) InfraTargets(ctx context.Context) ([]InfraTarget, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT t.id, coalesce(t.tenant_id,''), coalesce(t.subscription_id,''), i.id, i.arm_template, coalesce(ti.infra_state,''),
-		        coalesce(t.hosting_mode,'delegated'), coalesce(t.resource_group,''),
-		        coalesce(i.secret_params,'[]'), coalesce(t.vault_id,'')
+		        coalesce(t.hosting_mode,'delegated'), coalesce(t.resource_group,'')
 		 FROM tenant_infrastructure ti
 		 JOIN infrastructure i ON i.id = ti.infra_id
 		 JOIN tenants t ON t.id = ti.tenant_slug
@@ -1698,12 +1688,10 @@ func (s *Store) InfraTargets(ctx context.Context) ([]InfraTarget, error) {
 	var out []InfraTarget
 	for rows.Next() {
 		var it InfraTarget
-		var sraw []byte
 		if err := rows.Scan(&it.TenantSlug, &it.TenantID, &it.SubscriptionID, &it.InfraID, &it.ArmTemplate, &it.State,
-			&it.HostingMode, &it.ResourceGroup, &sraw, &it.VaultID); err != nil {
+			&it.HostingMode, &it.ResourceGroup); err != nil {
 			return nil, err
 		}
-		it.SecretParams = bicep.UnmarshalBindings(sraw)
 		out = append(out, it)
 	}
 	return out, rows.Err()
@@ -2307,10 +2295,10 @@ func (s *Store) DisableDeployment(ctx context.Context, slug, appID string) error
 // infrastructure it neither owns nor is entitled to.
 var ErrInfrastructureNotAccessible = errors.New("infrastructure not accessible to tenant")
 
-const infraCols = `i.id, i.name, i.description, i.owner_tenant, i.bicep, i.bicep_params, i.bicep_outputs, i.dependencies, i.created_by, i.created_at, i.pending_delete, i.secret_params`
+const infraCols = `i.id, i.name, i.description, i.owner_tenant, i.bicep, i.bicep_params, i.bicep_outputs, i.dependencies, i.created_by, i.created_at, i.pending_delete`
 
-func infraScanDest(i *model.Infrastructure, paramsRaw, depsRaw, secretsRaw *[]byte) []any {
-	return []any{&i.ID, &i.Name, &i.Description, &i.Owner, &i.BicepModule, paramsRaw, &i.BicepOutputs, depsRaw, &i.CreatedBy, &i.CreatedAt, &i.PendingDelete, secretsRaw}
+func infraScanDest(i *model.Infrastructure, paramsRaw, depsRaw *[]byte) []any {
+	return []any{&i.ID, &i.Name, &i.Description, &i.Owner, &i.BicepModule, paramsRaw, &i.BicepOutputs, depsRaw, &i.CreatedBy, &i.CreatedAt, &i.PendingDelete}
 }
 
 // InfrastructureList is the platform view: every infrastructure definition + owner.
@@ -2326,13 +2314,12 @@ func (s *Store) InfrastructureList(ctx context.Context) ([]model.Infrastructure,
 	out := []model.Infrastructure{}
 	for rows.Next() {
 		var i model.Infrastructure
-		var praw, draw, sraw []byte
-		if err := rows.Scan(append(infraScanDest(&i, &praw, &draw, &sraw), &i.OwnerName)...); err != nil {
+		var praw, draw []byte
+		if err := rows.Scan(append(infraScanDest(&i, &praw, &draw), &i.OwnerName)...); err != nil {
 			return nil, err
 		}
 		i.BicepParams = paramsFromRaw(praw)
 		i.Dependencies = depsFromRaw(draw)
-		i.SecretParams = bicep.UnmarshalBindings(sraw)
 		i.Platform = i.Owner == ""
 		out = append(out, i)
 	}
@@ -2369,15 +2356,14 @@ func (s *Store) InfrastructureForTenant(ctx context.Context, slug string) ([]mod
 	out := []model.Infrastructure{}
 	for rows.Next() {
 		var i model.Infrastructure
-		var praw, draw, sraw []byte
+		var praw, draw []byte
 		var enabled, auto bool
 		var infraState, health, infraDetail string
-		if err := rows.Scan(append(infraScanDest(&i, &praw, &draw, &sraw), &enabled, &infraState, &health, &auto, &infraDetail)...); err != nil {
+		if err := rows.Scan(append(infraScanDest(&i, &praw, &draw), &enabled, &infraState, &health, &auto, &infraDetail)...); err != nil {
 			return nil, err
 		}
 		i.BicepParams = paramsFromRaw(praw)
 		i.Dependencies = depsFromRaw(draw)
-		i.SecretParams = bicep.UnmarshalBindings(sraw)
 		i.Platform = i.Owner == ""
 		i.Owned = i.Owner == slug
 		i.Entitled = entitledSet[i.ID]
@@ -2395,14 +2381,13 @@ func (s *Store) InfrastructureForTenant(ctx context.Context, slug string) ([]mod
 
 func (s *Store) InfrastructureByID(ctx context.Context, id string) (model.Infrastructure, error) {
 	var i model.Infrastructure
-	var praw, draw, sraw []byte
-	err := s.pool.QueryRow(ctx, `SELECT `+infraCols+` FROM infrastructure i WHERE i.id = $1`, id).Scan(infraScanDest(&i, &praw, &draw, &sraw)...)
+	var praw, draw []byte
+	err := s.pool.QueryRow(ctx, `SELECT `+infraCols+` FROM infrastructure i WHERE i.id = $1`, id).Scan(infraScanDest(&i, &praw, &draw)...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return i, ErrNotFound
 	}
 	i.BicepParams = paramsFromRaw(praw)
 	i.Dependencies = depsFromRaw(draw)
-	i.SecretParams = bicep.UnmarshalBindings(sraw)
 	i.Platform = i.Owner == ""
 	return i, err
 }
@@ -2410,9 +2395,9 @@ func (s *Store) InfrastructureByID(ctx context.Context, id string) (model.Infras
 func (s *Store) UpdateInfrastructure(ctx context.Context, i model.Infrastructure) error {
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE infrastructure SET name = $2, description = $3, bicep = $4, arm_template = $5,
-		   bicep_params = $6, bicep_outputs = $7, dependencies = $8, secret_params = $9
+		   bicep_params = $6, bicep_outputs = $7, dependencies = $8
 		 WHERE id = $1`,
-		i.ID, i.Name, i.Description, i.BicepModule, i.ArmTemplate, paramsJSON(i.BicepParams), depsArray(i.BicepOutputs), depsJSON(i.Dependencies), bicep.MarshalBindings(i.SecretParams))
+		i.ID, i.Name, i.Description, i.BicepModule, i.ArmTemplate, paramsJSON(i.BicepParams), depsArray(i.BicepOutputs), depsJSON(i.Dependencies))
 	if err != nil {
 		return err
 	}

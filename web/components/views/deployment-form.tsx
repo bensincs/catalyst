@@ -57,25 +57,7 @@ export interface DepOutputs {
   outputs: string[];
 }
 
-// Derived outputs a dependency application / agent exposes for wiring.
-export const APP_OUTPUTS = ["name", "namespace", "serviceHost"];
-export const AGENT_OUTPUTS = ["agentId", "name"];
 
-/** A secret store's wireable outputs are NAMES, never values.
- *
- *  Charts need two things to read a secret, not one: which Secret to look in and
- *  which key inside it. So a store offers `secretName` plus one output per
- *  declared key — bind them to e.g. `database.existingSecret` and
- *  `database.existingSecretPasswordKey`. Offering only the Secret's name (as
- *  this first did) left the key half of every binding impossible to express.
- *
- *  What is deliberately absent is the value. Wiring is merged into
- *  spec.source.helm.values verbatim and copied into the Argo Application, so
- *  anything offered here is readable by anyone with cluster access. */
-export const secretSetOutputs = (keys: string[]): string[] => [
-  "secretName",
-  ...keys.map((k) => `key:${k}`),
-];
 
 // Dotted leaf paths of a chart's default values — the Helm value-path suggestions.
 function flattenPaths(obj: Obj, base = ""): string[] {

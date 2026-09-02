@@ -7,13 +7,8 @@ import {
   getMyContext,
   getSecretSets,
 } from "@/lib/api";
-import {
-  DeploymentForm,
-  APP_OUTPUTS,
-  AGENT_OUTPUTS,
-  secretSetOutputs,
-  type DepOutputs,
-} from "@/components/views/deployment-form";
+import { DeploymentForm, type DepOutputs } from "@/components/views/deployment-form";
+import { APP_OUTPUTS, AGENT_OUTPUTS, secretSetOutputs } from "@/lib/wiring";
 import type { ClusterInfo, DepOption } from "@/lib/types";
 
 export const dynamic = "force-dynamic";

@@ -672,10 +672,9 @@ ALTER TABLE tenants ADD COLUMN IF NOT EXISTS vault_name text NOT NULL DEFAULT ''
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS vault_uri  text NOT NULL DEFAULT '';
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS vault_id   text NOT NULL DEFAULT '';
 
--- Bicep parameters fed from a secret set rather than baked into arm_template.
--- Stored as bindings ({param,setId,key}) — never values. A baked literal lives
--- in the Azure deployment history permanently and is readable by anyone with
--- reader access on the resource group, which is the wrong home for a password;
--- these become @secure() parameters resolved by ARM from the tenant's vault at
--- deploy time instead.
-ALTER TABLE infrastructure ADD COLUMN IF NOT EXISTS secret_params jsonb NOT NULL DEFAULT '[]';
+-- Secret stores bind to Helm charts, never to Bicep parameters: a parameter
+-- value is baked into arm_template and preserved in the Azure deployment history
+-- permanently, so there is no safe way to pass one. An earlier attempt stored
+-- the bindings here; the column held no values, only names, so dropping it
+-- discards nothing sensitive.
+ALTER TABLE infrastructure DROP COLUMN IF EXISTS secret_params;
