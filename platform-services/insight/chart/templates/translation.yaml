@@ -1,0 +1,240 @@
+{{- if .Values.translation.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: translation
+  namespace: {{ .Values.global.namespace | default .Release.Namespace }}
+  labels:
+    app: translation
+spec:
+  type: {{ .Values.translation.service.type }}
+  ports:
+    - port: {{ .Values.translation.service.port }}
+      targetPort: {{ .Values.translation.service.port }}
+      protocol: TCP
+  selector:
+    app: translation
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: translation
+  namespace: {{ .Values.global.namespace | default .Release.Namespace }}
+  labels:
+    app: translation
+spec:
+  replicas: {{ .Values.translation.replicaCount }}
+  selector:
+    matchLabels:
+      app: translation
+  template:
+    metadata:
+      {{- if .Values.global.otelPythonInstrumentation.enabled }}
+      annotations:
+        instrumentation.opentelemetry.io/inject-python: {{ .Values.global.otelPythonInstrumentation.value | quote }}
+      {{- end }}
+      labels:
+        app: translation
+        {{- if .Values.translation.workloadIdentity.enabled }}
+        azure.workload.identity/use: "true"
+        {{- end }}
+    spec:
+      automountServiceAccountToken: false
+      {{- if .Values.translation.workloadIdentity.enabled }}
+      serviceAccountName: {{ .Values.translation.workloadIdentity.serviceAccountName | default "translation-sa" }}
+      {{- end }}
+      {{- include "insight.podSecurityContext" . | nindent 6 }}
+      containers:
+        - name: translation
+          {{- include "insight.containerSecurityContext" . | nindent 10 }}
+          image: "{{ .Values.imageRegistry }}{{ if .Values.imageRegistry }}/{{end}}{{ .Values.translation.image.repository }}:{{ .Values.translation.image.tag | default .Values.imageTag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - containerPort: {{ .Values.translation.service.port }}
+          {{- if .Values.appConfig.enabled }}
+          envFrom:
+            - configMapRef:
+                name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                optional: true
+            {{- if .Values.appConfig.secrets.enabled }}
+            - secretRef:
+                name: {{ .Values.appConfig.secrets.secretName | default "insight-secrets" }}
+                optional: true
+            {{- end }}
+          env:
+            {{- include "insight.nonRootEnv" . | nindent 12 }}
+            {{- if .Values.translation.env.TRANSLATION_DEFAULT_TARGET_LANGUAGE }}
+            - name: TRANSLATION_DEFAULT_TARGET_LANGUAGE
+              value: {{ .Values.translation.env.TRANSLATION_DEFAULT_TARGET_LANGUAGE | quote }}
+            {{- else }}
+            - name: TRANSLATION_DEFAULT_TARGET_LANGUAGE
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--translation--default-target-language
+                  optional: true
+            {{- end }}
+            {{- if .Values.translation.env.TRANSLATION_LLM_DEPLOYMENT }}
+            - name: TRANSLATION_LLM_DEPLOYMENT
+              value: {{ .Values.translation.env.TRANSLATION_LLM_DEPLOYMENT | quote }}
+            {{- else }}
+            - name: TRANSLATION_LLM_DEPLOYMENT
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--translation--llm-deployment
+                  optional: true
+            {{- end }}
+            - name: AZURE_TRANSLATOR_ENDPOINT
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--translation--azure-translator-endpoint
+                  optional: true
+            - name: AZURE_TRANSLATOR_REGION
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--translation--azure-translator-region
+                  optional: true
+            - name: AZURE_OPENAI_ENDPOINT
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--translation--azure-openai-endpoint
+                  optional: true
+            {{- if .Values.translation.env.LLM_GATEWAY_URL }}
+            - name: LLM_GATEWAY_URL
+              value: {{ .Values.translation.env.LLM_GATEWAY_URL | quote }}
+            {{- else }}
+            - name: LLM_GATEWAY_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--translation--llm-gateway-url
+                  optional: true
+            {{- end }}
+            - name: AZURE_TRANSLATOR_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.appConfig.secrets.secretName | default "insight-secrets" }}
+                  key: insight--translation--azure-translator-key
+                  optional: true
+            - name: AZURE_OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.appConfig.secrets.secretName | default "insight-secrets" }}
+                  key: insight--translation--azure-openai-api-key
+                  optional: true
+            {{- if .Values.translation.env.LLM_GATEWAY_API_KEY }}
+            - name: LLM_GATEWAY_API_KEY
+              value: {{ .Values.translation.env.LLM_GATEWAY_API_KEY | quote }}
+            {{- else }}
+            - name: LLM_GATEWAY_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.appConfig.secrets.secretName | default "insight-secrets" }}
+                  key: insight--llm-gateway--master-key
+                  optional: true
+            {{- end }}
+            - name: API_PREFIX
+              value: {{ .Values.translation.env.API_PREFIX | quote }}
+            - name: ENVIRONMENT
+              value: {{ .Values.translation.env.ENVIRONMENT | quote }}
+            - name: LOG_LEVEL
+              value: {{ .Values.translation.env.LOG_LEVEL | quote }}
+            # Langfuse observability
+            - name: LANGFUSE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.appConfig.secrets.secretName | default "insight-secrets" }}
+                  key: insight--agentic-core--langfuse-secret-key
+                  optional: true
+            - name: LANGFUSE_PUBLIC_KEY
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--agentic-core--langfuse-public-key
+                  optional: true
+            - name: LANGFUSE_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--agentic-core--langfuse-host
+                  optional: true
+            {{- include "insight.otelEnv" $ | nindent 12 }}
+          {{- else }}
+          env:
+            {{- include "insight.nonRootEnv" . | nindent 12 }}
+            - name: TRANSLATION_DEFAULT_TARGET_LANGUAGE
+              value: {{ .Values.translation.env.TRANSLATION_DEFAULT_TARGET_LANGUAGE | default "ar-AE" | quote }}
+            - name: TRANSLATION_LLM_DEPLOYMENT
+              value: {{ .Values.translation.env.TRANSLATION_LLM_DEPLOYMENT | default "" | quote }}
+            - name: AZURE_TRANSLATOR_ENDPOINT
+              value: {{ .Values.translation.env.AZURE_TRANSLATOR_ENDPOINT | default .Values.appInfra.translatorEndpoint | default "" | quote }}
+            - name: AZURE_TRANSLATOR_REGION
+              value: {{ .Values.translation.env.AZURE_TRANSLATOR_REGION | default .Values.appInfra.translatorRegion | default "" | quote }}
+            - name: AZURE_TRANSLATOR_KEY
+              value: {{ .Values.translation.env.AZURE_TRANSLATOR_KEY | default "" | quote }}
+            - name: AZURE_OPENAI_ENDPOINT
+              value: {{ .Values.translation.env.AZURE_OPENAI_ENDPOINT | default "" | quote }}
+            - name: AZURE_OPENAI_API_KEY
+              value: {{ .Values.translation.env.AZURE_OPENAI_API_KEY | default "" | quote }}
+            - name: LLM_GATEWAY_URL
+              value: {{ .Values.translation.env.LLM_GATEWAY_URL | default "http://llm-gateway:8005" | quote }}
+            {{- include "insight.llmGatewayApiKeyEnv" (dict "ctx" $ "fallback" .Values.translation.env.LLM_GATEWAY_API_KEY) | nindent 12 }}
+            - name: API_PREFIX
+              value: {{ .Values.translation.env.API_PREFIX | quote }}
+            - name: ENVIRONMENT
+              value: {{ .Values.translation.env.ENVIRONMENT | quote }}
+            - name: LOG_LEVEL
+              value: {{ .Values.translation.env.LOG_LEVEL | quote }}
+            {{- if .Values.translation.env.LANGFUSE_SECRET_KEY }}
+            - name: LANGFUSE_SECRET_KEY
+              value: {{ .Values.translation.env.LANGFUSE_SECRET_KEY | quote }}
+            {{- end }}
+            {{- if .Values.translation.env.LANGFUSE_PUBLIC_KEY }}
+            - name: LANGFUSE_PUBLIC_KEY
+              value: {{ .Values.translation.env.LANGFUSE_PUBLIC_KEY | quote }}
+            {{- end }}
+            {{- if .Values.translation.env.LANGFUSE_HOST }}
+            - name: LANGFUSE_HOST
+              value: {{ .Values.translation.env.LANGFUSE_HOST | quote }}
+            {{- end }}
+            {{- include "insight.otelEnv" $ | nindent 12 }}
+          {{- end }}
+          {{- if .Values.translation.healthCheck.enabled }}
+          {{- $hc := .Values.translation.healthCheck }}
+          {{- $sp := $hc.startupProbe | default dict }}
+          {{- if default false $sp.enabled }}
+          startupProbe:
+            httpGet:
+              path: {{ $hc.path }}
+              port: {{ .Values.translation.service.port }}
+            periodSeconds: {{ default 10 $sp.periodSeconds }}
+            failureThreshold: {{ default 30 $sp.failureThreshold }}
+            timeoutSeconds: {{ default 5 $sp.timeoutSeconds }}
+          {{- end }}
+          livenessProbe:
+            httpGet:
+              path: {{ $hc.path }}
+              port: {{ .Values.translation.service.port }}
+            initialDelaySeconds: {{ $hc.initialDelaySeconds }}
+            periodSeconds: {{ $hc.periodSeconds }}
+            timeoutSeconds: {{ default 5 $hc.timeoutSeconds }}
+            failureThreshold: {{ default 3 $hc.livenessFailureThreshold }}
+            successThreshold: {{ default 1 $hc.livenessSuccessThreshold }}
+          readinessProbe:
+            httpGet:
+              path: {{ $hc.path }}
+              port: {{ .Values.translation.service.port }}
+            initialDelaySeconds: {{ $hc.initialDelaySeconds }}
+            periodSeconds: {{ $hc.periodSeconds }}
+            timeoutSeconds: {{ default 5 $hc.timeoutSeconds }}
+            failureThreshold: {{ default 3 $hc.readinessFailureThreshold }}
+            successThreshold: {{ default 1 $hc.readinessSuccessThreshold }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.translation.resources | nindent 12 }}
+{{- end }}

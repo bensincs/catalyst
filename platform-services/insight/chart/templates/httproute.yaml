@@ -1,0 +1,83 @@
+{{- $routeEnabled := or .Values.gateway.httpRoute.enabled .Values.route.enabled -}}
+{{- if $routeEnabled }}
+{{- $routeHost := .Values.gateway.httpRoute.host | default .Values.route.hostname -}}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ .Release.Name }}-httproute
+  namespace: {{ .Values.global.namespace | default .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: insight
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  parentRefs:
+    {{- toYaml .Values.gateway.httpRoute.parentRefs | nindent 4 }}
+  hostnames:
+    - {{ required "gateway.httpRoute.host or route.hostname is required when HTTPRoute is enabled" $routeHost | quote }}
+  rules:
+    # Strip the inbound Cookie header on every rule before the request reaches
+    # Insight. EnvoyGateway's OIDC filter stores the browser session (IdToken-*,
+    # access_token, OauthHMAC-*, …) in cookies scoped to the whole
+    # <tenant>.cortex.ai domain, so the browser also sends them to this app.
+    # Insight must receive ONLY the gateway-issued identity (the Authorization
+    # JWT + x-cortex-sub / x-cortex-tenant set by ext-authz), never the gateway's
+    # OIDC session cookies. The filter runs after the SecurityPolicy (OIDC +
+    # ext-authz), so auth still sees the cookies. See ADR-26-07-01.
+    # /api/ carries large uploads (attachments) and slow backend work. Without
+    # an explicit timeout Envoy uses its route default and returns 504 with
+    # response_flags=UT / response_timeout while the backend may still complete
+    # (201). Keep request >= backendRequest (Gateway API rule). 120s covers
+    # observed ~40s upload failures with margin.
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api/
+      timeouts:
+        request: {{ .Values.gateway.httpRoute.timeouts.api.request | default "120s" | quote }}
+        backendRequest: {{ .Values.gateway.httpRoute.timeouts.api.backendRequest | default "120s" | quote }}
+      filters:
+        - type: RequestHeaderModifier
+          requestHeaderModifier:
+            remove:
+              - Cookie
+      backendRefs:
+        - name: {{ .Values.gateway.httpRoute.bff.serviceName | default "bff" }}
+          port: {{ .Values.gateway.httpRoute.bff.servicePort | default 8001 }}
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /ws/
+      filters:
+        - type: RequestHeaderModifier
+          requestHeaderModifier:
+            remove:
+              - Cookie
+      backendRefs:
+        - name: {{ .Values.gateway.httpRoute.bff.serviceName | default "bff" }}
+          port: {{ .Values.gateway.httpRoute.bff.servicePort | default 8001 }}
+    - matches:
+        - path:
+            type: Exact
+            value: /healthProbe
+      filters:
+        - type: RequestHeaderModifier
+          requestHeaderModifier:
+            remove:
+              - Cookie
+      backendRefs:
+        - name: {{ .Values.gateway.httpRoute.bff.serviceName | default "bff" }}
+          port: {{ .Values.gateway.httpRoute.bff.servicePort | default 8001 }}
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      filters:
+        - type: RequestHeaderModifier
+          requestHeaderModifier:
+            remove:
+              - Cookie
+      backendRefs:
+        - name: {{ .Values.gateway.httpRoute.frontend.serviceName | default "frontend" }}
+          port: {{ .Values.gateway.httpRoute.frontend.servicePort | default 80 }}
+{{- end }}

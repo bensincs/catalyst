@@ -1,0 +1,262 @@
+{{- if .Values.networkPolicy }}
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: {{ .Values.global.namespace | default .Release.Namespace }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-same-namespace
+  namespace: {{ .Values.global.namespace | default .Release.Namespace }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow traffic from pods in the same namespace
+    - from:
+        - podSelector: {}
+  egress:
+    # Allow traffic to pods in the same namespace
+    - to:
+        - podSelector: {}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-nginx
+  namespace: {{ .Values.global.namespace | default .Release.Namespace }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    # Allow traffic from ingress-nginx namespace
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-spicedb
+  namespace: {{ .Values.global.namespace | default .Release.Namespace }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    # Allow traffic to SpiceDB namespace (authorization)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: spicedb
+      ports:
+        - protocol: TCP
+          port: 50051
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-appconfig
+  namespace: {{ .Values.global.namespace | default .Release.Namespace }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    # Allow traffic to azappconfig-system namespace (config provider)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: azappconfig-system
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-dns
+  namespace: {{ .Values.global.namespace | default .Release.Namespace }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    # Allow DNS resolution via kube-system
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-external
+  namespace: {{ .Values.global.namespace | default .Release.Namespace }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    # Allow traffic to external services (Azure PostgreSQL, OpenAI, Cortex, etc.)
+    # This allows all egress to IPs outside the cluster.
+    #
+    # IMPORTANT: the `except` list must NOT swallow the Azure private-endpoint
+    # subnet. Private endpoints live in the platform VNet (commonly a 172.20.x.x
+    # range), which the blanket 172.16.0.0/12 would exclude — silently blocking
+    # Postgres/Redis/ServiceBus/Storage/Search/KV/Cognitive over Private Link.
+    # Override `networkPolicy.externalEgress.exceptCidrs` per environment to the
+    # cluster-pod/service CIDRs ONLY, leaving the PE VNet reachable. Default keeps
+    # the classic RFC1918 carve-out for a standalone (non-PE) deployment.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            {{- with (((.Values.networkPolicy.externalEgress).exceptCidrs) | default (list "10.0.0.0/8" "192.168.0.0/16")) }}
+            except:
+              {{- range . }}
+              - {{ . | quote }}
+              {{- end }}
+            {{- end }}
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 5432
+        {{- range (((.Values.networkPolicy.externalEgress).extraPorts) | default (list)) }}
+        - protocol: TCP
+          port: {{ . }}
+        {{- end }}
+{{- end }}
+{{- end }}
+{{- if .Values.cortexEgress.enabled }}
+---
+# Cortex-context egress (AD mode, local Kind + AKS): when Insight runs INSIDE a Cortex
+# tenant namespace, the tenant-operator already provides default-deny-egress +
+# the generic allow policies. Insight only needs the app-specific allows the
+# operator does NOT provide for a tenant-extension app:
+#   - egress to its per-tenant Azure private endpoints (Postgres/Redis/Service
+#     Bus/Search/Storage/KV/Cognitive on the PE subnet), and
+#   - egress to the platform AI Gateway (the LLM path), and
+#   - intra-namespace (services calling each other) + ingress to those ports.
+# This is distinct from the standalone `networkPolicy` set above (which would
+# duplicate the operator's default-deny). Gate ONLY this on Cortex.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-insight-cortex-egress
+  namespace: {{ .Values.global.namespace | default .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: insight
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values: [backend, bff, agentic-core, llm-gateway, digital-simulator, decision-register, translation, spicedb, frontend, cortex]
+  policyTypes:
+    - Egress
+    - Ingress
+  ingress:
+    # Intra-namespace: services reach each other on their gRPC/HTTP ports
+    # (the operator's allow-intra-namespace-ingress only opens 8080/7233).
+    - from:
+        - podSelector: {}
+      ports:
+        - { protocol: TCP, port: 50051 } # spicedb gRPC
+        # Pod listen port (Service still exposes 80 → targetPort 8080).
+        - { protocol: TCP, port: 8080 }  # frontend
+        - { protocol: TCP, port: 8001 }  # bff
+        - { protocol: TCP, port: 8002 }  # backend
+        - { protocol: TCP, port: 8003 }  # agentic-core
+        - { protocol: TCP, port: 8004 }  # cortex
+        - { protocol: TCP, port: 8005 }  # llm-gateway
+        - { protocol: TCP, port: 8010 }  # digital-simulator
+        - { protocol: TCP, port: 8011 }  # decision-register
+        - { protocol: TCP, port: 8012 }  # translation
+  egress:
+    # Intra-namespace (all ports) so services can call each other.
+    - to:
+        - podSelector: {}
+    # Platform AI Gateway (LLM path) — the envoy proxy in cortex-platform behind
+    # the agent-gateway ExternalName alias.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cortex-platform
+      ports:
+        - { protocol: TCP, port: 8080 }
+    # Per-tenant Azure private endpoints. Override cortexEgress.privateEndpointCidr
+    # to the tenant's PE subnet. Ports: Postgres 5432, Redis 6379/6380, Service
+    # Bus 5671/5672/443, Storage/Search/KV/Cognitive/AppConfig 443.
+    {{- with .Values.cortexEgress.privateEndpointCidr }}
+    - to:
+        - ipBlock:
+            cidr: {{ . | quote }}
+      ports:
+        - { protocol: TCP, port: 5432 }
+        - { protocol: TCP, port: 6379 }
+        - { protocol: TCP, port: 6380 }
+        - { protocol: TCP, port: 5671 }
+        - { protocol: TCP, port: 5672 }
+        - { protocol: TCP, port: 443 }
+    {{- end }}
+{{- end }}
+{{- /* OTLP egress to the node-local otel-agent (TCP 4318).
+  The SDK dials http://$(NODE_IP):4318. Under Cilium socket-LB that hostPort is
+  DNATed to the otel-agent pod, so egress must allow that pod (labels from the
+  cortex-observability chart) in the monitoring namespace — Cilium toEndpoints
+  defaults to this policy's namespace otherwise. host/remote-node covers the
+  non-DNAT case. Gated on observability.enabled + endpoint +
+  ciliumNetworkPolicy; selector matches services that include insight.otelEnv. */ -}}
+{{- $obs := .Values.global.observability | default dict -}}
+{{- /* Do not use `default true` on ciliumNetworkPolicy: Helm treats false as
+  empty, so `false | default true` becomes true. Unset → emit; explicit false → skip. */ -}}
+{{- if and (eq (toString $obs.enabled) "true") $obs.endpoint (ne (toString $obs.ciliumNetworkPolicy) "false") }}
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-insight-otlp-node-egress
+  namespace: {{ .Values.global.namespace | default .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: insight
+spec:
+  endpointSelector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values: [backend, bff, translation, decision-register, digital-simulator]
+  egress:
+    # Allow the DNATed otel-agent pod in monitoring (toEndpoints is same-ns by default).
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: monitoring
+            k8s:app.kubernetes.io/part-of: azure-monitor-observability
+            k8s:app.kubernetes.io/name: otel-agent
+      toPorts:
+        - ports:
+            - port: "4318"
+              protocol: TCP
+    # Fallback when hostPort is not DNATed to a pod identity.
+    - toEntities:
+        - host
+        - remote-node
+      toPorts:
+        - ports:
+            - port: "4318"
+              protocol: TCP
+{{- end }}

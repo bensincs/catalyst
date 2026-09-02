@@ -90,3 +90,20 @@ func (p *Provisioner) recordVault(ctx context.Context, slug string, outs map[str
 		slog.Warn("secrets: record vault failed", "tenant", slug, "err", trunc(err.Error()))
 	}
 }
+
+// recordNetwork stores the private-networking facts from the footprint outputs.
+// Separate from recordVault because they appear at different times: the vault
+// exists on the first stamp, the networking only once the cluster does.
+func (p *Provisioner) recordNetwork(ctx context.Context, slug string, outs map[string]any) {
+	str := func(k string) string {
+		v, _ := outs[k].(string)
+		return strings.TrimSpace(v)
+	}
+	pe, issuer, rg := str("privateEndpointSubnetId"), str("aksOidcIssuerUrl"), str("privateDnsZoneResourceGroup")
+	if pe == "" && issuer == "" {
+		return
+	}
+	if err := p.store.SetTenantNetwork(ctx, slug, pe, issuer, rg); err != nil {
+		slog.Warn("network: record failed", "tenant", slug, "err", trunc(err.Error()))
+	}
+}

@@ -1,0 +1,77 @@
+{{- if .Values.frontend.enabled }}
+{{- $frontendTargetPort := .Values.frontend.service.targetPort | default .Values.frontend.service.port }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+  namespace: {{ .Values.global.namespace | default .Release.Namespace }}
+  labels:
+    app: frontend
+spec:
+  type: {{ .Values.frontend.service.type }}
+  ports:
+    - port: {{ .Values.frontend.service.port }}
+      # Container listens on targetPort (8080) so the process can run as
+      # non-root under PSS restricted; Service still exposes port 80.
+      targetPort: {{ $frontendTargetPort }}
+      protocol: TCP
+  selector:
+    app: frontend
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: {{ .Values.global.namespace | default .Release.Namespace }}
+  labels:
+    app: frontend
+spec:
+  replicas: {{ .Values.frontend.replicaCount }}
+  selector:
+    matchLabels:
+      app: frontend
+  template:
+    metadata:
+      labels:
+        app: frontend
+    spec:
+      automountServiceAccountToken: false
+      {{- include "insight.podSecurityContext" . | nindent 6 }}
+      containers:
+        - name: frontend
+          {{- include "insight.containerSecurityContext" . | nindent 10 }}
+          image: "{{ .Values.imageRegistry }}{{ if .Values.imageRegistry }}/{{end}}{{ .Values.frontend.image.repository }}:{{ .Values.frontend.image.tag | default .Values.imageTag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - containerPort: {{ $frontendTargetPort }}
+          env:
+            {{- include "insight.nonRootEnv" . | nindent 12 }}
+          {{- if .Values.frontend.healthCheck.enabled }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.frontend.healthCheck.path }}
+              port: {{ $frontendTargetPort }}
+            initialDelaySeconds: {{ .Values.frontend.healthCheck.initialDelaySeconds }}
+            periodSeconds: {{ .Values.frontend.healthCheck.periodSeconds }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.frontend.healthCheck.path }}
+              port: {{ $frontendTargetPort }}
+            initialDelaySeconds: {{ .Values.frontend.healthCheck.initialDelaySeconds }}
+            periodSeconds: {{ .Values.frontend.healthCheck.periodSeconds }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.frontend.resources | nindent 12 }}
+          # The frontend image's 40-code-docs.sh entrypoint creates
+          # /etc/nginx/snippets/code-docs.conf at startup, but the pod runs as a
+          # non-root user and /etc/nginx is root-owned, so the mkdir/write is
+          # denied and nginx crash-loops. Mount a writable emptyDir there so the
+          # entrypoint can create the dir + conf before nginx starts.
+          volumeMounts:
+            - name: nginx-snippets
+              mountPath: /etc/nginx/snippets
+      volumes:
+        - name: nginx-snippets
+          emptyDir: {}
+{{- end }}

@@ -1,0 +1,226 @@
+# InSight — service-owned per-environment Helm values (local Kind, AD mode).
+#
+# Ownership: the InSight application team. Local-cluster overrides for running
+# InSight on a single-node Kind cluster, where the Kind workloads talk to REAL
+# per-tenant Azure infrastructure over the VPN (per-app Key Vault, Postgres,
+# Redis, Service Bus, Search, Storage, Cognitive) while running on Kind. See
+# .local/insight.md and the W-Kind-B section of the Insight-on-Cortex-2
+# deployment plan.
+#
+# Why a dedicated local file: a single Kind node exposes only the host's RAM
+# (~32Gi here) and the scheduler blocks on the sum of pod memory *requests*, so
+# the production-sized requests in values.yaml (1536Mi/service x 2 replicas)
+# overflow the node. This file drops replicas to 1 and right-sizes requests for
+# local. It also disables the in-cluster Postgres (this shape uses real Azure Postgres
+# via the ESO/Vault-sourced DATABASE_URL) and enables the HTTPRoute.
+#
+# Wiring: reference from the local Helm app catalog entry as
+#   "serviceValuesRef": "services/insight/chart/values-local.yaml"
+# Precedence, low -> high:
+#   values.yaml  <  values-local.yaml (this file)  <  app-values  <  inline
+#
+# NOTE: requiresPerAppInfra is an ApplicationDeployment CR field
+# (spec.helm.requiresPerAppInfra), NOT a chart value — set it on the AD / via the
+# catalog, not here. For this shape it must be true so the operator waits for the
+# manually-created app-infra-insight ConfigMap.
+
+# This shape uses the real Azure Postgres, not the in-cluster one.
+postgres:
+  enabled: false
+
+# Expose the frontend/bff through the tenant gateway (insight.<subdomain>.cortex.ai).
+route:
+  enabled: true
+
+# Feature flags ON for local. AI chat works now that the LiteLLM consumers route
+# through the platform AI Gateway -> Compass (W4, chat capability proven). Helm
+# deep-merges this map onto the chart default, so only the listed keys flip; the
+# rest stay at the values.yaml defaults (off). Enable more here as their model/
+# credentials are wired (embeddings, speech, translator — see plan "Required
+# Models").
+featureFlags:
+  feature_ai-chat: true
+
+# ESO path: materialise backend/spicedb Secrets from the cluster-wide
+# cortex-registry ClusterSecretStore (Vault). For this shape, seed Vault with the
+# real per-app KV values first: `make bootstrap-insight-secrets INSIGHT_KV=<kv>`.
+localSecrets:
+  enabled: true
+
+# Local-sized: 1 replica + smaller requests so the heavy services fit a single
+# Kind node. Limits stay generous; only requests gate scheduling.
+backend:
+  replicaCount: 1
+  resources:
+    requests: {memory: "512Mi", cpu: "100m"}
+    limits: {memory: "2Gi", cpu: "1000m"}
+bff:
+  replicaCount: 1
+  resources:
+    requests: {memory: "384Mi", cpu: "100m"}
+    limits: {memory: "1Gi", cpu: "500m"}
+  # bff -> backend proxy read timeout (s). SpiceDB fan-out on Azure Postgres can be
+  # slow over VPN; httpx default 5s otherwise trips -> false 503 + UI retries.
+  env:
+    BFF_BACKEND_PROXY_TIMEOUT_SECONDS: "60"
+agenticCore:
+  replicaCount: 1
+  resources:
+    requests: {memory: "512Mi", cpu: "100m"}
+    limits: {memory: "2Gi", cpu: "1000m"}
+  # Voice fillers/interruption run a synchronous Azure Speech TTS "prewarm" during
+  # FastAPI startup (main.py startup_event -> filler_audio_cache.initialize()).
+  # On Kind there are no Azure Speech creds (DefaultAzureCredential has no env SP /
+  # workload identity / IMDS), so the TTS auth retries block the startup event from
+  # completing -> uvicorn never binds :8003 -> the startup probe gets connection
+  # refused and the pod is killed (exitCode 137). Disable both locally; speech is a
+  # direct-Azure feature, not part of the deployment/gateway proof.
+  env:
+    VOICE_FILLERS_ENABLED: "false"
+    VOICE_INTERRUPTION_ENABLED: "false"
+# Chart defaults use 2 replicas for rolling updates; pin to 1 on single-node Kind.
+frontend:
+  replicaCount: 1
+cortex:
+  replicaCount: 1
+
+# Azure Private Link egress for the local Azure-backed shape. The operator's default-deny-egress
+# otherwise blocks the workloads from reaching the per-app PE subnet. Enable the
+# chart NetworkPolicy and DO NOT exclude the platform VNet range from the egress
+# carve-out (the default already omits 172.16.0.0/12). Set exceptCidrs to the
+# cluster pod/service CIDRs only.
+#
+# NOTE: on the Cortex platform the tenant-operator already provides default-deny
+# + intra-namespace policies, so enabling the full chart netpol set here DUPLICATES
+# them. The live proof used a single targeted policy (allow-insight-azure-pe-egress)
+# instead. Leaving this disabled by default; flip on only for a standalone cluster.
+networkPolicy:
+  enabled: false
+  externalEgress:
+    exceptCidrs:
+      - 10.0.0.0/8
+      - 192.168.0.0/16
+    extraPorts:
+      - 6380
+      - 5671
+      - 5672
+
+# Cortex-context egress: on Cortex the operator provides default-deny + generic
+# allows, so Insight only needs the app-specific egress to (a) the platform AI
+# Gateway and (b) its per-tenant Azure private endpoints. Replaces the live
+# allow-insight-cortex-egress stop-gap. privateEndpointCidr is the ins01dep PE
+# subnet (172.20.244.64/26); change it per tenant.
+cortexEgress:
+  enabled: true
+  privateEndpointCidr: "172.20.244.64/26"
+
+# W4 AI Gateway move: keep Insight's LiteLLM as a shim but route every alias at the
+# PLATFORM AI Gateway (-> Compass), not a per-tenant Azure OpenAI (which the per-app
+# TF does not provision). model openai/gpt-5.1 + x-model-id header; api_key is the
+# gateway dummy bearer. DATABASE_URL + LITELLM_MASTER_KEY come from insight-secrets
+# (ESO from Vault) via the chart, NOT from here. LITELLM_LOCAL_MODEL_COST_MAP skips
+# the slow remote cost-map fetch; the startupProbe (chart default) lets the 108
+# Prisma migrations finish before liveness engages.
+llmGateway:
+  replicaCount: 1
+  extraEnv:
+    LITELLM_LOCAL_MODEL_COST_MAP: "True"
+  healthCheck:
+    enabled: true
+    path: /health/liveliness
+  config: |
+    model_list:
+      - model_name: simulation
+        litellm_params:
+          model: openai/gpt-5.1
+          api_base: http://ai-gateway.agent-gateway.svc.cluster.local:8080/v1
+          api_key: gateway
+          extra_headers: {"x-model-id": "gpt-5.1"}
+      - model_name: chat-gpt4o
+        litellm_params:
+          model: openai/gpt-5.1
+          api_base: http://ai-gateway.agent-gateway.svc.cluster.local:8080/v1
+          api_key: gateway
+          extra_headers: {"x-model-id": "gpt-5.1"}
+      - model_name: default-gpt4o
+        litellm_params:
+          model: openai/gpt-5.1
+          api_base: http://ai-gateway.agent-gateway.svc.cluster.local:8080/v1
+          api_key: gateway
+          extra_headers: {"x-model-id": "gpt-5.1"}
+      - model_name: agentic-meeting-brief
+        litellm_params:
+          model: openai/gpt-5.1
+          api_base: http://ai-gateway.agent-gateway.svc.cluster.local:8080/v1
+          api_key: gateway
+          extra_headers: {"x-model-id": "gpt-5.1"}
+      - model_name: agentic-key-questions
+        litellm_params:
+          model: openai/gpt-5.1
+          api_base: http://ai-gateway.agent-gateway.svc.cluster.local:8080/v1
+          api_key: gateway
+          extra_headers: {"x-model-id": "gpt-5.1"}
+      - model_name: agentic-expert-lens
+        litellm_params:
+          model: openai/gpt-5.1
+          api_base: http://ai-gateway.agent-gateway.svc.cluster.local:8080/v1
+          api_key: gateway
+          extra_headers: {"x-model-id": "gpt-5.1"}
+      - model_name: agentic-chat
+        litellm_params:
+          model: openai/gpt-5.1
+          api_base: http://ai-gateway.agent-gateway.svc.cluster.local:8080/v1
+          api_key: gateway
+          extra_headers: {"x-model-id": "gpt-5.1"}
+      - model_name: agentic-insights
+        litellm_params:
+          model: openai/gpt-5.1
+          api_base: http://ai-gateway.agent-gateway.svc.cluster.local:8080/v1
+          api_key: gateway
+          extra_headers: {"x-model-id": "gpt-5.1"}
+      - model_name: agentic-agenda
+        litellm_params:
+          model: openai/gpt-5.1
+          api_base: http://ai-gateway.agent-gateway.svc.cluster.local:8080/v1
+          api_key: gateway
+          extra_headers: {"x-model-id": "gpt-5.1"}
+      - model_name: agentic-minutes
+        litellm_params:
+          model: openai/gpt-5.1
+          api_base: http://ai-gateway.agent-gateway.svc.cluster.local:8080/v1
+          api_key: gateway
+          extra_headers: {"x-model-id": "gpt-5.1"}
+      - model_name: decision-register
+        litellm_params:
+          model: openai/gpt-5.1
+          api_base: http://ai-gateway.agent-gateway.svc.cluster.local:8080/v1
+          api_key: gateway
+          extra_headers: {"x-model-id": "gpt-5.1"}
+      - model_name: translation
+        litellm_params:
+          model: openai/gpt-5.1
+          api_base: http://ai-gateway.agent-gateway.svc.cluster.local:8080/v1
+          api_key: gateway
+          extra_headers: {"x-model-id": "gpt-5.1"}
+      - model_name: translation-mini
+        litellm_params:
+          model: openai/gpt-4.1-mini
+          api_base: http://ai-gateway.agent-gateway.svc.cluster.local:8080/v1
+          api_key: gateway
+          extra_headers: {"x-model-id": "gpt-4.1-mini"}
+      - model_name: gpt-4.1
+        litellm_params:
+          model: openai/gpt-5.1
+          api_base: http://ai-gateway.agent-gateway.svc.cluster.local:8080/v1
+          api_key: gateway
+          extra_headers: {"x-model-id": "gpt-5.1"}
+      - model_name: evals-judge
+        litellm_params:
+          model: openai/gpt-5.1
+          api_base: http://ai-gateway.agent-gateway.svc.cluster.local:8080/v1
+          api_key: gateway
+          extra_headers: {"x-model-id": "gpt-5.1"}
+    litellm_settings:
+      drop_params: true
+      num_retries: 2
+      request_timeout: 120

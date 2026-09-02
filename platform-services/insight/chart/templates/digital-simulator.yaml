@@ -1,0 +1,251 @@
+{{- if .Values.digitalSimulator.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: digital-simulator
+  namespace: {{ .Values.global.namespace | default .Release.Namespace }}
+  labels:
+    app: digital-simulator
+spec:
+  type: {{ .Values.digitalSimulator.service.type }}
+  ports:
+    - port: {{ .Values.digitalSimulator.service.port }}
+      targetPort: {{ .Values.digitalSimulator.service.port }}
+      protocol: TCP
+  selector:
+    app: digital-simulator
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: digital-simulator
+  namespace: {{ .Values.global.namespace | default .Release.Namespace }}
+  labels:
+    app: digital-simulator
+spec:
+  replicas: {{ .Values.digitalSimulator.replicaCount }}
+  selector:
+    matchLabels:
+      app: digital-simulator
+  template:
+    metadata:
+      {{- if .Values.global.otelPythonInstrumentation.enabled }}
+      annotations:
+        instrumentation.opentelemetry.io/inject-python: {{ .Values.global.otelPythonInstrumentation.value | quote }}
+      {{- end }}
+      labels:
+        app: digital-simulator
+        {{- if .Values.digitalSimulator.workloadIdentity.enabled }}
+        azure.workload.identity/use: "true"
+        {{- end }}
+    spec:
+      automountServiceAccountToken: false
+      {{- if .Values.digitalSimulator.workloadIdentity.enabled }}
+      serviceAccountName: {{ .Values.digitalSimulator.workloadIdentity.serviceAccountName | default "digital-simulator-sa" }}
+      {{- end }}
+      {{- include "insight.podSecurityContext" . | nindent 6 }}
+      initContainers:
+        - name: run-migrations
+          {{- include "insight.containerSecurityContext" . | nindent 10 }}
+          image: "{{ .Values.imageRegistry }}{{ if .Values.imageRegistry }}/{{end}}{{ .Values.digitalSimulator.image.repository }}:{{ .Values.digitalSimulator.image.tag | default .Values.imageTag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              echo "========================================="
+              echo "digital-simulator init: running migrations"
+              echo "========================================="
+              if [ -z "$DATABASE_URL" ]; then
+                echo "FATAL: DATABASE_URL is not set — cannot run migrations"
+                exit 1
+              fi
+              echo "DATABASE_URL is set (length=${#DATABASE_URL})"
+              DATABASE_URL="$(printf '%s' "$DATABASE_URL" | sed 's/%/%%/g')"
+              alembic upgrade head
+              echo "========================================="
+              echo "digital-simulator init: migrations complete"
+              echo "========================================="
+          {{- if .Values.appConfig.enabled }}
+          env:
+            {{- include "insight.nonRootEnv" . | nindent 12 }}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.appConfig.secrets.secretName | default "insight-secrets" }}
+                  key: insight--backend--database-url
+                  optional: true
+            - name: ENVIRONMENT
+              value: {{ .Values.digitalSimulator.env.ENVIRONMENT | quote }}
+            - name: LOG_LEVEL
+              value: {{ .Values.digitalSimulator.env.LOG_LEVEL | quote }}
+          {{- else }}
+          env:
+            {{- include "insight.nonRootEnv" . | nindent 12 }}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.appConfig.secrets.secretName | default "insight-secrets" }}
+                  key: insight--backend--database-url
+            - name: ENVIRONMENT
+              value: {{ .Values.digitalSimulator.env.ENVIRONMENT | quote }}
+            - name: LOG_LEVEL
+              value: {{ .Values.digitalSimulator.env.LOG_LEVEL | quote }}
+          {{- end }}
+      containers:
+        - name: digital-simulator
+          {{- include "insight.containerSecurityContext" . | nindent 10 }}
+          image: "{{ .Values.imageRegistry }}{{ if .Values.imageRegistry }}/{{end}}{{ .Values.digitalSimulator.image.repository }}:{{ .Values.digitalSimulator.image.tag | default .Values.imageTag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - containerPort: {{ .Values.digitalSimulator.service.port }}
+          {{- if .Values.appConfig.enabled }}
+          envFrom:
+            - configMapRef:
+                name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                optional: true
+            {{- if .Values.appConfig.secrets.enabled }}
+            - secretRef:
+                name: {{ .Values.appConfig.secrets.secretName | default "insight-secrets" }}
+                optional: true
+            {{- end }}
+          env:
+            {{- include "insight.nonRootEnv" . | nindent 12 }}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.appConfig.secrets.secretName | default "insight-secrets" }}
+                  key: insight--backend--database-url
+                  optional: true
+            - name: BACKEND_API_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--digital-simulator--backend-api-url
+                  optional: true
+            - name: LLM_GATEWAY_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--digital-simulator--llm-gateway-url
+                  optional: true
+            - name: LLM_GATEWAY_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.appConfig.secrets.secretName | default "insight-secrets" }}
+                  key: insight--llm-gateway--master-key
+                  optional: true
+            - name: DECISION_REGISTER_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--digital-simulator--decision-register-url
+                  optional: true
+            - name: DECISION_REGISTER_INTERNAL_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.appConfig.secrets.secretName | default "insight-secrets" }}
+                  key: insight--digital-simulator--decision-register-internal-api-key
+                  optional: true
+            - name: TRANSLATION_SERVICE_URL
+              value: {{ .Values.digitalSimulator.env.TRANSLATION_SERVICE_URL | default "http://translation:8012" | quote }}
+            - name: API_PREFIX
+              value: {{ .Values.digitalSimulator.env.API_PREFIX | quote }}
+            - name: ENVIRONMENT
+              value: {{ .Values.digitalSimulator.env.ENVIRONMENT | quote }}
+            - name: DEBUG
+              value: {{ .Values.digitalSimulator.env.DEBUG | quote }}
+            - name: LOG_LEVEL
+              value: {{ .Values.digitalSimulator.env.LOG_LEVEL | quote }}
+            - name: SIMULATION_LLM_CALL_TIMEOUT_SECONDS
+              value: {{ .Values.digitalSimulator.env.SIMULATION_LLM_CALL_TIMEOUT_SECONDS | quote }}
+            - name: SIMULATION_MAX_DURATION_SECONDS
+              value: {{ .Values.digitalSimulator.env.SIMULATION_MAX_DURATION_SECONDS | quote }}
+            - name: REWRITE_THRESHOLD_WORDS
+              value: {{ .Values.digitalSimulator.env.REWRITE_THRESHOLD_WORDS | quote }}
+            # Langfuse observability
+            - name: LANGFUSE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.appConfig.secrets.secretName | default "insight-secrets" }}
+                  key: insight--agentic-core--langfuse-secret-key
+                  optional: true
+            - name: LANGFUSE_PUBLIC_KEY
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--agentic-core--langfuse-public-key
+                  optional: true
+            - name: LANGFUSE_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--agentic-core--langfuse-host
+                  optional: true
+            {{- include "insight.otelEnv" $ | nindent 12 }}
+          {{- else }}
+          env:
+            {{- include "insight.nonRootEnv" . | nindent 12 }}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.appConfig.secrets.secretName | default "insight-secrets" }}
+                  key: insight--backend--database-url
+            - name: BACKEND_API_URL
+              value: {{ .Values.digitalSimulator.env.BACKEND_API_URL | quote }}
+            - name: LLM_GATEWAY_URL
+              value: {{ .Values.digitalSimulator.env.LLM_GATEWAY_URL | quote }}
+            {{- include "insight.llmGatewayApiKeyEnv" (dict "ctx" $ "fallback" (.Values.digitalSimulator.env.LLM_GATEWAY_API_KEY | default "sk-litellm-dev")) | nindent 12 }}
+            - name: DECISION_REGISTER_URL
+              value: {{ .Values.digitalSimulator.env.DECISION_REGISTER_URL | default "http://decision-register:8011" | quote }}
+            - name: DECISION_REGISTER_INTERNAL_API_KEY
+              value: {{ .Values.digitalSimulator.env.DECISION_REGISTER_INTERNAL_API_KEY | default "" | quote }}
+            - name: TRANSLATION_SERVICE_URL
+              value: {{ .Values.digitalSimulator.env.TRANSLATION_SERVICE_URL | default "http://translation:8012" | quote }}
+            - name: API_PREFIX
+              value: {{ .Values.digitalSimulator.env.API_PREFIX | quote }}
+            - name: ENVIRONMENT
+              value: {{ .Values.digitalSimulator.env.ENVIRONMENT | quote }}
+            - name: DEBUG
+              value: {{ .Values.digitalSimulator.env.DEBUG | quote }}
+            - name: LOG_LEVEL
+              value: {{ .Values.digitalSimulator.env.LOG_LEVEL | quote }}
+            - name: SIMULATION_LLM_CALL_TIMEOUT_SECONDS
+              value: {{ .Values.digitalSimulator.env.SIMULATION_LLM_CALL_TIMEOUT_SECONDS | quote }}
+            - name: SIMULATION_MAX_DURATION_SECONDS
+              value: {{ .Values.digitalSimulator.env.SIMULATION_MAX_DURATION_SECONDS | quote }}
+            - name: REWRITE_THRESHOLD_WORDS
+              value: {{ .Values.digitalSimulator.env.REWRITE_THRESHOLD_WORDS | quote }}
+            {{- if .Values.digitalSimulator.env.LANGFUSE_SECRET_KEY }}
+            - name: LANGFUSE_SECRET_KEY
+              value: {{ .Values.digitalSimulator.env.LANGFUSE_SECRET_KEY | quote }}
+            {{- end }}
+            {{- if .Values.digitalSimulator.env.LANGFUSE_PUBLIC_KEY }}
+            - name: LANGFUSE_PUBLIC_KEY
+              value: {{ .Values.digitalSimulator.env.LANGFUSE_PUBLIC_KEY | quote }}
+            {{- end }}
+            {{- if .Values.digitalSimulator.env.LANGFUSE_HOST }}
+            - name: LANGFUSE_HOST
+              value: {{ .Values.digitalSimulator.env.LANGFUSE_HOST | quote }}
+            {{- end }}
+            {{- include "insight.otelEnv" $ | nindent 12 }}
+          {{- end }}
+          {{- if .Values.digitalSimulator.healthCheck.enabled }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.digitalSimulator.healthCheck.path }}
+              port: {{ .Values.digitalSimulator.service.port }}
+            initialDelaySeconds: {{ .Values.digitalSimulator.healthCheck.initialDelaySeconds }}
+            periodSeconds: {{ .Values.digitalSimulator.healthCheck.periodSeconds }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.digitalSimulator.healthCheck.path }}
+              port: {{ .Values.digitalSimulator.service.port }}
+            initialDelaySeconds: {{ .Values.digitalSimulator.healthCheck.initialDelaySeconds }}
+            periodSeconds: {{ .Values.digitalSimulator.healthCheck.periodSeconds }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.digitalSimulator.resources | nindent 12 }}
+{{- end }}

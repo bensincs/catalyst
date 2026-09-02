@@ -1,0 +1,755 @@
+{{- if .Values.agenticCore.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agentic-core
+  namespace: {{ .Values.global.namespace | default .Release.Namespace }}
+  labels:
+    app: agentic-core
+spec:
+  type: {{ .Values.agenticCore.service.type }}
+  ports:
+    - port: {{ .Values.agenticCore.service.port }}
+      targetPort: {{ .Values.agenticCore.service.port }}
+      protocol: TCP
+  selector:
+    app: agentic-core
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentic-core
+  namespace: {{ .Values.global.namespace | default .Release.Namespace }}
+  labels:
+    app: agentic-core
+spec:
+  replicas: {{ .Values.agenticCore.replicaCount }}
+  selector:
+    matchLabels:
+      app: agentic-core
+  template:
+    metadata:
+      {{- if .Values.global.otelPythonInstrumentation.enabled }}
+      annotations:
+        instrumentation.opentelemetry.io/inject-python: {{ .Values.global.otelPythonInstrumentation.value | quote }}
+      {{- end }}
+      labels:
+        app: agentic-core
+        {{- if .Values.agenticCore.workloadIdentity.enabled }}
+        azure.workload.identity/use: "true"
+        {{- end }}
+        {{- if .Values.agenticCore.egressInternet }}
+        # Selected by the tenant-operator's allow-tool-internet-egress policy
+        # (0.0.0.0/0:443, IMDS carved out). Lets tiktoken fetch its BPE vocab.
+        cortex.ai/egress-internet: "true"
+        {{- end }}
+    spec:
+      automountServiceAccountToken: false
+      {{- if .Values.agenticCore.workloadIdentity.enabled }}
+      serviceAccountName: {{ .Values.agenticCore.workloadIdentity.serviceAccountName | default "agentic-core-sa" }}
+      {{- end }}
+      {{- include "insight.podSecurityContext" . | nindent 6 }}
+      initContainers:
+        - name: wait-for-translation
+          {{- include "insight.containerSecurityContext" . | nindent 10 }}
+          image: {{ .Values.curl.image | quote }}
+          command:
+            - sh
+            - -c
+            - |
+              TRANSLATION_URL="${TRANSLATION_SERVICE_URL:-http://translation:8012}"
+              until curl -sf "${TRANSLATION_URL}/health" >/dev/null; do
+                echo "Waiting for translation service at ${TRANSLATION_URL}..."
+                sleep 2
+              done
+              echo "Translation service is ready"
+          env:
+            {{- include "insight.nonRootEnv" . | nindent 12 }}
+            - name: TRANSLATION_SERVICE_URL
+              value: {{ .Values.agenticCore.env.TRANSLATION_SERVICE_URL | default "http://translation:8012" | quote }}
+      containers:
+        - name: agentic-core
+          {{- include "insight.containerSecurityContext" . | nindent 10 }}
+          image: "{{ .Values.imageRegistry }}{{ if .Values.imageRegistry }}/{{end}}{{ .Values.agenticCore.image.repository }}:{{ .Values.agenticCore.image.tag | default .Values.imageTag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - containerPort: {{ .Values.agenticCore.service.port }}
+          {{- if .Values.appConfig.enabled }}
+          # Azure App Configuration mode: Load config from synced ConfigMap/Secret
+          envFrom:
+            - configMapRef:
+                name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                optional: true
+            {{- if .Values.appConfig.secrets.enabled }}
+            - secretRef:
+                name: {{ .Values.appConfig.secrets.secretName | default "insight-secrets" }}
+                optional: true
+            {{- end }}
+          env:
+            {{- include "insight.nonRootEnv" . | nindent 12 }}
+            # Map AppConfig keys to expected env var names
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.appConfig.secrets.secretName | default "insight-secrets" }}
+                  key: insight--backend--database-url
+                  optional: true
+            - name: ENVIRONMENT
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--agentic-core--environment
+                  optional: true
+            - name: DEBUG
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--agentic-core--debug
+                  optional: true
+            - name: LOG_LEVEL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--agentic-core--log-level
+                  optional: true
+            - name: AZURE_OPENAI_ENDPOINT
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--agentic-core--azure-openai-endpoint
+                  optional: true
+            - name: AZURE_OPENAI_DEPLOYMENT
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--agentic-core--azure-openai-deployment
+                  optional: true
+            - name: AZURE_OPENAI_API_VERSION
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--agentic-core--azure-openai-api-version
+                  optional: true
+            {{- if .Values.agenticCore.env.AZURE_OPENAI_API_VERSION_RESPONSES }}
+            - name: AZURE_OPENAI_API_VERSION_RESPONSES
+              value: {{ .Values.agenticCore.env.AZURE_OPENAI_API_VERSION_RESPONSES | quote }}
+            {{- else }}
+            - name: AZURE_OPENAI_API_VERSION_RESPONSES
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--agentic-core--azure-openai-api-version-responses
+                  optional: true
+            {{- end }}
+            - name: AZURE_OPENAI_API_MODE
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--agentic-core--azure-openai-api-mode
+                  optional: true
+            {{- if .Values.agenticCore.env.HANDOFF_ROUTER_ENABLED }}
+            - name: HANDOFF_ROUTER_ENABLED
+              value: {{ .Values.agenticCore.env.HANDOFF_ROUTER_ENABLED | quote }}
+            {{- end }}
+            {{- if .Values.agenticCore.env.RAG_AGENT_ENABLED }}
+            - name: RAG_AGENT_ENABLED
+              value: {{ .Values.agenticCore.env.RAG_AGENT_ENABLED | quote }}
+            {{- end }}
+            # Prefer the per-tenant Speech resource from appInfra (TF speechRegion/
+            # speechEndpoint); fall back to the App Config keys when appInfra is unset.
+            {{- if .Values.appInfra.speechRegion }}
+            - name: AZURE_SPEECH_REGION
+              value: {{ .Values.appInfra.speechRegion | quote }}
+            {{- else }}
+            - name: AZURE_SPEECH_REGION
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--agentic-core--azure-speech-region
+                  optional: true
+            {{- end }}
+            {{- if .Values.appInfra.speechEndpoint }}
+            - name: AZURE_SPEECH_ENDPOINT
+              value: {{ .Values.appInfra.speechEndpoint | quote }}
+            {{- else }}
+            - name: AZURE_SPEECH_ENDPOINT
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--agentic-core--azure-speech-endpoint
+                  optional: true
+            {{- end }}
+            {{- if .Values.agenticCore.env.VOICE_FILLERS_ENABLED }}
+            - name: VOICE_FILLERS_ENABLED
+              value: {{ .Values.agenticCore.env.VOICE_FILLERS_ENABLED | quote }}
+            {{- else }}
+            - name: VOICE_FILLERS_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--agentic-core--voice-fillers-enabled
+                  optional: true
+            {{- end }}
+            {{- if .Values.agenticCore.env.FILLER_IMMEDIATE_DELAY_MS }}
+            - name: FILLER_IMMEDIATE_DELAY_MS
+              value: {{ .Values.agenticCore.env.FILLER_IMMEDIATE_DELAY_MS | quote }}
+            {{- else }}
+            - name: FILLER_IMMEDIATE_DELAY_MS
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--agentic-core--filler-immediate-delay-ms
+                  optional: true
+            {{- end }}
+            {{- if .Values.agenticCore.env.FILLER_PROCESSING_DELAY_MS }}
+            - name: FILLER_PROCESSING_DELAY_MS
+              value: {{ .Values.agenticCore.env.FILLER_PROCESSING_DELAY_MS | quote }}
+            {{- else }}
+            - name: FILLER_PROCESSING_DELAY_MS
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--agentic-core--filler-processing-delay-ms
+                  optional: true
+            {{- end }}
+            {{- if .Values.agenticCore.env.VOICE_INTERRUPTION_ENABLED }}
+            - name: VOICE_INTERRUPTION_ENABLED
+              value: {{ .Values.agenticCore.env.VOICE_INTERRUPTION_ENABLED | quote }}
+            {{- else }}
+            - name: VOICE_INTERRUPTION_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--agentic-core--voice-interruption-enabled
+                  optional: true
+            {{- end }}
+            {{- if .Values.agenticCore.env.INTERRUPTION_STT_MIN_TOKEN_LENGTH }}
+            - name: INTERRUPTION_STT_MIN_TOKEN_LENGTH
+              value: {{ .Values.agenticCore.env.INTERRUPTION_STT_MIN_TOKEN_LENGTH | quote }}
+            {{- else }}
+            - name: INTERRUPTION_STT_MIN_TOKEN_LENGTH
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--agentic-core--interruption-stt-min-token-length
+                  optional: true
+            {{- end }}
+            {{- if .Values.agenticCore.env.INTERRUPTION_STT_MIN_CONFIDENCE }}
+            - name: INTERRUPTION_STT_MIN_CONFIDENCE
+              value: {{ .Values.agenticCore.env.INTERRUPTION_STT_MIN_CONFIDENCE | quote }}
+            {{- else }}
+            - name: INTERRUPTION_STT_MIN_CONFIDENCE
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--agentic-core--interruption-stt-min-confidence
+                  optional: true
+            {{- end }}
+            {{- if .Values.agenticCore.env.INTERRUPTION_RMS_THRESHOLD }}
+            - name: INTERRUPTION_RMS_THRESHOLD
+              value: {{ .Values.agenticCore.env.INTERRUPTION_RMS_THRESHOLD | quote }}
+            {{- else }}
+            - name: INTERRUPTION_RMS_THRESHOLD
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--agentic-core--interruption-rms-threshold
+                  optional: true
+            {{- end }}
+            {{- if .Values.agenticCore.env.INTERRUPTION_RMS_MIN_DURATION_MS }}
+            - name: INTERRUPTION_RMS_MIN_DURATION_MS
+              value: {{ .Values.agenticCore.env.INTERRUPTION_RMS_MIN_DURATION_MS | quote }}
+            {{- else }}
+            - name: INTERRUPTION_RMS_MIN_DURATION_MS
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--agentic-core--interruption-rms-min-duration-ms
+                  optional: true
+            {{- end }}
+            {{- if .Values.agenticCore.env.INTERRUPTION_DEBOUNCE_MS }}
+            - name: INTERRUPTION_DEBOUNCE_MS
+              value: {{ .Values.agenticCore.env.INTERRUPTION_DEBOUNCE_MS | quote }}
+            {{- else }}
+            - name: INTERRUPTION_DEBOUNCE_MS
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--agentic-core--interruption-debounce-ms
+                  optional: true
+            {{- end }}
+            {{- if .Values.agenticCore.env.INTERRUPTION_COOLDOWN_MS }}
+            - name: INTERRUPTION_COOLDOWN_MS
+              value: {{ .Values.agenticCore.env.INTERRUPTION_COOLDOWN_MS | quote }}
+            {{- else }}
+            - name: INTERRUPTION_COOLDOWN_MS
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--agentic-core--interruption-cooldown-ms
+                  optional: true
+            {{- end }}
+            {{- if .Values.agenticCore.env.AZURE_SEARCH_ENDPOINT }}
+            - name: AZURE_SEARCH_ENDPOINT
+              value: {{ .Values.agenticCore.env.AZURE_SEARCH_ENDPOINT | quote }}
+            {{- else }}
+            - name: AZURE_SEARCH_ENDPOINT
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--agentic-core--azure-search-endpoint
+                  optional: true
+            {{- end }}
+            {{- if .Values.agenticCore.env.AZURE_SEARCH_INDEX_NAME }}
+            - name: AZURE_SEARCH_INDEX_NAME
+              value: {{ .Values.agenticCore.env.AZURE_SEARCH_INDEX_NAME | quote }}
+            {{- else }}
+            - name: AZURE_SEARCH_INDEX_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--agentic-core--azure-search-index-name
+                  optional: true
+            {{- end }}
+            # Cross-service URLs
+            {{- if .Values.agenticCore.env.DIGITAL_SIMULATOR_URL }}
+            - name: DIGITAL_SIMULATOR_URL
+              value: {{ .Values.agenticCore.env.DIGITAL_SIMULATOR_URL | quote }}
+            {{- else }}
+            - name: DIGITAL_SIMULATOR_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--agentic-core--digital-simulator-url
+                  optional: true
+            {{- end }}
+            {{- if .Values.agenticCore.env.DECISION_REGISTER_URL }}
+            - name: DECISION_REGISTER_URL
+              value: {{ .Values.agenticCore.env.DECISION_REGISTER_URL | quote }}
+            {{- else }}
+            - name: DECISION_REGISTER_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--agentic-core--decision-register-url
+                  optional: true
+            {{- end }}
+            {{- if .Values.agenticCore.env.DECISION_REGISTER_INTERNAL_API_KEY }}
+            - name: DECISION_REGISTER_INTERNAL_API_KEY
+              value: {{ .Values.agenticCore.env.DECISION_REGISTER_INTERNAL_API_KEY | quote }}
+            {{- else }}
+            - name: DECISION_REGISTER_INTERNAL_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.appConfig.secrets.secretName | default "insight-secrets" }}
+                  key: insight--agentic-core--decision-register-internal-api-key
+                  optional: true
+            {{- end }}
+            {{- if .Values.agenticCore.env.TRANSLATION_SERVICE_URL }}
+            - name: TRANSLATION_SERVICE_URL
+              value: {{ .Values.agenticCore.env.TRANSLATION_SERVICE_URL | quote }}
+            {{- else }}
+            - name: TRANSLATION_SERVICE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--agentic-core--translation-service-url
+                  optional: true
+            {{- end }}
+            # LLM Gateway (routes feature-aliased LLM calls through LiteLLM)
+            - name: LLM_GATEWAY_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--agentic-core--llm-gateway-url
+                  optional: true
+            - name: LLM_GATEWAY_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.appConfig.secrets.secretName | default "insight-secrets" }}
+                  key: insight--llm-gateway--master-key
+                  optional: true
+            - name: LLM_GATEWAY_MODEL_ALIAS
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--agentic-core--llm-gateway-model-alias
+                  optional: true
+            # Redis-backed pod-safe meeting stream coordination
+            {{- if .Values.agenticCore.env.REDIS_ENABLED }}
+            - name: REDIS_ENABLED
+              value: {{ .Values.agenticCore.env.REDIS_ENABLED | quote }}
+            {{- end }}
+            {{- if or .Values.appInfra.redisHost .Values.agenticCore.env.REDIS_HOST }}
+            - name: REDIS_HOST
+              value: {{ .Values.appInfra.redisHost | default .Values.agenticCore.env.REDIS_HOST | quote }}
+            {{- else }}
+            - name: REDIS_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--agentic-core--redis-host
+                  optional: true
+            {{- end }}
+            {{- if .Values.agenticCore.env.REDIS_PORT }}
+            - name: REDIS_PORT
+              value: {{ .Values.agenticCore.env.REDIS_PORT | quote }}
+            {{- end }}
+            {{- if .Values.agenticCore.env.REDIS_USE_SSL }}
+            - name: REDIS_USE_SSL
+              value: {{ .Values.agenticCore.env.REDIS_USE_SSL | quote }}
+            {{- end }}
+            {{- if .Values.agenticCore.env.REDIS_USE_MANAGED_IDENTITY }}
+            - name: REDIS_USE_MANAGED_IDENTITY
+              value: {{ .Values.agenticCore.env.REDIS_USE_MANAGED_IDENTITY | quote }}
+            {{- end }}
+            {{- /* Redis Entra AUTH username must be the UAI object/principal ID,
+               not AZURE_CLIENT_ID. Prefer operator-injected appInfra.principalId. */}}
+            {{- if or .Values.appInfra.principalId .Values.agenticCore.env.AZURE_REDIS_USERNAME }}
+            - name: AZURE_REDIS_USERNAME
+              value: {{ .Values.appInfra.principalId | default .Values.agenticCore.env.AZURE_REDIS_USERNAME | quote }}
+            {{- end }}
+            {{- if .Values.agenticCore.env.REDIS_PUBLISH_TIMEOUT_SECONDS }}
+            - name: REDIS_PUBLISH_TIMEOUT_SECONDS
+              value: {{ .Values.agenticCore.env.REDIS_PUBLISH_TIMEOUT_SECONDS | quote }}
+            {{- end }}
+            {{- if .Values.agenticCore.env.MEETING_STREAM_REACTIVE_POD_SAFE_ENABLED }}
+            - name: MEETING_STREAM_REACTIVE_POD_SAFE_ENABLED
+              value: {{ .Values.agenticCore.env.MEETING_STREAM_REACTIVE_POD_SAFE_ENABLED | quote }}
+            {{- end }}
+            {{- if .Values.agenticCore.env.MEETING_STREAM_PENDING_DECISIONS_POD_SAFE_ENABLED }}
+            - name: MEETING_STREAM_PENDING_DECISIONS_POD_SAFE_ENABLED
+              value: {{ .Values.agenticCore.env.MEETING_STREAM_PENDING_DECISIONS_POD_SAFE_ENABLED | quote }}
+            {{- end }}
+            # Service Bus configuration for document indexing listener
+            - name: AZURE_SERVICE_BUS_NAMESPACE
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--agentic-core--azure-service-bus-namespace
+                  optional: true
+            - name: INDEXER_RESPONSE_QUEUE
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--agentic-core--indexer-response-queue
+                  optional: true
+            # Azure Blob Storage (required for document indexer + audio brief; auth via Managed Identity when no connection string)
+            {{- if or .Values.appInfra.storageAccountName .Values.agenticCore.env.AZURE_STORAGE_ACCOUNT_NAME }}
+            - name: AZURE_STORAGE_ACCOUNT_NAME
+              value: {{ .Values.appInfra.storageAccountName | default .Values.agenticCore.env.AZURE_STORAGE_ACCOUNT_NAME | quote }}
+            {{- end }}
+            {{- if or .Values.appInfra.storageContainers .Values.agenticCore.env.AZURE_STORAGE_CONTAINER }}
+            - name: AZURE_STORAGE_CONTAINER
+              value: {{ include "insight.pickStorageContainer" (dict "ctx" $ "match" "user-documents" "fallback" .Values.agenticCore.env.AZURE_STORAGE_CONTAINER) | quote }}
+            {{- end }}
+            {{- if .Values.agenticCore.env.AZURE_STORAGE_PATH_PREFIX }}
+            - name: AZURE_STORAGE_PATH_PREFIX
+              value: {{ .Values.agenticCore.env.AZURE_STORAGE_PATH_PREFIX | quote }}
+            {{- end }}
+            {{- if or .Values.appInfra.storageContainers .Values.agenticCore.env.AZURE_AUDIO_BRIEF_CONTAINER }}
+            - name: AZURE_AUDIO_BRIEF_CONTAINER
+              value: {{ include "insight.pickStorageContainer" (dict "ctx" $ "match" "audio-brief" "fallback" .Values.agenticCore.env.AZURE_AUDIO_BRIEF_CONTAINER) | quote }}
+            {{- end }}
+            # Langfuse observability
+            - name: LANGFUSE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.appConfig.secrets.secretName | default "insight-secrets" }}
+                  key: insight--agentic-core--langfuse-secret-key
+                  optional: true
+            - name: LANGFUSE_PUBLIC_KEY
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--agentic-core--langfuse-public-key
+                  optional: true
+            - name: LANGFUSE_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--agentic-core--langfuse-host
+                  optional: true
+            - name: LANGFUSE_DEBUG
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--agentic-core--langfuse-debug
+                  optional: true
+            # Backend API URL for internal service-to-service calls (e.g. transcription perf ingest)
+            {{- if .Values.agenticCore.env.BACKEND_API_URL }}
+            - name: BACKEND_API_URL
+              value: {{ .Values.agenticCore.env.BACKEND_API_URL | quote }}
+            {{- else }}
+            - name: BACKEND_API_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--agentic-core--backend-api-url
+                  optional: true
+            {{- end }}
+            # Transcription perf internal service config (from backend App Config namespace)
+            - name: BACKEND_INTERNAL_SERVICE_API_KEY
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--backend--BACKEND_INTERNAL_SERVICE_API_KEY
+                  optional: true
+            - name: ENABLE_TRANSCRIPTION_PERF_EVENTS
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--backend--ENABLE_TRANSCRIPTION_PERF_EVENTS
+                  optional: true
+            # Indexer V2 configuration (feature-flagged, default off)
+            {{- if .Values.agenticCore.env.INDEXER_V2_ENABLED }}
+            - name: INDEXER_V2_ENABLED
+              value: {{ .Values.agenticCore.env.INDEXER_V2_ENABLED | quote }}
+            {{- end }}
+            {{- if or .Values.appInfra.indexerResponseQueue .Values.agenticCore.env.INDEXER_V2_RESPONSE_QUEUE }}
+            - name: INDEXER_V2_RESPONSE_QUEUE
+              value: {{ .Values.appInfra.indexerResponseQueue | default .Values.agenticCore.env.INDEXER_V2_RESPONSE_QUEUE | quote }}
+            {{- end }}
+            {{- if or .Values.appInfra.applicationId .Values.agenticCore.env.INDEXER_V2_AI_SEARCH_INDEX }}
+            - name: INDEXER_V2_AI_SEARCH_INDEX
+              value: {{ .Values.appInfra.applicationId | default .Values.agenticCore.env.INDEXER_V2_AI_SEARCH_INDEX | quote }}
+            {{- end }}
+            {{- if .Values.agenticCore.workloadIdentity.enabled }}
+            # Workload Identity configuration (not from AppConfig - managed identity)
+            - name: AZURE_CLIENT_ID
+              value: {{ .Values.appInfra.workloadIdentityClientId | default .Values.agenticCore.workloadIdentity.clientId | default "" | quote }}
+            {{- end }}
+            {{- if .Values.agenticCore.env.AZURE_TENANT_ID }}
+            - name: AZURE_TENANT_ID
+              value: {{ .Values.agenticCore.env.AZURE_TENANT_ID | quote }}
+            {{- end }}
+            {{- if .Values.global.otelPythonInstrumentation.enabled }}
+            - name: OTEL_PYTHON_EXCLUDED_URLS
+              value: {{ .Values.global.otelPythonInstrumentation.excludedUrls | default "health,ready" | quote }}
+            {{- end }}
+          {{- else }}
+          # AD mode: config from the ApplicationDeployment spec.helm values
+          env:
+            {{- include "insight.nonRootEnv" . | nindent 12 }}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.appConfig.secrets.secretName | default "insight-secrets" }}
+                  key: insight--backend--database-url
+            - name: ENVIRONMENT
+              value: {{ .Values.agenticCore.env.ENVIRONMENT | quote }}
+            - name: DEBUG
+              value: {{ .Values.agenticCore.env.DEBUG | quote }}
+            - name: LOG_LEVEL
+              value: {{ .Values.agenticCore.env.LOG_LEVEL | quote }}
+            - name: AZURE_OPENAI_API_MODE
+              value: {{ .Values.agenticCore.env.AZURE_OPENAI_API_MODE | quote }}
+            - name: AZURE_OPENAI_ENDPOINT
+              value: {{ .Values.agenticCore.env.AZURE_OPENAI_ENDPOINT | quote }}
+            - name: AZURE_OPENAI_DEPLOYMENT
+              value: {{ .Values.agenticCore.env.AZURE_OPENAI_DEPLOYMENT | quote }}
+            - name: AZURE_OPENAI_API_VERSION
+              value: {{ .Values.agenticCore.env.AZURE_OPENAI_API_VERSION | quote }}
+            - name: AZURE_OPENAI_API_VERSION_RESPONSES
+              value: {{ .Values.agenticCore.env.AZURE_OPENAI_API_VERSION_RESPONSES | quote }}
+            - name: HANDOFF_ROUTER_ENABLED
+              value: {{ .Values.agenticCore.env.HANDOFF_ROUTER_ENABLED | quote }}
+            - name: RAG_AGENT_ENABLED
+              value: {{ .Values.agenticCore.env.RAG_AGENT_ENABLED | quote }}
+            # Speech endpoint/region prefer the per-tenant appInfra values (TF
+            # speechEndpoint/speechRegion) so amber targets its own Speech account
+            # (the UAI has Cognitive Services User there); fall back to env defaults.
+            {{- if or .Values.appInfra.speechRegion .Values.agenticCore.env.AZURE_SPEECH_REGION }}
+            - name: AZURE_SPEECH_REGION
+              value: {{ .Values.appInfra.speechRegion | default .Values.agenticCore.env.AZURE_SPEECH_REGION | quote }}
+            {{- end }}
+            {{- if or .Values.appInfra.speechEndpoint .Values.agenticCore.env.AZURE_SPEECH_ENDPOINT }}
+            - name: AZURE_SPEECH_ENDPOINT
+              value: {{ .Values.appInfra.speechEndpoint | default .Values.agenticCore.env.AZURE_SPEECH_ENDPOINT | quote }}
+            {{- end }}
+            - name: VOICE_FILLERS_ENABLED
+              value: {{ .Values.agenticCore.env.VOICE_FILLERS_ENABLED | quote }}
+            - name: FILLER_IMMEDIATE_DELAY_MS
+              value: {{ .Values.agenticCore.env.FILLER_IMMEDIATE_DELAY_MS | quote }}
+            - name: FILLER_PROCESSING_DELAY_MS
+              value: {{ .Values.agenticCore.env.FILLER_PROCESSING_DELAY_MS | quote }}
+            - name: VOICE_INTERRUPTION_ENABLED
+              value: {{ .Values.agenticCore.env.VOICE_INTERRUPTION_ENABLED | quote }}
+            - name: INTERRUPTION_STT_MIN_TOKEN_LENGTH
+              value: {{ .Values.agenticCore.env.INTERRUPTION_STT_MIN_TOKEN_LENGTH | quote }}
+            - name: INTERRUPTION_STT_MIN_CONFIDENCE
+              value: {{ .Values.agenticCore.env.INTERRUPTION_STT_MIN_CONFIDENCE | quote }}
+            - name: INTERRUPTION_RMS_THRESHOLD
+              value: {{ .Values.agenticCore.env.INTERRUPTION_RMS_THRESHOLD | quote }}
+            - name: INTERRUPTION_RMS_MIN_DURATION_MS
+              value: {{ .Values.agenticCore.env.INTERRUPTION_RMS_MIN_DURATION_MS | quote }}
+            - name: INTERRUPTION_DEBOUNCE_MS
+              value: {{ .Values.agenticCore.env.INTERRUPTION_DEBOUNCE_MS | quote }}
+            - name: INTERRUPTION_COOLDOWN_MS
+              value: {{ .Values.agenticCore.env.INTERRUPTION_COOLDOWN_MS | quote }}
+            # Cross-service URLs
+            - name: BACKEND_API_URL
+              value: {{ .Values.agenticCore.env.BACKEND_API_URL | default "http://backend:8002" | quote }}
+            - name: DIGITAL_SIMULATOR_URL
+              value: {{ .Values.agenticCore.env.DIGITAL_SIMULATOR_URL | default "http://digital-simulator:8010" | quote }}
+            - name: DECISION_REGISTER_URL
+              value: {{ .Values.agenticCore.env.DECISION_REGISTER_URL | default "http://decision-register:8011" | quote }}
+            - name: DECISION_REGISTER_INTERNAL_API_KEY
+              value: {{ .Values.agenticCore.env.DECISION_REGISTER_INTERNAL_API_KEY | default "" | quote }}
+            - name: TRANSLATION_SERVICE_URL
+              value: {{ .Values.agenticCore.env.TRANSLATION_SERVICE_URL | default "http://translation:8012" | quote }}
+            # LLM Gateway (routes feature-aliased LLM calls through LiteLLM)
+            - name: LLM_GATEWAY_URL
+              value: {{ .Values.agenticCore.env.LLM_GATEWAY_URL | default "http://llm-gateway:8005" | quote }}
+            {{- include "insight.llmGatewayApiKeyEnv" (dict "ctx" $ "fallback" .Values.agenticCore.env.LLM_GATEWAY_API_KEY) | nindent 12 }}
+            - name: LLM_GATEWAY_MODEL_ALIAS
+              value: {{ .Values.agenticCore.env.LLM_GATEWAY_MODEL_ALIAS | default "agentic-chat" | quote }}
+            # Redis-backed pod-safe meeting stream coordination
+            - name: REDIS_ENABLED
+              value: {{ .Values.agenticCore.env.REDIS_ENABLED | default "true" | quote }}
+            {{- if or .Values.appInfra.redisHost .Values.agenticCore.env.REDIS_HOST }}
+            - name: REDIS_HOST
+              value: {{ .Values.appInfra.redisHost | default .Values.agenticCore.env.REDIS_HOST | quote }}
+            {{- end }}
+            - name: REDIS_PORT
+              value: {{ .Values.agenticCore.env.REDIS_PORT | default "6380" | quote }}
+            - name: REDIS_USE_SSL
+              value: {{ .Values.agenticCore.env.REDIS_USE_SSL | default "true" | quote }}
+            - name: REDIS_USE_MANAGED_IDENTITY
+              value: {{ .Values.agenticCore.env.REDIS_USE_MANAGED_IDENTITY | default "true" | quote }}
+            {{- if or .Values.appInfra.principalId .Values.agenticCore.env.AZURE_REDIS_USERNAME }}
+            - name: AZURE_REDIS_USERNAME
+              value: {{ .Values.appInfra.principalId | default .Values.agenticCore.env.AZURE_REDIS_USERNAME | quote }}
+            {{- end }}
+            - name: REDIS_PUBLISH_TIMEOUT_SECONDS
+              value: {{ .Values.agenticCore.env.REDIS_PUBLISH_TIMEOUT_SECONDS | default "0.5" | quote }}
+            - name: MEETING_STREAM_REACTIVE_POD_SAFE_ENABLED
+              value: {{ .Values.agenticCore.env.MEETING_STREAM_REACTIVE_POD_SAFE_ENABLED | default "true" | quote }}
+            - name: MEETING_STREAM_PENDING_DECISIONS_POD_SAFE_ENABLED
+              value: {{ .Values.agenticCore.env.MEETING_STREAM_PENDING_DECISIONS_POD_SAFE_ENABLED | default "false" | quote }}
+            # Azure AI Search (document indexing + retrieval). Retrieval must point at
+            # wherever the rag-ingestion indexer WROTE insight's vectors, i.e. rag's own
+            # search service. Precedence: appInfra.ragAiSearchEndpoint (operator-injected
+            # peer key from the root cross-app Terraform wiring) > agenticCore
+            # .aiSearchEndpointOverride (manual/transitional literal) > appInfra
+            # .aiSearchEndpoint (insight's own per-tenant search) > values default.
+            # insight's UAI needs Search Index Data Reader on the target search service.
+            {{- $searchEndpoint := .Values.appInfra.ragAiSearchEndpoint | default .Values.agenticCore.aiSearchEndpointOverride | default .Values.appInfra.aiSearchEndpoint | default .Values.agenticCore.env.AZURE_SEARCH_ENDPOINT }}
+            {{- if $searchEndpoint }}
+            - name: AZURE_SEARCH_ENDPOINT
+              value: {{ $searchEndpoint | quote }}
+            {{- end }}
+            {{- /* The rag indexer names insight's index after the application id
+               (INDEXER_V2_APP_ID == appInfra.applicationId), so retrieval must query the
+               same index. Prefer appInfra.applicationId; fall back to the env literal. */}}
+            {{- if or .Values.appInfra.applicationId .Values.agenticCore.env.AZURE_SEARCH_INDEX_NAME }}
+            - name: AZURE_SEARCH_INDEX_NAME
+              value: {{ .Values.appInfra.applicationId | default .Values.agenticCore.env.AZURE_SEARCH_INDEX_NAME | quote }}
+            {{- end }}
+            # Service Bus configuration for document indexing listener
+            {{- if or .Values.appInfra.serviceBusFqdn .Values.agenticCore.env.AZURE_SERVICE_BUS_NAMESPACE }}
+            - name: AZURE_SERVICE_BUS_NAMESPACE
+              value: {{ .Values.appInfra.serviceBusFqdn | default .Values.agenticCore.env.AZURE_SERVICE_BUS_NAMESPACE | quote }}
+            {{- end }}
+            {{- if .Values.agenticCore.env.INDEXER_RESPONSE_QUEUE }}
+            - name: INDEXER_RESPONSE_QUEUE
+              value: {{ .Values.agenticCore.env.INDEXER_RESPONSE_QUEUE | quote }}
+            {{- end }}
+            # Indexer V2 configuration (feature-flagged, default off)
+            {{- if .Values.agenticCore.env.INDEXER_V2_ENABLED }}
+            - name: INDEXER_V2_ENABLED
+              value: {{ .Values.agenticCore.env.INDEXER_V2_ENABLED | quote }}
+            {{- end }}
+            {{- if or .Values.appInfra.indexerResponseQueue .Values.agenticCore.env.INDEXER_V2_RESPONSE_QUEUE }}
+            - name: INDEXER_V2_RESPONSE_QUEUE
+              value: {{ .Values.appInfra.indexerResponseQueue | default .Values.agenticCore.env.INDEXER_V2_RESPONSE_QUEUE | quote }}
+            {{- end }}
+            {{- if or .Values.appInfra.applicationId .Values.agenticCore.env.INDEXER_V2_AI_SEARCH_INDEX }}
+            - name: INDEXER_V2_AI_SEARCH_INDEX
+              value: {{ .Values.appInfra.applicationId | default .Values.agenticCore.env.INDEXER_V2_AI_SEARCH_INDEX | quote }}
+            {{- end }}
+            # Azure Blob Storage (required for document indexer + audio brief; auth via Managed Identity when no connection string)
+            {{- if or .Values.appInfra.storageAccountName .Values.agenticCore.env.AZURE_STORAGE_ACCOUNT_NAME }}
+            - name: AZURE_STORAGE_ACCOUNT_NAME
+              value: {{ .Values.appInfra.storageAccountName | default .Values.agenticCore.env.AZURE_STORAGE_ACCOUNT_NAME | quote }}
+            {{- end }}
+            {{- if or .Values.appInfra.storageContainers .Values.agenticCore.env.AZURE_STORAGE_CONTAINER }}
+            - name: AZURE_STORAGE_CONTAINER
+              value: {{ include "insight.pickStorageContainer" (dict "ctx" $ "match" "user-documents" "fallback" .Values.agenticCore.env.AZURE_STORAGE_CONTAINER) | quote }}
+            {{- end }}
+            {{- if .Values.agenticCore.env.AZURE_STORAGE_PATH_PREFIX }}
+            - name: AZURE_STORAGE_PATH_PREFIX
+              value: {{ .Values.agenticCore.env.AZURE_STORAGE_PATH_PREFIX | quote }}
+            {{- end }}
+            {{- if or .Values.appInfra.storageContainers .Values.agenticCore.env.AZURE_AUDIO_BRIEF_CONTAINER }}
+            - name: AZURE_AUDIO_BRIEF_CONTAINER
+              value: {{ include "insight.pickStorageContainer" (dict "ctx" $ "match" "audio-brief" "fallback" .Values.agenticCore.env.AZURE_AUDIO_BRIEF_CONTAINER) | quote }}
+            {{- end }}
+            # Langfuse observability
+            {{- if .Values.agenticCore.env.LANGFUSE_SECRET_KEY }}
+            - name: LANGFUSE_SECRET_KEY
+              value: {{ .Values.agenticCore.env.LANGFUSE_SECRET_KEY | quote }}
+            {{- end }}
+            {{- if .Values.agenticCore.env.LANGFUSE_PUBLIC_KEY }}
+            - name: LANGFUSE_PUBLIC_KEY
+              value: {{ .Values.agenticCore.env.LANGFUSE_PUBLIC_KEY | quote }}
+            {{- end }}
+            {{- if .Values.agenticCore.env.LANGFUSE_HOST }}
+            - name: LANGFUSE_HOST
+              value: {{ .Values.agenticCore.env.LANGFUSE_HOST | quote }}
+            {{- end }}
+            {{- if .Values.agenticCore.env.LANGFUSE_DEBUG }}
+            - name: LANGFUSE_DEBUG
+              value: {{ .Values.agenticCore.env.LANGFUSE_DEBUG | quote }}
+            {{- end }}
+            {{- if .Values.agenticCore.workloadIdentity.enabled }}
+            - name: AZURE_CLIENT_ID
+              value: {{ .Values.appInfra.workloadIdentityClientId | default .Values.agenticCore.workloadIdentity.clientId | default "" | quote }}
+            {{- end }}
+            {{- if .Values.agenticCore.env.AZURE_TENANT_ID }}
+            - name: AZURE_TENANT_ID
+              value: {{ .Values.agenticCore.env.AZURE_TENANT_ID | quote }}
+            {{- end }}
+            {{- if .Values.global.otelPythonInstrumentation.enabled }}
+            - name: OTEL_PYTHON_EXCLUDED_URLS
+              value: {{ .Values.global.otelPythonInstrumentation.excludedUrls | default "health,ready" | quote }}
+            {{- end }}
+          {{- end }}
+          {{- if .Values.agenticCore.healthCheck.enabled }}
+          {{- $hc := .Values.agenticCore.healthCheck }}
+          {{- $sp := $hc.startupProbe | default dict }}
+          {{- $spEnabled := default true $sp.enabled }}
+          {{- $lrInitialDelay := ternary (default 0 $hc.livenessReadinessInitialDelaySeconds) $hc.initialDelaySeconds $spEnabled }}
+          {{- if $spEnabled }}
+          startupProbe:
+            httpGet:
+              path: {{ $hc.path }}
+              port: {{ .Values.agenticCore.service.port }}
+            periodSeconds: {{ default 10 $sp.periodSeconds }}
+            failureThreshold: {{ default 30 $sp.failureThreshold }}
+            timeoutSeconds: {{ default 5 $sp.timeoutSeconds }}
+          {{- end }}
+          # Liveness is a TCP check (not /health): while a streaming chat keeps the
+          # event loop busy, an HTTP /health probe can miss the (default 1s) timeout
+          # and get the pod killed mid-request. A TCP check only asserts the process
+          # is up, so a busy-but-alive pod is never restarted.
+          livenessProbe:
+            tcpSocket:
+              port: {{ .Values.agenticCore.service.port }}
+            initialDelaySeconds: {{ $lrInitialDelay }}
+            periodSeconds: {{ $hc.periodSeconds }}
+            timeoutSeconds: {{ default 5 $hc.timeoutSeconds }}
+            failureThreshold: {{ default 6 $hc.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: {{ $hc.path }}
+              port: {{ .Values.agenticCore.service.port }}
+            initialDelaySeconds: {{ $lrInitialDelay }}
+            periodSeconds: {{ $hc.periodSeconds }}
+            timeoutSeconds: {{ default 5 $hc.timeoutSeconds }}
+            failureThreshold: {{ default 6 $hc.failureThreshold }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.agenticCore.resources | nindent 12 }}
+{{- end }}

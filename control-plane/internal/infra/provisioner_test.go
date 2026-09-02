@@ -9,8 +9,12 @@ import (
 )
 
 func TestSubstituteTokens(t *testing.T) {
-	arm := `{"name":"cortexkv{{tenantHash}}","tenant":"{{tenant}}","loc":"{{region}}","vault":"{{vaultName}}","vrg":"{{vaultResourceGroup}}"}`
-	out := substituteTokens(arm, "t-cff8707ddd78", "uaenorth", "cortex-kv-abc123", "cortex-t-abc")
+	arm := `{"name":"cortexkv{{tenantHash}}","tenant":"{{tenant}}","loc":"{{region}}","vault":"{{vaultName}}","vrg":"{{vaultResourceGroup}}","pe":"{{peSubnetId}}","oidc":"{{aksOidcIssuerUrl}}","dnsrg":"{{dnsZoneResourceGroup}}"}`
+	out := substituteTokens(arm, tenantTokens{
+		Slug: "t-cff8707ddd78", Region: "uaenorth",
+		VaultName: "cortex-kv-abc123", VaultRG: "cortex-t-abc",
+		PESubnetID: "/subscriptions/s/subnets/pe", AKSOIDCIssuer: "https://issuer/", DNSZoneRG: "cortex-t-abc",
+	})
 	if strings.Contains(out, "{{") {
 		t.Fatalf("tokens not substituted: %s", out)
 	}
@@ -35,6 +39,11 @@ func TestSubstituteTokens(t *testing.T) {
 	// reference would look in the wrong place.
 	if !strings.Contains(out, `"vrg":"cortex-t-abc"`) {
 		t.Fatalf("vaultResourceGroup token not applied: %s", out)
+	}
+	// Private-networking facts a service needs but cannot discover for itself.
+	if !strings.Contains(out, `"pe":"/subscriptions/s/subnets/pe"`) ||
+		!strings.Contains(out, `"oidc":"https://issuer/"`) {
+		t.Fatalf("network tokens not applied: %s", out)
 	}
 	if !strings.Contains(out, "cortexkv"+h) {
 		t.Fatalf("hash token not applied: %s", out)

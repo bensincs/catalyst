@@ -1,0 +1,106 @@
+{{- if .Values.appConfig.enabled }}
+{{- $miClientId := .Values.appInfra.workloadIdentityClientId | default .Values.appConfig.managedIdentityClientId -}}
+{{- $appConfigLabel := .Values.appInfra.environment | default .Values.appConfig.environment | default "dev" -}}
+# =============================================================================
+# Azure App Configuration Provider
+# =============================================================================
+# This template creates an AzureAppConfigurationProvider CRD that syncs
+# configuration from Azure App Configuration to Kubernetes ConfigMaps/Secrets.
+#
+# Prerequisites:
+#   - Azure App Configuration Kubernetes Provider installed in cluster
+#   - Managed Identity with App Configuration Data Reader role
+#   - Key Vault Secrets User role (if using Key Vault references)
+# =============================================================================
+
+apiVersion: azconfig.io/v1
+kind: AzureAppConfigurationProvider
+metadata:
+  name: {{ .Release.Name }}-appconfig
+  namespace: {{ .Values.global.namespace | default .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: appconfig-provider
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  # Azure App Configuration endpoint
+  endpoint: {{ .Values.appInfra.appConfigEndpoint | default .Values.appConfig.endpoint }}
+
+  # Target ConfigMap for non-secret configuration
+  target:
+    configMapName: {{ .Values.appConfig.configMapName | default "insight-config" }}
+    configMapData:
+      type: default
+
+  # Authentication
+  {{- if $miClientId }}
+  auth:
+    workloadIdentity:
+      serviceAccountName: {{ .Values.appConfig.serviceAccountName | default "appconfig-provider-sa" | quote }}
+  {{- else if .Values.appConfig.servicePrincipalSecretName }}
+  auth:
+    servicePrincipalReference: {{ .Values.appConfig.servicePrincipalSecretName }}
+  {{- end }}
+
+  # Configuration sync settings
+  configuration:
+    refresh:
+      enabled: {{ .Values.appConfig.refresh.enabled | default true }}
+      interval: {{ .Values.appConfig.refresh.configInterval | default "1m" }}
+    selectors:
+      {{- range .Values.appConfig.selectors }}
+      - keyFilter: {{ .keyFilter | quote }}
+        labelFilter: {{ .labelFilter | quote }}
+      {{- end }}
+      {{- if not .Values.appConfig.selectors }}
+      # Default selectors - all insight/* keys with environment label
+      - keyFilter: "insight/backend/*"
+        labelFilter: {{ $appConfigLabel | quote }}
+      - keyFilter: "insight/bff/*"
+        labelFilter: {{ $appConfigLabel | quote }}
+      - keyFilter: "insight/cortex/*"
+        labelFilter: {{ $appConfigLabel | quote }}
+      - keyFilter: "insight/agentic-core/*"
+        labelFilter: {{ $appConfigLabel | quote }}
+      - keyFilter: "insight/llm-gateway/*"
+        labelFilter: {{ $appConfigLabel | quote }}
+      - keyFilter: "insight/common/*"
+        labelFilter: {{ $appConfigLabel | quote }}
+      - keyFilter: "insight/translation/*"
+        labelFilter: {{ $appConfigLabel | quote }}
+      {{- end }}
+
+  # Secret sync settings (for Key Vault references)
+  {{- if and .Values.appConfig.secrets.enabled (not .Values.appInfra.externalSecrets.enabled) }}
+  secret:
+    target:
+      secretName: {{ .Values.appConfig.secrets.secretName | default "insight-secrets" }}
+    {{- if $miClientId }}
+    auth:
+      workloadIdentity:
+        serviceAccountName: {{ .Values.appConfig.serviceAccountName | default "appconfig-provider-sa" | quote }}
+    {{- else if .Values.appConfig.servicePrincipalSecretName }}
+    auth:
+      servicePrincipalReference: {{ .Values.appConfig.servicePrincipalSecretName }}
+    {{- end }}
+    refresh:
+      enabled: {{ .Values.appConfig.refresh.enabled | default true }}
+      interval: {{ .Values.appConfig.refresh.secretInterval | default "1h" }}
+  {{- end }}
+
+---
+# ServiceAccount for Workload Identity (if using managed identity)
+{{- if $miClientId }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.appConfig.serviceAccountName | default "appconfig-provider-sa" }}
+  namespace: {{ .Values.global.namespace | default .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: appconfig-provider
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    azure.workload.identity/use: "true"
+  annotations:
+    azure.workload.identity/client-id: {{ $miClientId | quote }}
+{{- end }}
+{{- end }}

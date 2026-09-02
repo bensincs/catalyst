@@ -1,0 +1,923 @@
+# Default values for insight-admin-portal
+# This is for LOCAL development (uses local Docker images)
+
+# Global settings
+global:
+  # Empty by default so a bare `helm install` does not silently deploy into a
+  # hardcoded namespace. On the platform the tenant-operator injects
+  # global.namespace = <tenant-namespace>; for standalone installs pass it via
+  # --set global.namespace=<ns> (matching the release namespace).
+  namespace: ""
+  imagePullPolicy: IfNotPresent  # Don't pull - use local images
+  otelPythonInstrumentation:
+    enabled: false
+    value: "opentelemetry/python-instrumentation"
+    excludedUrls: "health,ready"
+  # Observability (cortex-otel OTLP export). Traces + metrics flow to the
+  # node-local otel-agent DaemonSet (cortex-observability chart) on hostPort
+  # 4318, which forwards to Azure Monitor (traces -> Application Insights,
+  # metrics -> Managed Prometheus). Logs are NOT sent here: services emit
+  # structured JSON on stdout, scraped by the same agent into Log Analytics.
+  # See issue #1377 / ADR-2026-05-19.
+  #
+  # enabled=false (default) = telemetry OFF: no OTEL_* env is rendered and the
+  # cortex-otel SDK is a no-op, so local dev needs no agent. endpoint and
+  # protocol are defined once here and inherited by every environment; each
+  # deployed env opts in via values-<env>.yaml (enabled: "true") once the
+  # node otel-agent is deployed. The endpoint targets $(NODE_IP), expanded at
+  # runtime from the pod's host IP by the NODE_IP env the chart injects.
+  observability:
+    enabled: false
+    endpoint: http://$(NODE_IP):4318
+    # Fixed to http/protobuf for cortex-otel's OTLP HTTP exporters; not a gRPC switch.
+    protocol: http/protobuf
+    # Emit CiliumNetworkPolicy for TCP 4318 egress to the otel-agent pod (hostPort is DNATed to it under Cilium socket-LB). Set false if cilium.io CRD is absent.
+    ciliumNetworkPolicy: true
+
+# Image registry settings (local development)
+imageRegistry: ""  # Empty = use local images
+imageTag: latest
+
+# Utility image for init containers (e.g. agentic-core wait-for-translation).
+# Bare docker.io ref for local; override per env (helm-app catalog) to the
+# ACR pull-through cache path so private AKS can pull it.
+curl:
+  image: curlimages/curl:8.21.0
+
+# Azure App Configuration (disabled for local development)
+# Configuration is loaded directly from env values below instead
+appConfig:
+  enabled: false
+  # Enables only BFF runtime feature-flag reads/writes via Azure App Configuration.
+  # Does not enable the AzureAppConfigurationProvider or synced ConfigMap/Secret mode.
+  featureFlags:
+    enabled: true
+  endpoint: ""
+  managedIdentityClientId: ""
+  serviceAccountName: appconfig-provider-sa
+  servicePrincipalSecretName: ""
+  configMapName: insight-config
+  environment: dev
+  selectors: []
+  refresh:
+    enabled: true
+    configInterval: 1m
+    secretInterval: 1h
+  secrets:
+    enabled: true
+    secretName: insight-secrets
+
+# Feature flags fed straight to the BFF as FEATURE_* environment variables
+# (the BFF's Priority-3 resolver), independent of Azure App Configuration —
+# no ConfigMap, no mount. Keys are flag ids; values are booleans. Each entry
+# renders as FEATURE_<UPPER_SNAKE>, e.g.
+# feature_manage-meeting-group-permissions ->
+# FEATURE_FEATURE_MANAGE_MEETING_GROUP_PERMISSIONS. Override per environment via
+# the ApplicationDeployment helm values.
+featureFlags:
+  feature_manage-meeting-group-permissions: true
+  feature_meeting-core-create-edit: true
+  # Known flags the frontend probes; off by default, enable per environment.
+  feature_ai-chat: true
+  feature_document-repository: true
+  feature_meeting-draft-save-and-resume: true
+  feature_meeting-rsvp: true
+  feature_search_premeeting_enabled: true
+  arabic-support: true
+
+# NetworkPolicies. Self-contained set for a STANDALONE Insight deployment
+# (own default-deny + intra-namespace + egress rules). DISABLED by default
+# because on the Cortex platform the tenant-operator already provides
+# default-deny + scoped allow policies for the tenant namespace; enabling this
+# there would duplicate them. Enable for standalone clusters, or when you need
+# the Azure-egress rule the operator does not provide.
+#
+# externalEgress controls the allow-egress-external policy:
+#   exceptCidrs: CIDRs carved OUT of the 0.0.0.0/0 egress. MUST be the cluster
+#     pod/service CIDRs only — do NOT include the platform VNet range
+#     (commonly 172.20.x.x) or you silently block Azure Private Link
+#     (Postgres/Redis/ServiceBus/Storage/Search/KV/Cognitive). The default
+#     intentionally omits 172.16.0.0/12 for this reason.
+#   extraPorts: additional TCP egress ports beyond 443/5432 (e.g. 6380 Redis
+#     SSL, 5671/5672 Service Bus AMQP).
+networkPolicy:
+  enabled: false
+  externalEgress:
+    exceptCidrs:
+      - 10.0.0.0/8
+      - 192.168.0.0/16
+    extraPorts:
+      - 6380
+      - 5671
+      - 5672
+
+# Cortex-context egress policy (allow-insight-cortex-egress). Enable when Insight
+# runs INSIDE a Cortex tenant namespace, where the operator already provides
+# default-deny + generic allows: this adds the app-specific egress the operator
+# does NOT provide for a tenant-extension app — to the platform AI Gateway and to
+# the per-tenant Azure private endpoints (set privateEndpointCidr to the tenant
+# PE subnet). Distinct from the standalone networkPolicy set above. Disabled by
+# default; turned on in values-local.yaml for the local Azure-backed shape.
+#
+# When enabled, the backend pod also gets the cortex.ai/egress-internet label so
+# the operator's allow-tool-internet-egress policy admits its public 443 egress to
+# Microsoft Entra ID (login.microsoftonline.com) — required for the workload-
+# identity token exchange that fronts its AAD-authenticated Azure calls (Blob
+# Storage, Service Bus). Without it those calls hang on an egress timeout (e.g.
+# blob uploads 504). IMDS stays blocked by that policy. The label is scoped to the
+# backend on purpose; other workload-identity pods are NOT opted into broad
+# internet egress unless shown to make outbound AAD-authenticated calls.
+cortexEgress:
+  enabled: false
+  privateEndpointCidr: ""
+
+# Per-app infrastructure contract.
+# Populated by the tenant operator from the app-infra-insight ConfigMap
+# (keys land verbatim under appInfra.*). Empty here so local development and
+# plain `helm template` fall back to the per-service values below.
+# See infra/tenant/app/insight.
+appInfra:
+  environment: ""
+  workloadIdentityClientId: ""
+  # UAI object/principal ID — Redis Entra AUTH username (not the client ID).
+  # Injected from app-infra-insight; used as AZURE_REDIS_USERNAME.
+  principalId: ""
+  keyvaultUrl: ""
+  keyvaultTenantId: ""
+  appConfigEndpoint: ""
+  redisHost: ""
+  # Platform ACS Email (infra/base) — send via workload identity.
+  acsEndpoint: ""
+  acsFromEmail: ""
+  # ─── Identity keys (from insight's OWN Terraform outputs) ─────────────────
+  # tenantName / applicationId stamp the V2 indexing events insight publishes to
+  # rag (INDEXER_V2_TENANT_ID/_APP_ID) and name the AI Search index. Injected by the
+  # operator from the app-infra-insight ConfigMap; empty falls back to the env literals.
+  tenantName: ""
+  applicationId: ""
+  # insight's OWN V2 response queue name (agentic-core's completion listener reads it
+  # as INDEXER_V2_RESPONSE_QUEUE). Injected from insight's own configmap; empty falls
+  # back to the agenticCore.env literal.
+  indexerResponseQueue: ""
+  # ─── Cross-app (peer) keys: rag-ingestion ────────────────────────────────
+  # Injected ONLY when insight is co-tenanted with rag-ingestion (root cross-app
+  # Terraform merges rag's endpoints into insight's configmap). Empty otherwise, so
+  # the chart falls back to the backend.env / agenticCore literals.
+  # rag's Service Bus FQDN + control queue (backend publishes V2 indexing events).
+  ragServiceBusFqdn: ""
+  ragControlQueue: ""
+  # rag's AI Search endpoint (agentic-core retrieves the vectors the indexer wrote).
+  ragAiSearchEndpoint: ""
+  externalSecrets:
+    enabled: false
+    serviceAccountName: backend-sa
+    secretStoreName: insight-app-infra
+
+# Local secret bootstrap (AD mode).
+# When enabled, an ExternalSecret materialises the backend/SpiceDB Secrets from
+# the cluster-wide cortex-registry ClusterSecretStore (Vault locally) — seed the
+# keys via the root `make bootstrap-secrets`. Mutually exclusive with the Azure
+# per-app Key Vault path: it renders only while appInfra.externalSecrets.enabled
+# is false, so Azure deployments use that path instead.
+localSecrets:
+  enabled: true
+  secretStoreName: cortex-registry
+
+# PostgreSQL
+postgres:
+  enabled: false
+  image:
+    repository: postgres
+    tag: 15-alpine
+  storage:
+    size: 5Gi
+  credentials:
+    database: backend
+    username: user
+    password: pass  # Change in production!
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+
+# Backend API
+backend:
+  enabled: true
+  # 2 replicas support rolling updates / zero-downtime deploys; true node-HA
+  # also needs pod anti-affinity (tracked separately).
+  replicaCount: 2
+  image:
+    repository: insight-backend
+    tag: latest
+  # Default organization bootstrap (runs as the backend `seed-org` init container).
+  # A fresh tenant DB has schema but no organization row, so meeting groups can
+  # neither be listed nor created. This seeds exactly one organization (and the
+  # system user its NOT NULL FKs require), idempotently, on every deploy.
+  # organizationId must match the id the BFF queries (its ORGANIZATION_ID); both
+  # default to the all-zeros system org.
+  seedOrganization:
+    enabled: true
+    organizationId: "00000000-0000-0000-0000-000000000000"
+    organizationName: "Default Organization"
+    organizationSlug: "default"
+    systemUserId: "00000000-0000-0000-0000-000000000001"
+    systemUserEmail: "system@insight.local"
+  service:
+    type: ClusterIP
+    port: 8002
+  env:
+    DATABASE_URL: "postgresql+asyncpg://user:pass@postgres:5432/backend"
+    ENVIRONMENT: dev
+    # In-namespace Microsoft 365 connector API. Environment values may
+    # override this when the connector uses a different service name or port.
+    M365_CONNECTOR_BASE_URL: "http://m365connector:8080"
+    DEBUG: "false"
+    LOG_LEVEL: INFO
+    # Database Connection Pool Configuration
+    DB_POOL_SIZE: "20"
+    DB_MAX_OVERFLOW: "30"
+    DB_POOL_TIMEOUT: "30"
+    DB_POOL_RECYCLE: "1800"
+    JWT_SECRET_KEY: dev-secret-key-change-in-production
+    JWT_ALGORITHM: HS256
+    JWT_EXPIRE_MINUTES: "30"
+    # Azure Storage Configuration for file attachments
+    AZURE_STORAGE_ACCOUNT_NAME: "stinsightdevuaen001"
+    AZURE_STORAGE_CONTAINER: "insight-user-documents-dev"
+    AZURE_AUDIO_BRIEF_CONTAINER: "insight-audio-brief-dev"
+    STORAGE_BACKEND: "azure_blob"
+    # Azure Service Bus Configuration for sending events to Agentic Core
+    AZURE_SERVICE_BUS_NAME: "sb-insight-dev-incp-uaen-001.servicebus.windows.net"
+    AZURE_SERVICE_BUS_QUEUE_NAME: "meeting-queue"
+    # Indexer V2 (feature-flagged, default disabled)
+    # INDEXER_V2_ENABLED: "false"
+    # INDEXER_V2_INPUT_QUEUE: ""
+    # INDEXER_V2_TENANT_ID: ""
+    # INDEXER_V2_APP_ID: ""
+    # Email configuration for notifications (using Gmail SMTP for local dev)
+    EMAIL_PROVIDER: smtp
+    SMTP_HOST: smtp.office365.com
+    SMTP_PORT: 587
+    SMTP_USE_TLS: true
+    SMTP_USE_SSL: false
+    SMTP_USERNAME: insight.saas@inceptionai.ai
+    SMTP_PASSWORD: dev-secret-key-change-in-production
+    # Cloud: appInfra.acsEndpoint flips EMAIL_PROVIDER to acs (workload identity).
+    ACS_FROM_EMAIL: ""
+    # Base URL for generating email activation links
+    LOG_IN_URL: "http://localhost:3000/auth/callback"
+    # Organization ID for tenant scoping (override per environment)
+    ORGANIZATION_ID: "00000000-0000-0000-0000-000000000000"
+
+  workloadIdentity:
+    enabled: true
+    serviceAccountName: "backend-sa"
+    clientId: "cac66f95-01ae-44ef-91f8-6f63908d5d8c"
+  resources:
+    requests:
+      memory: "1536Mi"
+      cpu: "250m"
+    limits:
+      memory: "4Gi"
+      cpu: "1000m"
+  healthCheck:
+    enabled: true
+    path: /health
+    initialDelaySeconds: 40
+    periodSeconds: 10
+  readinessProbe:
+    enabled: true
+    path: /ready
+    initialDelaySeconds: 30
+    periodSeconds: 10
+
+# BFF (Backend-for-Frontend)
+bff:
+  enabled: true
+  # 2 replicas support rolling updates / zero-downtime deploys; true node-HA
+  # also needs pod anti-affinity (tracked separately).
+  replicaCount: 2
+  image:
+    repository: insight-bff
+    tag: latest
+  service:
+    type: ClusterIP
+    port: 8001
+  env:
+    BACKEND_API_URL: "http://backend:8002"
+    # In-namespace Microsoft 365 connector API. Environment values may
+    # override this when the connector uses a different service name or port.
+    M365_CONNECTOR_BASE_URL: "http://m365connector:8080"
+    # Read timeout (s) for the bff->backend JSON proxy. Must stay >= the
+    # HTTPRoute /api/ timeouts (gateway.httpRoute.timeouts.api) so Envoy does
+    # not 504 while BFF is still waiting on backend (large uploads, SpiceDB).
+    BFF_BACKEND_PROXY_TIMEOUT_SECONDS: "120"
+    AGENTIC_CORE_URL: "http://agentic-core:8003"
+    SIMULATOR_URL: "http://digital-simulator:8010"
+    DECISION_REGISTER_URL: "http://decision-register:8011"
+    TRANSLATION_SERVICE_URL: "http://translation:8012"
+    # Authz service (in-cluster). Tokens come from the authz-admin-credentials
+    # Secret the tenant-operator provisions per tenant; only the URL lives here.
+    AUTHZ_SERVICE_URL: "http://authz-service.cortex-authz.svc.cluster.local:8080"
+    ENVIRONMENT: dev
+    DEBUG: "true"
+    LOG_LEVEL: INFO
+    ALLOWED_ORIGINS: "http://localhost:3006"
+    API_PREFIX: /api/v1
+    # Organization ID for tenant scoping (override per environment)
+    ORGANIZATION_ID: "00000000-0000-0000-0000-000000000000"
+    # Redis (used when appConfig.enabled=false; App Config path uses insight--bff--*).
+    REDIS_ENABLED: "true"
+    REDIS_PORT: "6380"
+    REDIS_USE_SSL: "true"
+    REDIS_USE_MANAGED_IDENTITY: "true"
+    # Prefer appInfra.principalId at render time; empty fallback here.
+    AZURE_REDIS_USERNAME: ""
+  workloadIdentity:
+    enabled: true
+    serviceAccountName: "bff-sa"
+    clientId: "cac66f95-01ae-44ef-91f8-6f63908d5d8c"
+  resources:
+    requests:
+      memory: "1536Mi"
+      cpu: "250m"
+    limits:
+      memory: "4Gi"
+      cpu: "1000m"
+  healthCheck:
+    enabled: true
+    path: /health
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    # startupProbe grace: the BFF's startup event blocks on the Redis
+    # managed-identity connect; give it up to ~5 min (30 x 10s) to finish or
+    # time out before liveness can kill the pod (avoids exit-137 crash loops).
+    startupPeriodSeconds: 10
+    startupFailureThreshold: 30
+
+# Frontend
+frontend:
+  enabled: true
+  # 2 replicas support rolling updates / zero-downtime deploys; true node-HA
+  # also needs pod anti-affinity (tracked separately).
+  replicaCount: 2
+  image:
+    repository: insight-frontend
+    tag: latest
+  service:
+    type: ClusterIP
+    # Cluster Service port (HTTPRoute stays on 80). NetworkPolicy must use
+    # the pod listen port (targetPort), not the Service port.
+    port: 80
+    # Container listen port. Must be >1024 for PSS restricted (non-root cannot
+    # bind :80). Requires the insight-saas frontend image to listen on 8080.
+    targetPort: 8080
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "100m"
+    limits:
+      memory: "256Mi"
+      cpu: "500m"
+  healthCheck:
+    enabled: true
+    path: /health
+    initialDelaySeconds: 5
+    periodSeconds: 10
+
+# Agentic Core Service
+agenticCore:
+  enabled: true  # Enable for Azure OpenAI integration
+  # 2 replicas support rolling updates / zero-downtime deploys; true node-HA
+  # also needs pod anti-affinity (tracked separately).
+  replicaCount: 2
+  # Opt into the tenant-operator's broad internet-egress policy
+  # (allow-tool-internet-egress -> 0.0.0.0/0:443, with IMDS carved out) by stamping
+  # the cortex.ai/egress-internet=true label on the pod. Needed where agentic-core
+  # reaches the public internet on :443 at runtime (e.g. tiktoken downloading its
+  # BPE vocab). Keep enabled by default so every InSight env matches the Amber
+  # runtime posture.
+  egressInternet: true
+  # Override the AI Search endpoint agentic-core RETRIEVES from. Empty = use the
+  # operator-injected appInfra.aiSearchEndpoint (insight's own per-tenant search).
+  # Set this to a FOREIGN search service when another app's indexer writes insight's
+  # vectors there — e.g. the rag-ingestion indexer's search (srch-<rag-hash>) — so
+  # agentic-core reads back exactly what that indexer wrote. insight's UAI needs a
+  # Search Index Data Reader role on the target service (granted out-of-band via az).
+  aiSearchEndpointOverride: ""
+  image:
+    repository: insight-agentic-core
+    tag: latest
+  service:
+    type: ClusterIP
+    port: 8003
+  env:
+    ENVIRONMENT: dev
+    DEBUG: "true"
+    LOG_LEVEL: INFO
+    DATABASE_URL: "postgresql+asyncpg://user:pass@postgres:5432/backend"
+    # Database Connection Pool Configuration
+    DB_POOL_SIZE: "20"
+    DB_MAX_OVERFLOW: "30"
+    DB_POOL_TIMEOUT: "30"
+    DB_POOL_RECYCLE: "1800"
+    # Azure OpenAI Configuration
+    # Route via the in-cluster AI Gateway (Compass), not a per-tenant Azure
+    # OpenAI resource — AKS egress blocks the public OAI host. The gateway
+    # accepts OpenAI-style requests (plus x-model-id); the app client
+    # (insight-saas) must use an OpenAI-compatible base URL, not
+    # AsyncAzureOpenAI Azure deployment paths, against this endpoint.
+    AZURE_OPENAI_ENDPOINT: "http://ai-gateway.agent-gateway.svc.cluster.local:8080/v1"
+    AZURE_OPENAI_DEPLOYMENT: "gpt-4.1"
+    AZURE_OPENAI_API_VERSION: "2024-02-01"
+    AZURE_OPENAI_API_VERSION_RESPONSES: "2025-04-01-preview"
+    # Use Compass /v1/responses through the platform AI Gateway by default.
+    AZURE_OPENAI_API_MODE: "responses"
+    # Agent routing feature flags
+    HANDOFF_ROUTER_ENABLED: "true"
+    RAG_AGENT_ENABLED: "true"
+    # Azure Speech Configuration
+    AZURE_SPEECH_REGION: "uaenorth"
+    AZURE_SPEECH_ENDPOINT: "https://spch-insight-dev-incp-uaen-001.cognitiveservices.azure.com/"
+    # Voice fillers
+    VOICE_FILLERS_ENABLED: "true"
+    FILLER_IMMEDIATE_DELAY_MS: "200"
+    FILLER_PROCESSING_DELAY_MS: "3000"
+    # Voice interruption detection
+    VOICE_INTERRUPTION_ENABLED: "true"
+    INTERRUPTION_STT_MIN_TOKEN_LENGTH: "2"
+    INTERRUPTION_STT_MIN_CONFIDENCE: "0.3"
+    INTERRUPTION_RMS_THRESHOLD: "0.02"
+    INTERRUPTION_RMS_MIN_DURATION_MS: "250"
+    INTERRUPTION_DEBOUNCE_MS: "300"
+    INTERRUPTION_COOLDOWN_MS: "500"
+    # Azure Search Configuration
+    AZURE_SEARCH_ENDPOINT: "https://srch-insight-dev-incp-uaen-001.search.windows.net"
+    AZURE_SEARCH_INDEX_NAME: "insight-indexer-dev-test"
+    # Azure Storage Configuration (document indexer + audio brief; auth via Managed Identity in dev)
+    AZURE_STORAGE_ACCOUNT_NAME: "stinsightdevuaen001"
+    AZURE_STORAGE_CONTAINER: "insight-user-documents-dev"
+    AZURE_STORAGE_PATH_PREFIX: "indexer-queue"
+    AZURE_AUDIO_BRIEF_CONTAINER: "insight-audio-brief-dev"
+    # Cross-service URLs
+    DIGITAL_SIMULATOR_URL: "http://digital-simulator:8010"
+    DECISION_REGISTER_URL: "http://decision-register:8011"
+    TRANSLATION_SERVICE_URL: "http://translation:8012"
+    DECISION_REGISTER_INTERNAL_API_KEY: ""
+    # LLM Gateway (routes feature-aliased LLM calls through LiteLLM)
+    LLM_GATEWAY_URL: "http://llm-gateway:8005"
+    LLM_GATEWAY_API_KEY: ""
+    LLM_GATEWAY_MODEL_ALIAS: "agentic-chat"
+    # Redis-backed pod-safe meeting stream coordination
+    REDIS_ENABLED: "true"
+    REDIS_HOST: ""
+    REDIS_PORT: "6380"
+    REDIS_USE_SSL: "true"
+    REDIS_USE_MANAGED_IDENTITY: "true"
+    # Entra Redis AUTH username = UAI object/principal ID. Prefer appInfra.principalId
+    # (operator-injected); leave empty here so tenants do not hardcode it.
+    AZURE_REDIS_USERNAME: ""
+    REDIS_PUBLISH_TIMEOUT_SECONDS: "0.5"
+    MEETING_STREAM_REACTIVE_POD_SAFE_ENABLED: "true"
+    MEETING_STREAM_PENDING_DECISIONS_POD_SAFE_ENABLED: "false"
+    # Service Bus configuration for document indexing listener
+    AZURE_SERVICE_BUS_NAMESPACE: "sb-insight-dev-incp-uaen-001.servicebus.windows.net"
+    INDEXER_RESPONSE_QUEUE: "insight-indexer-queue"
+    # Indexer V2 (feature-flagged, default disabled)
+    # INDEXER_V2_ENABLED: "false"
+    # INDEXER_V2_RESPONSE_QUEUE: ""
+    # INDEXER_V2_AI_SEARCH_INDEX: ""
+  workloadIdentity:
+    enabled: true
+    serviceAccountName: "agentic-core-sa"
+    clientId: "cac66f95-01ae-44ef-91f8-6f63908d5d8c"
+  # Memory sized for large PDF agenda-builder spikes (OOMKilled at 4Gi on amber).
+  resources:
+    requests:
+      memory: "2Gi"
+      cpu: "500m"
+    limits:
+      memory: "8Gi"
+      cpu: "2000m"
+  healthCheck:
+    enabled: true
+    path: /health
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    # Liveness/readiness probe tolerances. The k8s defaults (timeoutSeconds=1,
+    # failureThreshold=3) are too aggressive for the streaming chat path: while a
+    # request keeps the event loop busy, /health can miss a 1s window. Give the
+    # probes room so a busy-but-healthy pod is not evicted or restarted mid-stream.
+    timeoutSeconds: 5
+    failureThreshold: 6
+    # When startupProbe.enabled, liveness/readiness use this delay (default 0) instead of initialDelaySeconds
+    livenessReadinessInitialDelaySeconds: 0
+    startupProbe:
+      enabled: true
+      periodSeconds: 10
+      failureThreshold: 30
+      timeoutSeconds: 5
+
+# LLM Gateway (LiteLLM Proxy)
+llmGateway:
+  enabled: true
+  # Allow llm-gateway to source runtime secrets/config from ESO/AppConfig-backed
+  # resources even when global appConfig.enabled is false.
+  useEsoSecrets: false
+  # 2 replicas support rolling updates / zero-downtime deploys on the LLM path;
+  # true node-HA also needs pod anti-affinity (tracked separately).
+  replicaCount: 2
+  image:
+    repository: insight-llm-gateway
+    tag: latest
+  service:
+    type: ClusterIP
+    port: 8005
+    targetPort: 8005
+  env:
+    DATABASE_URL: "postgresql://user:pass@postgres:5432/backend"
+    AZURE_OPENAI_ENDPOINT: "https://oai-insight-dev-incp-uaen-001.openai.azure.com/"
+    LITELLM_MASTER_KEY: ""
+    AZURE_API_KEY: ""
+    AZURE_OPENAI_AD_TOKEN: ""
+    AZURE_CLIENT_ID: ""
+  workloadIdentity:
+    enabled: false
+    serviceAccountName: "llm-gateway-sa"
+  # Memory sized for LiteLLM idle footprint (~1Gi+) plus load; OOMKilled at 3Gi on amber.
+  resources:
+    requests:
+      memory: "2Gi"
+      cpu: "500m"
+    limits:
+      memory: "6Gi"
+      cpu: "2000m"
+  healthCheck:
+    enabled: true
+    path: /health/liveliness
+    initialDelaySeconds: 30
+    periodSeconds: 10
+  config: |
+    model_list:
+      - model_name: simulation
+        litellm_params:
+          model: azure/gpt-4.1
+          api_base: os.environ/AZURE_OPENAI_ENDPOINT
+          api_version: "2024-02-15-preview"
+          api_key: os.environ/AZURE_OPENAI_API_KEY
+          azure_ad_token: os.environ/AZURE_OPENAI_AD_TOKEN
+          client_id: os.environ/AZURE_CLIENT_ID
+      - model_name: chat-gpt4o
+        litellm_params:
+          model: azure/gpt-4.1
+          api_base: os.environ/AZURE_OPENAI_ENDPOINT
+          api_version: "2024-02-15-preview"
+          api_key: os.environ/AZURE_OPENAI_API_KEY
+          azure_ad_token: os.environ/AZURE_OPENAI_AD_TOKEN
+          client_id: os.environ/AZURE_CLIENT_ID
+      - model_name: default-gpt4o
+        litellm_params:
+          model: azure/gpt-4.1
+          api_base: os.environ/AZURE_OPENAI_ENDPOINT
+          api_version: "2024-02-15-preview"
+          api_key: os.environ/AZURE_OPENAI_API_KEY
+          azure_ad_token: os.environ/AZURE_OPENAI_AD_TOKEN
+          client_id: os.environ/AZURE_CLIENT_ID
+      - model_name: agentic-meeting-brief
+        litellm_params:
+          model: azure/gpt-4.1
+          base_model: gpt-4.1
+          api_base: os.environ/AZURE_OPENAI_ENDPOINT
+          api_version: "2024-02-15-preview"
+          api_key: os.environ/AZURE_OPENAI_API_KEY
+          azure_ad_token: os.environ/AZURE_OPENAI_AD_TOKEN
+          client_id: os.environ/AZURE_CLIENT_ID
+          input_cost_per_token: 0.000002
+          output_cost_per_token: 0.000008
+      - model_name: agentic-key-questions
+        litellm_params:
+          model: azure/gpt-4.1
+          base_model: gpt-4.1
+          api_base: os.environ/AZURE_OPENAI_ENDPOINT
+          api_version: "2024-02-15-preview"
+          api_key: os.environ/AZURE_OPENAI_API_KEY
+          azure_ad_token: os.environ/AZURE_OPENAI_AD_TOKEN
+          client_id: os.environ/AZURE_CLIENT_ID
+          input_cost_per_token: 0.000002
+          output_cost_per_token: 0.000008
+      - model_name: agentic-expert-lens
+        litellm_params:
+          model: azure/gpt-4.1
+          base_model: gpt-4.1
+          api_base: os.environ/AZURE_OPENAI_ENDPOINT
+          api_version: "2024-02-15-preview"
+          api_key: os.environ/AZURE_OPENAI_API_KEY
+          azure_ad_token: os.environ/AZURE_OPENAI_AD_TOKEN
+          client_id: os.environ/AZURE_CLIENT_ID
+          input_cost_per_token: 0.000002
+          output_cost_per_token: 0.000008
+      - model_name: agentic-chat
+        litellm_params:
+          model: azure/gpt-4.1
+          base_model: gpt-4.1
+          api_base: os.environ/AZURE_OPENAI_ENDPOINT
+          api_version: "2024-02-15-preview"
+          api_key: os.environ/AZURE_OPENAI_API_KEY
+          azure_ad_token: os.environ/AZURE_OPENAI_AD_TOKEN
+          client_id: os.environ/AZURE_CLIENT_ID
+          input_cost_per_token: 0.000002
+          output_cost_per_token: 0.000008
+      - model_name: agentic-insights
+        litellm_params:
+          model: azure/gpt-4.1
+          base_model: gpt-4.1
+          api_base: os.environ/AZURE_OPENAI_ENDPOINT
+          api_version: "2024-02-15-preview"
+          api_key: os.environ/AZURE_OPENAI_API_KEY
+          azure_ad_token: os.environ/AZURE_OPENAI_AD_TOKEN
+          client_id: os.environ/AZURE_CLIENT_ID
+          input_cost_per_token: 0.000002
+          output_cost_per_token: 0.000008
+      - model_name: agentic-agenda
+        litellm_params:
+          model: azure/gpt-4.1
+          base_model: gpt-4.1
+          api_base: os.environ/AZURE_OPENAI_ENDPOINT
+          api_version: "2024-02-15-preview"
+          api_key: os.environ/AZURE_OPENAI_API_KEY
+          azure_ad_token: os.environ/AZURE_OPENAI_AD_TOKEN
+          client_id: os.environ/AZURE_CLIENT_ID
+          input_cost_per_token: 0.000002
+          output_cost_per_token: 0.000008
+      - model_name: agentic-minutes
+        litellm_params:
+          model: azure/gpt-4.1
+          base_model: gpt-4.1
+          api_base: os.environ/AZURE_OPENAI_ENDPOINT
+          api_version: "2024-02-15-preview"
+          api_key: os.environ/AZURE_OPENAI_API_KEY
+          azure_ad_token: os.environ/AZURE_OPENAI_AD_TOKEN
+          client_id: os.environ/AZURE_CLIENT_ID
+          input_cost_per_token: 0.000002
+          output_cost_per_token: 0.000008
+      - model_name: translation
+        litellm_params:
+          model: azure/gpt-4.1
+          base_model: gpt-4.1
+          api_base: os.environ/AZURE_OPENAI_ENDPOINT
+          api_version: "2024-02-15-preview"
+          api_key: os.environ/AZURE_OPENAI_API_KEY
+          azure_ad_token: os.environ/AZURE_OPENAI_AD_TOKEN
+          client_id: os.environ/AZURE_CLIENT_ID
+          input_cost_per_token: 0.000002
+          output_cost_per_token: 0.000008
+      - model_name: translation-mini
+        litellm_params:
+          model: azure/gpt-4.1-mini
+          base_model: gpt-4.1-mini
+          api_base: os.environ/AZURE_OPENAI_ENDPOINT
+          api_version: "2024-02-15-preview"
+          api_key: os.environ/AZURE_OPENAI_API_KEY
+          azure_ad_token: os.environ/AZURE_OPENAI_AD_TOKEN
+          client_id: os.environ/AZURE_CLIENT_ID
+          input_cost_per_token: 0.0000004
+          output_cost_per_token: 0.0000016
+    litellm_settings:
+      success_callback: ["langfuse"]
+      failure_callback: ["langfuse"]
+      num_retries: 3
+      request_timeout: 120
+      cooldown_time: 30
+      allowed_fails: 5
+      drop_params: true
+      set_verbose: false
+      enable_azure_ad_token_refresh: true
+
+# Digital Simulator
+digitalSimulator:
+  enabled: true
+  # Keep at 1 until migrations are gated (Job or advisory lock). The Deployment
+  # initContainer runs unlocked `alembic upgrade head` per pod.
+  replicaCount: 1
+  image:
+    repository: insight-digital-simulator
+    tag: latest
+  service:
+    type: ClusterIP
+    port: 8010
+  env:
+    DATABASE_URL: "postgresql+asyncpg://user:pass@postgres:5432/backend"
+    BACKEND_API_URL: "http://backend:8002"
+    LLM_GATEWAY_URL: "http://llm-gateway:8005"
+    DECISION_REGISTER_URL: "http://decision-register:8011"
+    DECISION_REGISTER_INTERNAL_API_KEY: ""
+    TRANSLATION_SERVICE_URL: "http://translation:8012"
+    ENVIRONMENT: development
+    DEBUG: "true"
+    LOG_LEVEL: INFO
+    API_PREFIX: /api/v1
+    SIMULATION_LLM_CALL_TIMEOUT_SECONDS: "120"
+    SIMULATION_MAX_DURATION_SECONDS: "3600"
+    REWRITE_THRESHOLD_WORDS: "100"
+  workloadIdentity:
+    enabled: false
+    serviceAccountName: "digital-simulator-sa"
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "250m"
+    limits:
+      memory: "4Gi"
+      cpu: "1000m"
+  healthCheck:
+    enabled: true
+    path: /health
+    initialDelaySeconds: 30
+    periodSeconds: 10
+
+# Translation Service
+translation:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: insight-translation
+    tag: latest
+  service:
+    type: ClusterIP
+    port: 8012
+  env:
+    API_PREFIX: /api/v1
+    ENVIRONMENT: development
+    LOG_LEVEL: INFO
+    TRANSLATION_DEFAULT_TARGET_LANGUAGE: ar-AE
+    TRANSLATION_LLM_DEPLOYMENT: "translation"
+    LLM_GATEWAY_URL: "http://llm-gateway:8005"
+    LLM_GATEWAY_API_KEY: ""
+    AZURE_TRANSLATOR_ENDPOINT: ""
+    AZURE_TRANSLATOR_REGION: ""
+    AZURE_TRANSLATOR_KEY: ""
+    AZURE_OPENAI_ENDPOINT: ""
+    AZURE_OPENAI_API_KEY: ""
+  workloadIdentity:
+    enabled: false
+    serviceAccountName: "translation-sa"
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "250m"
+    limits:
+      memory: "4Gi"
+      cpu: "750m"
+  healthCheck:
+    enabled: true
+    path: /health
+    initialDelaySeconds: 20
+    periodSeconds: 10
+    timeoutSeconds: 30
+    livenessFailureThreshold: 5
+    readinessFailureThreshold: 5
+    startupProbe:
+      enabled: true
+
+# Decision Register
+decisionRegister:
+  enabled: true
+  # Keep at 1 until migrations are gated (Job or advisory lock). The Deployment
+  # initContainer runs unlocked `alembic upgrade head` per pod.
+  replicaCount: 1
+  image:
+    repository: insight-decision-register
+    tag: latest
+  service:
+    type: ClusterIP
+    port: 8011
+  env:
+    DATABASE_URL: "postgresql+asyncpg://user:pass@postgres:5432/backend"
+    BACKEND_API_URL: "http://backend:8002"
+    LLM_GATEWAY_URL: "http://llm-gateway:8005"
+    TRANSLATION_SERVICE_URL: "http://translation:8012"
+    DECISION_REGISTER_INTERNAL_API_KEY: ""
+    API_PREFIX: /api/v1
+    ENVIRONMENT: development
+    LOG_LEVEL: INFO
+  workloadIdentity:
+    enabled: false
+    serviceAccountName: "decision-register-sa"
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "250m"
+    limits:
+      memory: "4Gi"
+      cpu: "1000m"
+  healthCheck:
+    enabled: true
+    path: /health
+    initialDelaySeconds: 30
+    periodSeconds: 10
+
+# Cortex service (per-tenant Insight <-> Cortex integration service)
+cortex:
+  enabled: true
+  # 2 replicas support rolling updates / zero-downtime deploys for authz/role
+  # resolution; true node-HA also needs pod anti-affinity (tracked separately).
+  replicaCount: 2
+  image:
+    repository: insight-saas-cortex
+    tag: latest
+  service:
+    type: ClusterIP
+    port: 8004
+  env:
+    API_PREFIX: /api/v1
+    ENVIRONMENT: development
+    LOG_LEVEL: INFO
+    # Platform authz-service (SpiceDB-backed roles). URL is the cross-namespace
+    # FQDN (authz-service lives in cortex-authz, not this namespace). Both the
+    # admin and check tokens are sourced from the authz-admin-credentials Secret
+    # in the template (cortex.yaml), not from values.
+    AUTHZ_SERVICE_URL: "http://authz-service.cortex-authz.svc.cluster.local:8080"
+    AUTHZ_ROLE_CACHE_TTL_SECONDS: "30"
+  workloadIdentity:
+    enabled: false
+    serviceAccountName: "cortex-sa"
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "250m"
+    limits:
+      memory: "4Gi"
+      cpu: "1000m"
+  healthCheck:
+    enabled: true
+    path: /health
+    initialDelaySeconds: 30
+    periodSeconds: 10
+
+# Ingress (disabled for local development)
+ingress:
+  enabled: false  # Enable for external access
+  className: nginx  # Or 'azure-application-gateway' for Azure
+  host: localhost
+  path: /
+  pathType: Prefix
+  annotations: {}
+  tls:
+    enabled: false
+    secretName: ""
+
+gateway:
+  httpRoute:
+    enabled: false
+    host: ""
+    parentRefs:
+      - name: tenant-gateway
+        sectionName: https
+      - name: tenant-gateway
+        sectionName: http
+    frontend:
+      serviceName: frontend
+      servicePort: 80
+    bff:
+      serviceName: bff
+      servicePort: 8001
+    # Envoy route timeouts (Gateway API HTTPRouteTimeouts). Defaults avoid
+    # 504 UT on large /api/ uploads.
+    timeouts:
+      api:
+        request: "120s"
+        backendRequest: "120s"
+
+# Generic route toggle used by the tenant-operator for Helm apps.
+# The operator always injects route.hostname as <appId>.<subdomain>.cortex.ai.
+# Keep gateway.httpRoute.* for explicit chart-level overrides.
+route:
+  enabled: false
+  hostname: ""
+
+spicedb:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: authzed/spicedb
+    tag: v1.29.0
+  service:
+    name: spicedb
+    grpcPort: 50051
+    httpPort: 8443
+  presharedKey:
+    secretName: spicedb-config
+    key: preshared_key
+  datastore:
+    engine: postgres
+    secretName: spicedb-postgres-credentials
+    connectionUriKey: connection-uri
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 256Mi

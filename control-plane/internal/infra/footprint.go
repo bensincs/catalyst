@@ -202,6 +202,7 @@ func (p *Provisioner) ensureFootprint(ctx context.Context, t store.FootprintTarg
 			// knows where to write it, so a "ready" footprint with no vault
 			// recorded would fail the first enable rather than the deployment.
 			p.recordVault(ctx, t.Slug, outs)
+			p.recordNetwork(ctx, t.Slug, outs)
 			_ = p.store.SetFootprintState(ctx, t.Slug, "ready", "Reconciler + Foundry provisioned.")
 		case strings.EqualFold(state, "Failed") || strings.EqualFold(state, "Canceled"):
 			_ = p.store.SetFootprintState(ctx, t.Slug, "failed", "Footprint deployment "+state+".")
@@ -353,6 +354,14 @@ func (p *Provisioner) submitFootprint(ctx context.Context, sub, rg string, t sto
 		"tenantSlug":      map[string]any{"value": t.Slug},
 		"deployCluster":   map[string]any{"value": true},
 	}
+	// The cluster's virtual network is created and named by AKS, and the name
+	// cannot be computed — so it is looked up and passed in. Empty on the first
+	// stamp, because the cluster does not exist yet; the private networking that
+	// depends on it is then created on a later sweep, which is why the footprint
+	// is re-submitted rather than stamped once.
+	if vnet := p.clusterVnetName(ctx, sub, rg, footprintClusterName, region); vnet != "" {
+		params["clusterVnetName"] = map[string]any{"value": vnet}
+	}
 	// The cluster + Foundry follow the tenant's region.
 	if region != "" {
 		params["location"] = map[string]any{"value": region}
@@ -435,6 +444,43 @@ func configInt(m map[string]any, key string) int {
 		return v
 	}
 	return 0
+}
+
+// footprintClusterName mirrors the template's default cluster name.
+const footprintClusterName = "cortex-aks"
+
+// clusterVnetName finds the virtual network AKS created for a cluster, by
+// listing the node resource group. Returns "" when the cluster (or its node
+// group) does not exist yet, which is the normal state on a first stamp.
+func (p *Provisioner) clusterVnetName(ctx context.Context, sub, rg, cluster, region string) string {
+	nodeRG := nodeResourceGroupName(rg, cluster, region)
+	var body struct {
+		Value []struct {
+			Name string `json:"name"`
+		} `json:"value"`
+	}
+	url := fmt.Sprintf(
+		"https://management.azure.com/subscriptions/%s/resourceGroups/%s/providers/Microsoft.Network/virtualNetworks?api-version=2023-11-01",
+		sub, nodeRG)
+	if err := p.arm(ctx, http.MethodGet, url, nil, &body); err != nil {
+		return ""
+	}
+	for _, v := range body.Value {
+		if strings.HasPrefix(strings.ToLower(v.Name), "aks-vnet-") {
+			return v.Name
+		}
+	}
+	// A cluster with a custom vnet has exactly one network in its node group.
+	if len(body.Value) == 1 {
+		return body.Value[0].Name
+	}
+	return ""
+}
+
+// nodeResourceGroupName mirrors what the footprint template computes, so the
+// control plane can address the node group without reading the cluster first.
+func nodeResourceGroupName(rg, cluster, region string) string {
+	return fmt.Sprintf("MC_%s_%s_%s", rg, cluster, region)
 }
 
 // deploymentState reads a deployment's provisioning state (found=false when it

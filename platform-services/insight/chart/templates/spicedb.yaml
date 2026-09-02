@@ -1,0 +1,121 @@
+{{- if .Values.spicedb.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.spicedb.service.name | default "spicedb" }}
+  namespace: {{ .Values.global.namespace | default .Release.Namespace }}
+  labels:
+    app: spicedb
+spec:
+  type: ClusterIP
+  selector:
+    app: spicedb
+  ports:
+    - name: grpc
+      port: {{ .Values.spicedb.service.grpcPort | default 50051 }}
+      targetPort: grpc
+      protocol: TCP
+    - name: http
+      port: {{ .Values.spicedb.service.httpPort | default 8443 }}
+      targetPort: http
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spicedb
+  namespace: {{ .Values.global.namespace | default .Release.Namespace }}
+  labels:
+    app: spicedb
+spec:
+  replicas: {{ .Values.spicedb.replicaCount | default 1 }}
+  selector:
+    matchLabels:
+      app: spicedb
+  template:
+    metadata:
+      labels:
+        app: spicedb
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: spicedb-migrate
+          image: "{{ .Values.spicedb.image.repository }}:{{ .Values.spicedb.image.tag }}"
+          command:
+            - spicedb
+          args:
+            - migrate
+            - head
+            - --datastore-engine={{ .Values.spicedb.datastore.engine | default "postgres" }}
+            - --datastore-conn-uri=$(SPICEDB_DATASTORE_CONN_URI)
+          env:
+            - name: SPICEDB_DATASTORE_CONN_URI
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.spicedb.datastore.secretName | default "spicedb-postgres-credentials" }}
+                  key: {{ .Values.spicedb.datastore.connectionUriKey | default "connection-uri" }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            seccompProfile:
+              type: RuntimeDefault
+            capabilities:
+              drop:
+                - ALL
+      containers:
+        - name: spicedb
+          image: "{{ .Values.spicedb.image.repository }}:{{ .Values.spicedb.image.tag }}"
+          args:
+            - serve
+            - --grpc-addr=:50051
+            - --http-addr=:8443
+            - --datastore-engine={{ .Values.spicedb.datastore.engine | default "postgres" }}
+            - --grpc-preshared-key=$(SPICEDB_GRPC_PRESHARED_KEY)
+            - --datastore-conn-uri=$(SPICEDB_DATASTORE_CONN_URI)
+          env:
+            - name: SPICEDB_GRPC_PRESHARED_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.spicedb.presharedKey.secretName | default "spicedb-config" }}
+                  key: {{ .Values.spicedb.presharedKey.key | default "preshared_key" }}
+            - name: SPICEDB_DATASTORE_CONN_URI
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.spicedb.datastore.secretName | default "spicedb-postgres-credentials" }}
+                  key: {{ .Values.spicedb.datastore.connectionUriKey | default "connection-uri" }}
+          ports:
+            - name: grpc
+              containerPort: 50051
+              protocol: TCP
+            - name: http
+              containerPort: 8443
+              protocol: TCP
+          readinessProbe:
+            tcpSocket:
+              port: 50051
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 50051
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          resources:
+            {{- toYaml .Values.spicedb.resources | nindent 12 }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            seccompProfile:
+              type: RuntimeDefault
+            capabilities:
+              drop:
+                - ALL
+{{- end }}

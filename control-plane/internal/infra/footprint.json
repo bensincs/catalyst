@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.40.2.10011",
-      "templateHash": "14463940459380694225"
+      "templateHash": "3397901582050181868"
     }
   },
   "parameters": {
@@ -281,6 +281,20 @@
       "metadata": {
         "description": "Name of the tenant's Key Vault. Must be globally unique, 3-24 chars."
       }
+    },
+    "privateEndpointSubnetPrefix": {
+      "type": "string",
+      "defaultValue": "10.237.0.0/24",
+      "metadata": {
+        "description": "Address prefix for the private-endpoint subnet, inside the cluster vnet."
+      }
+    },
+    "clusterVnetName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Name of the AKS-managed virtual network. AKS derives this name itself and it cannot be computed, so the control plane looks it up and passes it in. Empty on the first stamp — the cluster does not exist yet — and the private networking is created on the next sweep."
+      }
     }
   },
   "variables": {
@@ -301,7 +315,18 @@
     "helmOciSecretName": "helm-oci-password",
     "helmOciSecrets": "[if(empty(parameters('helmOciPassword')), createArray(), createArray(createObject('name', variables('helmOciSecretName'), 'value', parameters('helmOciPassword'))))]",
     "helmOciEnv": "[if(empty(parameters('helmOciPassword')), createArray(), createArray(createObject('name', 'HELM_OCI_PASSWORD', 'secretRef', variables('helmOciSecretName'))))]",
-    "keyVaultSecretsUserRoleId": "4633458b-17de-408a-b874-0445c86b69e6"
+    "keyVaultSecretsUserRoleId": "4633458b-17de-408a-b874-0445c86b69e6",
+    "deployPrivateNetworking": "[and(parameters('deployCluster'), not(empty(parameters('clusterVnetName'))))]",
+    "privateDnsZoneNames": [
+      "privatelink.vaultcore.azure.net",
+      "[format('privatelink.blob.{0}', environment().suffixes.storage)]",
+      "privatelink.cognitiveservices.azure.com",
+      "privatelink.azconfig.io",
+      "privatelink.postgres.database.azure.com",
+      "privatelink.redis.cache.windows.net",
+      "privatelink.search.windows.net",
+      "privatelink.servicebus.windows.net"
+    ]
   },
   "resources": [
     {
@@ -626,6 +651,41 @@
       ]
     },
     {
+      "copy": {
+        "name": "privateDnsZones",
+        "count": "[length(variables('privateDnsZoneNames'))]"
+      },
+      "condition": "[variables('deployPrivateNetworking')]",
+      "type": "Microsoft.Network/privateDnsZones",
+      "apiVersion": "2020-06-01",
+      "name": "[variables('privateDnsZoneNames')[copyIndex()]]",
+      "location": "global",
+      "tags": {
+        "SecurityControl": "Ignore"
+      }
+    },
+    {
+      "copy": {
+        "name": "privateDnsLinks",
+        "count": "[length(variables('privateDnsZoneNames'))]"
+      },
+      "condition": "[variables('deployPrivateNetworking')]",
+      "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+      "apiVersion": "2020-06-01",
+      "name": "[format('{0}/link-to-cluster', variables('privateDnsZoneNames')[copyIndex()])]",
+      "location": "global",
+      "properties": {
+        "registrationEnabled": false,
+        "virtualNetwork": {
+          "id": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('nodeResourceGroupName')), 'Microsoft.Resources/deployments', 'cortex-private-network'), '2025-04-01').outputs.vnetId.value]"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/privateDnsZones', variables('privateDnsZoneNames')[copyIndex()])]",
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('nodeResourceGroupName')), 'Microsoft.Resources/deployments', 'cortex-private-network')]"
+      ]
+    },
+    {
       "condition": "[parameters('deployCluster')]",
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2025-04-01",
@@ -707,6 +767,84 @@
         "[resourceId('Microsoft.ContainerService/managedClusters', parameters('clusterName'))]",
         "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-recon', variables('prefix')))]"
       ]
+    },
+    {
+      "condition": "[variables('deployPrivateNetworking')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "cortex-private-network",
+      "resourceGroup": "[variables('nodeResourceGroupName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "vnetName": {
+            "value": "[parameters('clusterVnetName')]"
+          },
+          "addressPrefix": {
+            "value": "[parameters('privateEndpointSubnetPrefix')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.40.2.10011",
+              "templateHash": "15159789300449176630"
+            }
+          },
+          "parameters": {
+            "vnetName": {
+              "type": "string",
+              "metadata": {
+                "description": "Name of the AKS-managed virtual network in this resource group."
+              }
+            },
+            "subnetName": {
+              "type": "string",
+              "defaultValue": "snet-private-endpoints",
+              "metadata": {
+                "description": "Subnet name for private endpoints."
+              }
+            },
+            "addressPrefix": {
+              "type": "string",
+              "metadata": {
+                "description": "Address prefix for that subnet. Must be free within the cluster vnet."
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Network/virtualNetworks/subnets",
+              "apiVersion": "2023-11-01",
+              "name": "[format('{0}/{1}', parameters('vnetName'), parameters('subnetName'))]",
+              "properties": {
+                "addressPrefix": "[parameters('addressPrefix')]",
+                "privateEndpointNetworkPolicies": "Disabled",
+                "privateLinkServiceNetworkPolicies": "Enabled"
+              }
+            }
+          ],
+          "outputs": {
+            "subnetId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Network/virtualNetworks/subnets', parameters('vnetName'), parameters('subnetName'))]"
+            },
+            "vnetId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Network/virtualNetworks', parameters('vnetName'))]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ContainerService/managedClusters', parameters('clusterName'))]"
+      ]
     }
   ],
   "outputs": {
@@ -753,6 +891,18 @@
     "vaultId": {
       "type": "string",
       "value": "[resourceId('Microsoft.KeyVault/vaults', parameters('vaultName'))]"
+    },
+    "privateEndpointSubnetId": {
+      "type": "string",
+      "value": "[if(variables('deployPrivateNetworking'), reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('nodeResourceGroupName')), 'Microsoft.Resources/deployments', 'cortex-private-network'), '2025-04-01').outputs.subnetId.value, '')]"
+    },
+    "aksOidcIssuerUrl": {
+      "type": "string",
+      "value": "[if(parameters('deployCluster'), reference(resourceId('Microsoft.ContainerService/managedClusters', parameters('clusterName')), '2025-09-02-preview').oidcIssuerProfile.issuerURL, '')]"
+    },
+    "privateDnsZoneResourceGroup": {
+      "type": "string",
+      "value": "[resourceGroup().name]"
     }
   }
 }

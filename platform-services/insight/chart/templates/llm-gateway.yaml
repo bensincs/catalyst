@@ -1,0 +1,270 @@
+{{- if .Values.llmGateway.enabled }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: llm-gateway-config
+  namespace: {{ .Values.global.namespace | default .Release.Namespace }}
+  labels:
+    app: llm-gateway
+data:
+  config.yaml: |
+{{ .Values.llmGateway.config | indent 4 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: llm-gateway
+  namespace: {{ .Values.global.namespace | default .Release.Namespace }}
+  labels:
+    app: llm-gateway
+spec:
+  type: {{ .Values.llmGateway.service.type }}
+  ports:
+    - port: {{ .Values.llmGateway.service.port }}
+      targetPort: {{ .Values.llmGateway.service.targetPort }}
+      protocol: TCP
+  selector:
+    app: llm-gateway
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llm-gateway
+  namespace: {{ .Values.global.namespace | default .Release.Namespace }}
+  labels:
+    app: llm-gateway
+spec:
+  replicas: {{ .Values.llmGateway.replicaCount }}
+  selector:
+    matchLabels:
+      app: llm-gateway
+  template:
+    metadata:
+      {{- if .Values.global.otelPythonInstrumentation.enabled }}
+      annotations:
+        instrumentation.opentelemetry.io/inject-python: {{ .Values.global.otelPythonInstrumentation.value | quote }}
+      {{- end }}
+      labels:
+        app: llm-gateway
+        {{- if .Values.llmGateway.workloadIdentity.enabled }}
+        azure.workload.identity/use: "true"
+        {{- end }}
+    spec:
+      automountServiceAccountToken: false
+      {{- if .Values.llmGateway.workloadIdentity.enabled }}
+      serviceAccountName: {{ .Values.llmGateway.workloadIdentity.serviceAccountName | default "llm-gateway-sa" }}
+      {{- end }}
+      {{- include "insight.podSecurityContext" . | nindent 6 }}
+      containers:
+        - name: llm-gateway
+          {{- include "insight.containerSecurityContext" . | nindent 10 }}
+          image: "{{ .Values.imageRegistry }}{{ if .Values.imageRegistry }}/{{end}}{{ .Values.llmGateway.image.repository }}:{{ .Values.llmGateway.image.tag | default .Values.imageTag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - containerPort: {{ .Values.llmGateway.service.targetPort }}
+          args:
+            - --config
+            - /app/config.yaml
+            - --port
+            - {{ .Values.llmGateway.service.targetPort | quote }}
+          volumeMounts:
+            - name: llm-gateway-config
+              mountPath: /app/config.yaml
+              subPath: config.yaml
+            # Prisma resolves cache via passwd home (/home/appuser), not $HOME.
+            # PSS restricted leaves that path non-writable; emptyDir fixes it.
+            - name: home-appuser
+              mountPath: /home/appuser
+            # When a tenant DB has schema but no Prisma migration history, LiteLLM
+            # creates a baseline migration by writing into its own (root-owned,
+            # non-writable-for uid 1000) site-packages dir and crash-loops. Point
+            # LITELLM_MIGRATION_DIR (below) at this writable emptyDir so the baseline
+            # is written here instead. See llm-gateway crash on schema-not-empty DBs.
+            - name: litellm-migrations
+              mountPath: /app/litellm-migrations
+          {{- if or .Values.appConfig.enabled .Values.llmGateway.useEsoSecrets }}
+          envFrom:
+            - configMapRef:
+                name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                optional: true
+            {{- if .Values.appConfig.secrets.enabled }}
+            - secretRef:
+                name: {{ .Values.appConfig.secrets.secretName | default "insight-secrets" }}
+                optional: true
+            {{- end }}
+          env:
+            {{- include "insight.nonRootEnv" . | nindent 12 }}
+            # Writable target for LiteLLM's Prisma baseline migration (see the
+            # litellm-migrations emptyDir volumeMount above) — avoids the crash loop
+            # when a tenant DB has schema but no Prisma migration history.
+            - name: LITELLM_MIGRATION_DIR
+              value: /app/litellm-migrations
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.appConfig.secrets.secretName | default "insight-secrets" }}
+                  key: insight--llm--database-url
+                  optional: true
+            - name: AZURE_OPENAI_ENDPOINT
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--agentic-core--azure-openai-endpoint
+                  optional: true
+            - name: LITELLM_MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.appConfig.secrets.secretName | default "insight-secrets" }}
+                  key: insight--llm-gateway--master-key
+                  optional: true
+            - name: AZURE_OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.appConfig.secrets.secretName | default "insight-secrets" }}
+                  key: insight--llm-gateway--azure-api-key
+                  optional: true
+            - name: AZURE_OPENAI_AD_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.appConfig.secrets.secretName | default "insight-secrets" }}
+                  key: insight--llm-gateway--azure-openai-ad-token
+                  optional: true
+            - name: AZURE_CLIENT_ID
+              value: {{ .Values.llmGateway.env.AZURE_CLIENT_ID | default .Values.appInfra.workloadIdentityClientId | default .Values.llmGateway.workloadIdentity.clientId | default "" | quote }}
+            # Langfuse observability (LiteLLM callback)
+            - name: LANGFUSE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.appConfig.secrets.secretName | default "insight-secrets" }}
+                  key: insight--agentic-core--langfuse-secret-key
+                  optional: true
+            - name: LANGFUSE_PUBLIC_KEY
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--agentic-core--langfuse-public-key
+                  optional: true
+            - name: LANGFUSE_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--agentic-core--langfuse-host
+                  optional: true
+            {{- if .Values.global.otelPythonInstrumentation.enabled }}
+            - name: OTEL_PYTHON_EXCLUDED_URLS
+              value: {{ .Values.global.otelPythonInstrumentation.excludedUrls | default "health,ready" | quote }}
+            {{- end }}
+            {{- /* Also honour extraEnv on the ESO/App Config path (e.g.
+                   LITELLM_LOCAL_MODEL_COST_MAP=True) — without it LiteLLM tries
+                   to fetch its model cost-map from the public internet, which
+                   hangs behind restricted AKS egress and stalls completions. */}}
+            {{- range $k, $v := .Values.llmGateway.extraEnv }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          {{- else }}
+          env:
+            {{- include "insight.nonRootEnv" . | nindent 12 }}
+            # Writable target for LiteLLM's Prisma baseline migration (see the
+            # litellm-migrations emptyDir volumeMount above) — avoids the crash loop
+            # when a tenant DB has schema but no Prisma migration history.
+            - name: LITELLM_MIGRATION_DIR
+              value: /app/litellm-migrations
+            {{- if .Values.localSecrets.enabled }}
+            # ESO path: DB URL + master key come from the ESO-materialised
+            # insight-secrets (sourced from Vault secret/insight-llm-secrets), so
+            # the real Azure Postgres URL + master key never live in values.
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.appConfig.secrets.secretName | default "insight-secrets" }}
+                  key: insight--llm-gateway--database-url
+                  optional: true
+            - name: LITELLM_MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.appConfig.secrets.secretName | default "insight-secrets" }}
+                  key: insight--llm-gateway--master-key
+                  optional: true
+            {{- else }}
+            - name: DATABASE_URL
+              value: {{ .Values.llmGateway.env.DATABASE_URL | quote }}
+            - name: LITELLM_MASTER_KEY
+              value: {{ .Values.llmGateway.env.LITELLM_MASTER_KEY | quote }}
+            {{- end }}
+            - name: AZURE_OPENAI_ENDPOINT
+              value: {{ .Values.llmGateway.env.AZURE_OPENAI_ENDPOINT | quote }}
+            {{- if .Values.llmGateway.env.AZURE_API_KEY }}
+            - name: AZURE_OPENAI_API_KEY
+              value: {{ .Values.llmGateway.env.AZURE_API_KEY | quote }}
+            {{- end }}
+            {{- if .Values.llmGateway.env.AZURE_OPENAI_AD_TOKEN }}
+            - name: AZURE_OPENAI_AD_TOKEN
+              value: {{ .Values.llmGateway.env.AZURE_OPENAI_AD_TOKEN | quote }}
+            {{- end }}
+            - name: AZURE_CLIENT_ID
+              value: {{ .Values.llmGateway.env.AZURE_CLIENT_ID | default .Values.appInfra.workloadIdentityClientId | default .Values.llmGateway.workloadIdentity.clientId | default "" | quote }}
+            {{- if .Values.llmGateway.env.LANGFUSE_SECRET_KEY }}
+            - name: LANGFUSE_SECRET_KEY
+              value: {{ .Values.llmGateway.env.LANGFUSE_SECRET_KEY | quote }}
+            {{- end }}
+            {{- if .Values.llmGateway.env.LANGFUSE_PUBLIC_KEY }}
+            - name: LANGFUSE_PUBLIC_KEY
+              value: {{ .Values.llmGateway.env.LANGFUSE_PUBLIC_KEY | quote }}
+            {{- end }}
+            {{- if .Values.llmGateway.env.LANGFUSE_HOST }}
+            - name: LANGFUSE_HOST
+              value: {{ .Values.llmGateway.env.LANGFUSE_HOST | quote }}
+            {{- end }}
+            {{- if .Values.global.otelPythonInstrumentation.enabled }}
+            - name: OTEL_PYTHON_EXCLUDED_URLS
+              value: {{ .Values.global.otelPythonInstrumentation.excludedUrls | default "health,ready" | quote }}
+            {{- end }}
+            {{- range $k, $v := .Values.llmGateway.extraEnv }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          {{- end }}
+          {{- if .Values.llmGateway.healthCheck.enabled }}
+          {{- $hc := .Values.llmGateway.healthCheck }}
+          {{- $sp := $hc.startupProbe | default dict }}
+          {{- $spEnabled := default true $sp.enabled }}
+          {{- $lrInitialDelay := ternary (default 0 $hc.livenessReadinessInitialDelaySeconds) $hc.initialDelaySeconds $spEnabled }}
+          {{- if $spEnabled }}
+          # When the startup probe is enabled, liveness/readiness do not begin
+          # until startup succeeds, giving slow boots (e.g. LiteLLM's Prisma
+          # migration walk against a remote Azure Postgres) failureThreshold x
+          # periodSeconds to complete without the liveness probe killing the pod.
+          startupProbe:
+            httpGet:
+              path: {{ $hc.path }}
+              port: {{ .Values.llmGateway.service.targetPort }}
+            periodSeconds: {{ default 10 $sp.periodSeconds }}
+            failureThreshold: {{ default 60 $sp.failureThreshold }}
+            timeoutSeconds: {{ default 5 $sp.timeoutSeconds }}
+          {{- end }}
+          livenessProbe:
+            httpGet:
+              path: {{ $hc.path }}
+              port: {{ .Values.llmGateway.service.targetPort }}
+            initialDelaySeconds: {{ $lrInitialDelay }}
+            periodSeconds: {{ $hc.periodSeconds }}
+          readinessProbe:
+            httpGet:
+              path: {{ $hc.path }}
+              port: {{ .Values.llmGateway.service.targetPort }}
+            initialDelaySeconds: {{ $lrInitialDelay }}
+            periodSeconds: {{ $hc.periodSeconds }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.llmGateway.resources | nindent 12 }}
+      volumes:
+        - name: llm-gateway-config
+          configMap:
+            name: llm-gateway-config
+        - name: home-appuser
+          emptyDir: {}
+        - name: litellm-migrations
+          emptyDir: {}
+{{- end }}

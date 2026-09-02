@@ -1,0 +1,217 @@
+# InSight — service-owned per-environment Helm values (dev / Azure AKS).
+#
+# Ownership: the InSight application team. These are the values the app team
+# tunes per environment — image repositories/tags it builds and ships, plus
+# app-behaviour toggles (route exposure, ESO secret sourcing, per-service
+# workload identity) and BFF runtime posture (ENVIRONMENT/DEBUG/LOG_LEVEL). They
+# are NOT user-facing config and NOT platform-mandated; they sit between the
+# chart defaults (values.yaml) and the platform overlay
+# (gitops/dev/app-values/insight.yaml).
+#
+# appConfig.enabled is deliberately NOT set here: it is false for every
+# environment, so it stays on the chart default (values.yaml: appConfig.enabled:
+# false — a real boolean). Earlier it was carried in the catalog as the STRING
+# "false", which is truthy in Go templates and wrongly engaged the Azure App
+# Configuration branch; dropping it to the chart-default boolean fixes that so
+# the BFF uses its AD-mode resolver.
+#
+# Wiring: referenced by the dev Helm app catalog entry as
+#   "serviceValuesRef": "services/insight/chart/values-dev.yaml"
+# The tenant-operator layers it onto the Argo CD Application as a valueFiles
+# entry beneath the platform overlay and the per-deployment inline values
+# (appInfra.* / route.hostname / global.namespace). Precedence, low -> high:
+#   values.yaml  <  values-dev.yaml (this file)  <  app-values/insight.yaml  <  inline
+#
+# Provenance: migrated from the catalog's source:"platform" entries plus the
+# three runtime-posture source:"config" entries (see PR #1451 / #1521). Booleans
+# are intentionally quoted strings ("true"/"false") because the catalog entries
+# declared no type, so assembleHelmValues emitted them as strings; the chart
+# templates quote them again on render, so the string form is what reproduces
+# the prior behaviour. Do not "tidy" these into bare booleans.
+global:
+  # Observability: this environment exports cortex-otel traces + metrics via OTLP
+  # to the node-local otel-agent DaemonSet on hostPort 4318 (cortex-observability
+  # chart), which forwards to Azure Monitor (ADR-2026-05-19). endpoint/protocol
+  # are inherited from values.yaml.
+  observability:
+    enabled: "true"
+appInfra:
+  externalSecrets:
+    enabled: "true"
+route:
+  enabled: "true"
+llmGateway:
+  useEsoSecrets: "true"
+  image:
+    repository: insight-saas-llm-gateway
+    tag: "latest"
+  workloadIdentity:
+    enabled: "true"
+  # Use LiteLLM's bundled model cost-map instead of fetching it from the public
+  # internet — dev egress is locked to the AI Gateway + Azure private
+  # endpoints, so the remote fetch hangs and stalls every completion.
+  extraEnv:
+    LITELLM_LOCAL_MODEL_COST_MAP: "True"
+  # Route every LiteLLM alias at the PLATFORM AI Gateway (-> Compass) instead of a
+  # per-tenant Azure OpenAI (the per-app TF does not provision one). model
+  # openai/gpt-4.1 + x-model-id header (matches what Insight uses today); api_key
+  # is the gateway dummy bearer. The gateway's APIKey BackendSecurityPolicy
+  # overwrites that placeholder Authorization header with the real Compass key. The
+  # x-model-id must exist in the platform aiGateway.modelRoutes catalogue.
+  # DATABASE_URL + LITELLM_MASTER_KEY come from insight-secrets (ESO from Key
+  # Vault) via the chart, NOT from here.
+  config: |
+    model_list:
+      - model_name: simulation
+        litellm_params:
+          model: openai/gpt-4.1
+          api_base: http://ai-gateway.agent-gateway.svc.cluster.local:8080/v1
+          api_key: gateway
+          extra_headers: {"x-model-id": "gpt-4.1"}
+      - model_name: chat-gpt4o
+        litellm_params:
+          model: openai/gpt-4.1
+          api_base: http://ai-gateway.agent-gateway.svc.cluster.local:8080/v1
+          api_key: gateway
+          extra_headers: {"x-model-id": "gpt-4.1"}
+      - model_name: default-gpt4o
+        litellm_params:
+          model: openai/gpt-4.1
+          api_base: http://ai-gateway.agent-gateway.svc.cluster.local:8080/v1
+          api_key: gateway
+          extra_headers: {"x-model-id": "gpt-4.1"}
+      - model_name: agentic-meeting-brief
+        litellm_params:
+          model: openai/gpt-4.1
+          api_base: http://ai-gateway.agent-gateway.svc.cluster.local:8080/v1
+          api_key: gateway
+          extra_headers: {"x-model-id": "gpt-4.1"}
+      - model_name: agentic-key-questions
+        litellm_params:
+          model: openai/gpt-4.1
+          api_base: http://ai-gateway.agent-gateway.svc.cluster.local:8080/v1
+          api_key: gateway
+          extra_headers: {"x-model-id": "gpt-4.1"}
+      - model_name: agentic-expert-lens
+        litellm_params:
+          model: openai/gpt-4.1
+          api_base: http://ai-gateway.agent-gateway.svc.cluster.local:8080/v1
+          api_key: gateway
+          extra_headers: {"x-model-id": "gpt-4.1"}
+      - model_name: agentic-chat
+        litellm_params:
+          model: openai/gpt-4.1
+          api_base: http://ai-gateway.agent-gateway.svc.cluster.local:8080/v1
+          api_key: gateway
+          extra_headers: {"x-model-id": "gpt-4.1"}
+      - model_name: agentic-insights
+        litellm_params:
+          model: openai/gpt-4.1
+          api_base: http://ai-gateway.agent-gateway.svc.cluster.local:8080/v1
+          api_key: gateway
+          extra_headers: {"x-model-id": "gpt-4.1"}
+      - model_name: agentic-agenda
+        litellm_params:
+          model: openai/gpt-4.1
+          api_base: http://ai-gateway.agent-gateway.svc.cluster.local:8080/v1
+          api_key: gateway
+          extra_headers: {"x-model-id": "gpt-4.1"}
+      - model_name: agentic-minutes
+        litellm_params:
+          model: openai/gpt-4.1
+          api_base: http://ai-gateway.agent-gateway.svc.cluster.local:8080/v1
+          api_key: gateway
+          extra_headers: {"x-model-id": "gpt-4.1"}
+      - model_name: decision-register
+        litellm_params:
+          model: openai/gpt-4.1
+          api_base: http://ai-gateway.agent-gateway.svc.cluster.local:8080/v1
+          api_key: gateway
+          extra_headers: {"x-model-id": "gpt-4.1"}
+      - model_name: translation
+        litellm_params:
+          model: openai/gpt-4.1
+          api_base: http://ai-gateway.agent-gateway.svc.cluster.local:8080/v1
+          api_key: gateway
+          extra_headers: {"x-model-id": "gpt-4.1"}
+      - model_name: translation-mini
+        litellm_params:
+          model: openai/gpt-4.1-mini
+          api_base: http://ai-gateway.agent-gateway.svc.cluster.local:8080/v1
+          api_key: gateway
+          extra_headers: {"x-model-id": "gpt-4.1-mini"}
+      - model_name: gpt-4.1
+        litellm_params:
+          model: openai/gpt-4.1
+          api_base: http://ai-gateway.agent-gateway.svc.cluster.local:8080/v1
+          api_key: gateway
+          extra_headers: {"x-model-id": "gpt-4.1"}
+      - model_name: evals-judge
+        litellm_params:
+          model: openai/gpt-4.1
+          api_base: http://ai-gateway.agent-gateway.svc.cluster.local:8080/v1
+          api_key: gateway
+          extra_headers: {"x-model-id": "gpt-4.1"}
+    litellm_settings:
+      # Langfuse callbacks intentionally omitted: Langfuse is not wired on dev,
+      # so enabling them only adds a disabled-client warning per request.
+      drop_params: true
+      num_retries: 2
+      request_timeout: 120
+backend:
+  image:
+    repository: insight-saas-backend
+    tag: "latest"
+  env:
+    ENVIRONMENT: production
+bff:
+  image:
+    repository: insight-saas-bff
+    tag: "latest"
+  # Runtime posture for the BFF (AD mode resolver). ENVIRONMENT/DEBUG/LOG_LEVEL
+  # are the app team's per-env operational settings, not user config. Migrated
+  # from the catalog's source:"config" entries; DEBUG stays a quoted string to
+  # match the BFF's {{ ... | quote }} rendering.
+  env:
+    ENVIRONMENT: production
+    DEBUG: "false"
+    LOG_LEVEL: INFO
+agenticCore:
+  image:
+    repository: insight-saas-agentic-core
+    tag: "latest"
+  env:
+    VOICE_FILLERS_ENABLED: "false"
+digitalSimulator:
+  image:
+    repository: insight-saas-digital-simulator
+    tag: "latest"
+  workloadIdentity:
+    enabled: "true"
+translation:
+  image:
+    repository: insight-saas-translation
+    tag: "latest"
+  workloadIdentity:
+    enabled: "true"
+decisionRegister:
+  image:
+    repository: insight-saas-decision-register
+    tag: "latest"
+  workloadIdentity:
+    enabled: "true"
+frontend:
+  image:
+    repository: insight-saas-frontend
+    tag: "latest"
+cortex:
+  image:
+    repository: insight-saas-cortex
+    tag: "latest"
+  workloadIdentity:
+    enabled: "true"
+spicedb:
+  image:
+    repository: acrcortex2dev001.azurecr.io/cortex-inception/cortex/docker.io/authzed/spicedb
+curl:
+  image: acrcortex2dev001.azurecr.io/cortex-inception/cortex/docker.io/curlimages/curl:8.21.0

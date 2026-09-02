@@ -1,0 +1,227 @@
+{{- if .Values.decisionRegister.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: decision-register
+  namespace: {{ .Values.global.namespace | default .Release.Namespace }}
+  labels:
+    app: decision-register
+spec:
+  type: {{ .Values.decisionRegister.service.type }}
+  ports:
+    - port: {{ .Values.decisionRegister.service.port }}
+      targetPort: {{ .Values.decisionRegister.service.port }}
+      protocol: TCP
+  selector:
+    app: decision-register
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: decision-register
+  namespace: {{ .Values.global.namespace | default .Release.Namespace }}
+  labels:
+    app: decision-register
+spec:
+  replicas: {{ .Values.decisionRegister.replicaCount }}
+  selector:
+    matchLabels:
+      app: decision-register
+  template:
+    metadata:
+      {{- if .Values.global.otelPythonInstrumentation.enabled }}
+      annotations:
+        instrumentation.opentelemetry.io/inject-python: {{ .Values.global.otelPythonInstrumentation.value | quote }}
+      {{- end }}
+      labels:
+        app: decision-register
+        {{- if .Values.decisionRegister.workloadIdentity.enabled }}
+        azure.workload.identity/use: "true"
+        {{- end }}
+    spec:
+      automountServiceAccountToken: false
+      {{- if .Values.decisionRegister.workloadIdentity.enabled }}
+      serviceAccountName: {{ .Values.decisionRegister.workloadIdentity.serviceAccountName | default "decision-register-sa" }}
+      {{- end }}
+      {{- include "insight.podSecurityContext" . | nindent 6 }}
+      initContainers:
+        - name: run-migrations
+          {{- include "insight.containerSecurityContext" . | nindent 10 }}
+          image: "{{ .Values.imageRegistry }}{{ if .Values.imageRegistry }}/{{end}}{{ .Values.decisionRegister.image.repository }}:{{ .Values.decisionRegister.image.tag | default .Values.imageTag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              echo "========================================="
+              echo "decision-register init: running migrations"
+              echo "========================================="
+              if [ -z "$DATABASE_URL" ]; then
+                echo "FATAL: DATABASE_URL is not set — cannot run migrations"
+                exit 1
+              fi
+              echo "DATABASE_URL is set (length=${#DATABASE_URL})"
+              DATABASE_URL="$(printf '%s' "$DATABASE_URL" | sed 's/%/%%/g')"
+              alembic upgrade head
+              echo "========================================="
+              echo "decision-register init: migrations complete"
+              echo "========================================="
+          {{- if .Values.appConfig.enabled }}
+          env:
+            {{- include "insight.nonRootEnv" . | nindent 12 }}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.appConfig.secrets.secretName | default "insight-secrets" }}
+                  key: insight--backend--database-url
+                  optional: true
+            - name: ENVIRONMENT
+              value: {{ .Values.decisionRegister.env.ENVIRONMENT | quote }}
+            - name: LOG_LEVEL
+              value: {{ .Values.decisionRegister.env.LOG_LEVEL | quote }}
+          {{- else }}
+          env:
+            {{- include "insight.nonRootEnv" . | nindent 12 }}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.appConfig.secrets.secretName | default "insight-secrets" }}
+                  key: insight--backend--database-url
+            - name: ENVIRONMENT
+              value: {{ .Values.decisionRegister.env.ENVIRONMENT | quote }}
+            - name: LOG_LEVEL
+              value: {{ .Values.decisionRegister.env.LOG_LEVEL | quote }}
+          {{- end }}
+      containers:
+        - name: decision-register
+          {{- include "insight.containerSecurityContext" . | nindent 10 }}
+          image: "{{ .Values.imageRegistry }}{{ if .Values.imageRegistry }}/{{end}}{{ .Values.decisionRegister.image.repository }}:{{ .Values.decisionRegister.image.tag | default .Values.imageTag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - containerPort: {{ .Values.decisionRegister.service.port }}
+          {{- if .Values.appConfig.enabled }}
+          envFrom:
+            - configMapRef:
+                name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                optional: true
+            {{- if .Values.appConfig.secrets.enabled }}
+            - secretRef:
+                name: {{ .Values.appConfig.secrets.secretName | default "insight-secrets" }}
+                optional: true
+            {{- end }}
+          env:
+            {{- include "insight.nonRootEnv" . | nindent 12 }}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.appConfig.secrets.secretName | default "insight-secrets" }}
+                  key: insight--backend--database-url
+                  optional: true
+            - name: BACKEND_API_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--decision-register--backend-api-url
+                  optional: true
+            - name: LLM_GATEWAY_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--decision-register--llm-gateway-url
+                  optional: true
+            - name: TRANSLATION_SERVICE_URL
+              value: {{ .Values.decisionRegister.env.TRANSLATION_SERVICE_URL | quote }}
+            - name: DECISION_REGISTER_INTERNAL_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.appConfig.secrets.secretName | default "insight-secrets" }}
+                  key: insight--decision-register--internal-api-key
+                  optional: true
+            - name: LLM_GATEWAY_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.appConfig.secrets.secretName | default "insight-secrets" }}
+                  key: insight--llm-gateway--master-key
+                  optional: true
+            - name: API_PREFIX
+              value: {{ .Values.decisionRegister.env.API_PREFIX | quote }}
+            - name: ENVIRONMENT
+              value: {{ .Values.decisionRegister.env.ENVIRONMENT | quote }}
+            - name: LOG_LEVEL
+              value: {{ .Values.decisionRegister.env.LOG_LEVEL | quote }}
+            # Langfuse observability
+            - name: LANGFUSE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.appConfig.secrets.secretName | default "insight-secrets" }}
+                  key: insight--agentic-core--langfuse-secret-key
+                  optional: true
+            - name: LANGFUSE_PUBLIC_KEY
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--agentic-core--langfuse-public-key
+                  optional: true
+            - name: LANGFUSE_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--agentic-core--langfuse-host
+                  optional: true
+            {{- include "insight.otelEnv" $ | nindent 12 }}
+          {{- else }}
+          env:
+            {{- include "insight.nonRootEnv" . | nindent 12 }}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.appConfig.secrets.secretName | default "insight-secrets" }}
+                  key: insight--backend--database-url
+            - name: BACKEND_API_URL
+              value: {{ .Values.decisionRegister.env.BACKEND_API_URL | quote }}
+            - name: LLM_GATEWAY_URL
+              value: {{ .Values.decisionRegister.env.LLM_GATEWAY_URL | quote }}
+            - name: TRANSLATION_SERVICE_URL
+              value: {{ .Values.decisionRegister.env.TRANSLATION_SERVICE_URL | quote }}
+            - name: DECISION_REGISTER_INTERNAL_API_KEY
+              value: {{ .Values.decisionRegister.env.DECISION_REGISTER_INTERNAL_API_KEY | quote }}
+            {{- include "insight.llmGatewayApiKeyEnv" (dict "ctx" $ "fallback" .Values.decisionRegister.env.LLM_GATEWAY_API_KEY) | nindent 12 }}
+            - name: API_PREFIX
+              value: {{ .Values.decisionRegister.env.API_PREFIX | quote }}
+            - name: ENVIRONMENT
+              value: {{ .Values.decisionRegister.env.ENVIRONMENT | quote }}
+            - name: LOG_LEVEL
+              value: {{ .Values.decisionRegister.env.LOG_LEVEL | quote }}
+            {{- if .Values.decisionRegister.env.LANGFUSE_SECRET_KEY }}
+            - name: LANGFUSE_SECRET_KEY
+              value: {{ .Values.decisionRegister.env.LANGFUSE_SECRET_KEY | quote }}
+            {{- end }}
+            {{- if .Values.decisionRegister.env.LANGFUSE_PUBLIC_KEY }}
+            - name: LANGFUSE_PUBLIC_KEY
+              value: {{ .Values.decisionRegister.env.LANGFUSE_PUBLIC_KEY | quote }}
+            {{- end }}
+            {{- if .Values.decisionRegister.env.LANGFUSE_HOST }}
+            - name: LANGFUSE_HOST
+              value: {{ .Values.decisionRegister.env.LANGFUSE_HOST | quote }}
+            {{- end }}
+            {{- include "insight.otelEnv" $ | nindent 12 }}
+          {{- end }}
+          {{- if .Values.decisionRegister.healthCheck.enabled }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.decisionRegister.healthCheck.path }}
+              port: {{ .Values.decisionRegister.service.port }}
+            initialDelaySeconds: {{ .Values.decisionRegister.healthCheck.initialDelaySeconds }}
+            periodSeconds: {{ .Values.decisionRegister.healthCheck.periodSeconds }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.decisionRegister.healthCheck.path }}
+              port: {{ .Values.decisionRegister.service.port }}
+            initialDelaySeconds: {{ .Values.decisionRegister.healthCheck.initialDelaySeconds }}
+            periodSeconds: {{ .Values.decisionRegister.healthCheck.periodSeconds }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.decisionRegister.resources | nindent 12 }}
+{{- end }}

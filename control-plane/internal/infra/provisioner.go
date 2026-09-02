@@ -198,7 +198,15 @@ func (p *Provisioner) ensure(ctx context.Context, tgt store.InfraTarget) {
 	// Substitute per-tenant tokens (e.g. {{tenantHash}} for a globally-unique Key
 	// Vault name) into the template before deploying, so a single platform-authored
 	// infra yields tenant-unique resource names instead of colliding across tenants.
-	armStr := substituteTokens(tgt.ArmTemplate, tgt.TenantSlug, p.region, tgt.VaultName, resourceGroupOf(tgt.VaultID))
+	armStr := substituteTokens(tgt.ArmTemplate, tenantTokens{
+		Slug:          tgt.TenantSlug,
+		Region:        p.region,
+		VaultName:     tgt.VaultName,
+		VaultRG:       resourceGroupOf(tgt.VaultID),
+		PESubnetID:    tgt.PESubnetID,
+		AKSOIDCIssuer: tgt.AKSOIDCIssuer,
+		DNSZoneRG:     tgt.DNSZoneRG,
+	})
 	hash := templateHash(armStr)
 
 	if outs, pstate, found := p.deploymentState(ctx, p.deploymentURL(tgt.SubscriptionID, rg, name)); found {
@@ -671,13 +679,34 @@ func parseResourceID(id string) (sub, ns, rtype string, ok bool) {
 //	{{tenant}}     — the tenant slug (e.g. t-cff8707ddd78)
 //	{{tenantHash}} — a short, stable hash of the slug (safe for length/charset-limited names)
 //	{{region}}     — the deployment region
-func substituteTokens(arm, slug, region, vaultName, vaultRG string) string {
+//
+// tenantTokens are the per-tenant facts a module can ask for by name. All of
+// them are addresses or identifiers — never a credential. A module that needs a
+// secret resolves it from the vault itself (see vault.getSecret), which is why
+// none of these carry one.
+type tenantTokens struct {
+	Slug          string
+	Region        string
+	VaultName     string
+	VaultRG       string
+	PESubnetID    string
+	AKSOIDCIssuer string
+	DNSZoneRG     string
+}
+
+func substituteTokens(arm string, t tenantTokens) string {
 	return strings.NewReplacer(
-		"{{tenant}}", slug,
-		"{{tenantHash}}", tenantHash(slug),
-		"{{region}}", region,
-		"{{vaultName}}", vaultName,
-		"{{vaultResourceGroup}}", vaultRG,
+		"{{tenant}}", t.Slug,
+		"{{tenantHash}}", tenantHash(t.Slug),
+		"{{region}}", t.Region,
+		"{{vaultName}}", t.VaultName,
+		"{{vaultResourceGroup}}", t.VaultRG,
+		// Private networking the footprint created. A service that needs Private
+		// Link asks for these rather than discovering them, because a module
+		// cannot enumerate the subscription it is being deployed into.
+		"{{peSubnetId}}", t.PESubnetID,
+		"{{aksOidcIssuerUrl}}", t.AKSOIDCIssuer,
+		"{{dnsZoneResourceGroup}}", t.DNSZoneRG,
 	).Replace(arm)
 }
 

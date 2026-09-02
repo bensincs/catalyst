@@ -1676,6 +1676,12 @@ type InfraTarget struct {
 	// actually exists before the deployment is submitted.
 	VaultName string
 	VaultID   string
+	// Networking the footprint created for services that use Private Link: the
+	// subnet private endpoints go in, the cluster's OIDC issuer (for federated
+	// workload identity), and the resource group holding the private DNS zones.
+	PESubnetID    string
+	AKSOIDCIssuer string
+	DNSZoneRG     string
 	// DeployedHash is the template last submitted. A failed deployment is
 	// terminal in ARM, so it is retried only when the template has changed.
 	DeployedHash string
@@ -1686,7 +1692,8 @@ type InfraTarget struct {
 func (s *Store) InfraTargets(ctx context.Context) ([]InfraTarget, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT t.id, coalesce(t.tenant_id,''), coalesce(t.subscription_id,''), i.id, i.arm_template, coalesce(ti.infra_state,''),
-		        coalesce(t.hosting_mode,'delegated'), coalesce(t.resource_group,''), coalesce(t.vault_name,''), coalesce(t.vault_id,''), coalesce(ti.deployed_hash,'')
+		        coalesce(t.hosting_mode,'delegated'), coalesce(t.resource_group,''), coalesce(t.vault_name,''), coalesce(t.vault_id,''), coalesce(ti.deployed_hash,''),
+		        coalesce(t.pe_subnet_id,''), coalesce(t.aks_oidc_issuer,''), coalesce(t.dns_zone_rg,'')
 		 FROM tenant_infrastructure ti
 		 JOIN infrastructure i ON i.id = ti.infra_id
 		 JOIN tenants t ON t.id = ti.tenant_slug
@@ -1699,7 +1706,8 @@ func (s *Store) InfraTargets(ctx context.Context) ([]InfraTarget, error) {
 	for rows.Next() {
 		var it InfraTarget
 		if err := rows.Scan(&it.TenantSlug, &it.TenantID, &it.SubscriptionID, &it.InfraID, &it.ArmTemplate, &it.State,
-			&it.HostingMode, &it.ResourceGroup, &it.VaultName, &it.VaultID, &it.DeployedHash); err != nil {
+			&it.HostingMode, &it.ResourceGroup, &it.VaultName, &it.VaultID, &it.DeployedHash,
+			&it.PESubnetID, &it.AKSOIDCIssuer, &it.DNSZoneRG); err != nil {
 			return nil, err
 		}
 		out = append(out, it)

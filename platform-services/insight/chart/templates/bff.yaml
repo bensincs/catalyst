@@ -1,0 +1,295 @@
+{{- if .Values.bff.enabled }}
+{{- $appConfigFeatureFlagsEnabled := or .Values.appConfig.enabled .Values.appConfig.featureFlags.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bff
+  namespace: {{ .Values.global.namespace | default .Release.Namespace }}
+  labels:
+    app: bff
+spec:
+  type: {{ .Values.bff.service.type }}
+  ports:
+    - port: {{ .Values.bff.service.port }}
+      targetPort: {{ .Values.bff.service.port }}
+      protocol: TCP
+  selector:
+    app: bff
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bff
+  namespace: {{ .Values.global.namespace | default .Release.Namespace }}
+  labels:
+    app: bff
+spec:
+  replicas: {{ .Values.bff.replicaCount }}
+  selector:
+    matchLabels:
+      app: bff
+  template:
+    metadata:
+      {{- if .Values.global.otelPythonInstrumentation.enabled }}
+      annotations:
+        instrumentation.opentelemetry.io/inject-python: {{ .Values.global.otelPythonInstrumentation.value | quote }}
+      {{- end }}
+      labels:
+        app: bff
+        # The bff does NOT call the platform authz-service directly. It forwards
+        # the gateway identity to the cortex microservice (CORTEX_SERVICE_URL);
+        # cortex is the sole authz-service client, so the authz-client egress
+        # label belongs on cortex, not here.
+        {{- if .Values.bff.workloadIdentity.enabled }}
+        azure.workload.identity/use: "true"
+        {{- end }}
+        {{- if and $appConfigFeatureFlagsEnabled .Values.bff.workloadIdentity.enabled }}
+        # Reach Microsoft Entra ID on 443 for AppConfig SDK workload-identity token exchange.
+        cortex.ai/egress-internet: "true"
+        {{- end }}
+    spec:
+      automountServiceAccountToken: false
+      {{- if .Values.bff.workloadIdentity.enabled }}
+      serviceAccountName: {{ .Values.bff.workloadIdentity.serviceAccountName | default "bff-sa" }}
+      {{- end }}
+      {{- include "insight.podSecurityContext" . | nindent 6 }}
+      containers:
+        - name: bff
+          {{- include "insight.containerSecurityContext" . | nindent 10 }}
+          image: "{{ .Values.imageRegistry }}{{ if .Values.imageRegistry }}/{{end}}{{ .Values.bff.image.repository }}:{{ .Values.bff.image.tag | default .Values.imageTag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - containerPort: {{ .Values.bff.service.port }}
+          {{- if .Values.appConfig.enabled }}
+          # Azure App Configuration mode: Load config from synced ConfigMap/Secret
+          envFrom:
+            - configMapRef:
+                name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                optional: true
+            {{- if .Values.appConfig.secrets.enabled }}
+            - secretRef:
+                name: {{ .Values.appConfig.secrets.secretName | default "insight-secrets" }}
+                optional: true
+            {{- end }}
+          env:
+            {{- include "insight.nonRootEnv" . | nindent 12 }}
+            # Map AppConfig keys to expected env var names
+            - name: BACKEND_API_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--bff--backend-api-url
+                  optional: true
+            - name: AGENTIC_CORE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--bff--agentic-core-url
+                  optional: true
+            - name: SIMULATOR_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--bff--simulator-url
+                  optional: true
+            - name: DECISION_REGISTER_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--bff--decision-register-url
+                  optional: true
+            - name: TRANSLATION_SERVICE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--bff--translation-service-url
+                  optional: true
+            {{- if .Values.bff.env.M365_CONNECTOR_BASE_URL }}
+            - name: M365_CONNECTOR_BASE_URL
+              value: {{ .Values.bff.env.M365_CONNECTOR_BASE_URL | quote }}
+            {{- end }}
+            # Redis configuration
+            - name: REDIS_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--bff--redis-enabled
+                  optional: true
+            - name: REDIS_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--bff--redis-host
+                  optional: true
+            - name: REDIS_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--bff--redis-port
+                  optional: true
+            - name: REDIS_USE_SSL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--bff--redis-use-ssl
+                  optional: true
+            - name: REDIS_USE_MANAGED_IDENTITY
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--bff--redis-use-managed-identity
+                  optional: true
+            {{- if or .Values.appInfra.principalId .Values.bff.env.AZURE_REDIS_USERNAME }}
+            - name: AZURE_REDIS_USERNAME
+              value: {{ .Values.appInfra.principalId | default .Values.bff.env.AZURE_REDIS_USERNAME | quote }}
+            {{- else }}
+            - name: AZURE_REDIS_USERNAME
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--bff--azure-redis-username
+                  optional: true
+            {{- end }}
+            # Internal BFF access token for secure communication with backend services (injected via Helm values or AppConfig)
+            - name: INTERNAL_BFF_ACCESS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.appConfig.secrets.secretName | default "insight-secrets" }}
+                  key: insight--bff--internal-bff-access-token
+                  optional: true
+            # Transcription perf internal service config (from backend App Config namespace)
+            - name: BACKEND_INTERNAL_SERVICE_API_KEY
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--backend--BACKEND_INTERNAL_SERVICE_API_KEY
+                  optional: true
+            - name: ENABLE_TRANSCRIPTION_PERF_EVENTS
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--backend--ENABLE_TRANSCRIPTION_PERF_EVENTS
+                  optional: true
+            # Azure App Configuration endpoint for feature flags
+            {{- if $appConfigFeatureFlagsEnabled }}
+            - name: APP_CONFIG_CONNECTION_STRING
+              value: {{ .Values.appInfra.appConfigEndpoint | default .Values.appConfig.endpoint | quote }}
+            # Keep runtime posture separate from the AppConfig feature-flag label.
+            - name: APP_CONFIG_LABEL
+              value: {{ .Values.appInfra.environment | default .Values.appConfig.environment | quote }}
+            - name: ENVIRONMENT
+              value: {{ .Values.bff.env.ENVIRONMENT | quote }}
+            - name: CORTEX_GATEWAY_LOGOUT_URL
+              value: {{ .Values.bff.env.CORTEX_GATEWAY_LOGOUT_URL | default (printf "https://%s/logout" .Values.route.hostname) | quote }}
+            {{- end }}
+            {{- include "insight.otelEnv" $ | nindent 12 }}
+            # Feature flags (Priority-3 FEATURE_* env; App-Config-independent)
+            {{- range $name, $value := .Values.featureFlags }}
+            - name: FEATURE_{{ $name | upper | replace "-" "_" | replace "." "_" }}
+              value: {{ $value | quote }}
+            {{- end }}
+          {{- else }}
+          # AD mode: config from the ApplicationDeployment spec.helm values
+          env:
+            {{- include "insight.nonRootEnv" . | nindent 12 }}
+            - name: BACKEND_API_URL
+              value: {{ .Values.bff.env.BACKEND_API_URL | quote }}
+            # The bff forwards the gateway-injected identity to the cortex
+            # microservice (/auth/me, /users, /authz), which is the component that
+            # actually calls the platform authz-service. cortex runs in this same
+            # namespace, so this is the in-cluster Service DNS.
+            - name: CORTEX_SERVICE_URL
+              value: {{ .Values.bff.env.CORTEX_SERVICE_URL | default (printf "http://cortex.%s.svc.cluster.local:%v" (.Values.global.namespace | default .Release.Namespace) .Values.cortex.service.port) | quote }}
+            {{- if .Values.bff.env.BFF_BACKEND_PROXY_TIMEOUT_SECONDS }}
+            - name: BFF_BACKEND_PROXY_TIMEOUT_SECONDS
+              value: {{ .Values.bff.env.BFF_BACKEND_PROXY_TIMEOUT_SECONDS | quote }}
+            {{- end }}
+            - name: AGENTIC_CORE_URL
+              value: {{ .Values.bff.env.AGENTIC_CORE_URL | quote }}
+            - name: SIMULATOR_URL
+              value: {{ .Values.bff.env.SIMULATOR_URL | quote }}
+            - name: DECISION_REGISTER_URL
+              value: {{ .Values.bff.env.DECISION_REGISTER_URL | quote }}
+            - name: TRANSLATION_SERVICE_URL
+              value: {{ .Values.bff.env.TRANSLATION_SERVICE_URL | default "http://translation:8012" | quote }}
+            {{- if .Values.bff.env.M365_CONNECTOR_BASE_URL }}
+            - name: M365_CONNECTOR_BASE_URL
+              value: {{ .Values.bff.env.M365_CONNECTOR_BASE_URL | quote }}
+            {{- end }}
+            - name: ENVIRONMENT
+              value: {{ .Values.bff.env.ENVIRONMENT | quote }}
+            - name: DEBUG
+              value: {{ .Values.bff.env.DEBUG | quote }}
+            - name: LOG_LEVEL
+              value: {{ .Values.bff.env.LOG_LEVEL | quote }}
+            - name: ALLOWED_ORIGINS
+              value: {{ .Values.bff.env.ALLOWED_ORIGINS | quote }}
+            - name: API_PREFIX
+              value: {{ .Values.bff.env.API_PREFIX | quote }}
+            - name: CORTEX_GATEWAY_LOGOUT_URL
+              value: {{ .Values.bff.env.CORTEX_GATEWAY_LOGOUT_URL | default (printf "https://%s/logout" .Values.route.hostname) | quote }}
+            # Redis (appConfig.enabled=false path). Host from appInfra; username is
+            # the UAI principal/object ID for Entra AUTH (not the client ID).
+            - name: REDIS_ENABLED
+              value: {{ .Values.bff.env.REDIS_ENABLED | default "true" | quote }}
+            {{- if or .Values.appInfra.redisHost .Values.bff.env.REDIS_HOST }}
+            - name: REDIS_HOST
+              value: {{ .Values.appInfra.redisHost | default .Values.bff.env.REDIS_HOST | quote }}
+            {{- end }}
+            - name: REDIS_PORT
+              value: {{ .Values.bff.env.REDIS_PORT | default "6380" | quote }}
+            - name: REDIS_USE_SSL
+              value: {{ .Values.bff.env.REDIS_USE_SSL | default "true" | quote }}
+            - name: REDIS_USE_MANAGED_IDENTITY
+              value: {{ .Values.bff.env.REDIS_USE_MANAGED_IDENTITY | default "true" | quote }}
+            {{- if or .Values.appInfra.principalId .Values.bff.env.AZURE_REDIS_USERNAME }}
+            - name: AZURE_REDIS_USERNAME
+              value: {{ .Values.appInfra.principalId | default .Values.bff.env.AZURE_REDIS_USERNAME | quote }}
+            {{- end }}
+            {{- if $appConfigFeatureFlagsEnabled }}
+            # Azure App Configuration endpoint for runtime feature flags only.
+            - name: APP_CONFIG_CONNECTION_STRING
+              value: {{ .Values.appInfra.appConfigEndpoint | default .Values.appConfig.endpoint | quote }}
+            # Keep runtime posture separate from the AppConfig feature-flag label.
+            - name: APP_CONFIG_LABEL
+              value: {{ .Values.appInfra.environment | default .Values.appConfig.environment | quote }}
+            {{- end }}
+            {{- include "insight.otelEnv" $ | nindent 12 }}
+            # Feature flags (Priority-3 FEATURE_* env; App-Config-independent)
+            {{- range $name, $value := .Values.featureFlags }}
+            - name: FEATURE_{{ $name | upper | replace "-" "_" | replace "." "_" }}
+              value: {{ $value | quote }}
+            {{- end }}
+          {{- end }}
+          {{- if .Values.bff.healthCheck.enabled }}
+          # The BFF blocks in its FastAPI startup event on redis_client.connect()
+          # (Entra managed-identity token + ping). If that connect is slow — e.g.
+          # AAD egress or the Redis access policy is not yet in place — the app can
+          # take well over the liveness window to finish starting, and without a
+          # startupProbe the kubelet SIGKILLs it (exit 137) into CrashLoopBackOff.
+          # The startupProbe holds liveness/readiness off until /health responds
+          # (the connect eventually succeeds or times out and is handled), giving a
+          # generous grace window instead of a 40s hard kill.
+          startupProbe:
+            httpGet:
+              path: {{ .Values.bff.healthCheck.path }}
+              port: {{ .Values.bff.service.port }}
+            periodSeconds: {{ .Values.bff.healthCheck.startupPeriodSeconds | default 10 }}
+            failureThreshold: {{ .Values.bff.healthCheck.startupFailureThreshold | default 30 }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.bff.healthCheck.path }}
+              port: {{ .Values.bff.service.port }}
+            initialDelaySeconds: {{ .Values.bff.healthCheck.initialDelaySeconds }}
+            periodSeconds: {{ .Values.bff.healthCheck.periodSeconds }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.bff.healthCheck.path }}
+              port: {{ .Values.bff.service.port }}
+            initialDelaySeconds: {{ .Values.bff.healthCheck.initialDelaySeconds }}
+            periodSeconds: {{ .Values.bff.healthCheck.periodSeconds }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.bff.resources | nindent 12 }}
+{{- end }}

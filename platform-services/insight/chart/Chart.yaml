@@ -1,0 +1,13 @@
+apiVersion: v2
+name: insight-admin-portal
+description: InSight - Multi-tenant SaaS administration interface
+type: application
+version: 0.1.0
+appVersion: "0.0.1"
+maintainers:
+  - name: InSight Team
+keywords:
+  - insight
+  - admin
+  - saas
+  - multi-tenant

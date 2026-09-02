@@ -1,0 +1,239 @@
+# InSight — service-owned per-environment Helm values (uat / Azure AKS).
+#
+# Ownership: the InSight application team. Image repositories/tags it builds and
+# ships, per-service workload identity, ESO secret sync, and BFF runtime posture
+# (ENVIRONMENT/DEBUG/LOG_LEVEL). Not user-facing config, not platform-mandated;
+# sits between the chart defaults (values.yaml) and the platform overlay
+# (gitops/uat/app-values/insight.yaml).
+#
+# appConfig.enabled is deliberately NOT set: it is false for every environment,
+# so it stays on the chart default (values.yaml: appConfig.enabled: false). uat
+# previously ran with appConfig.enabled=true (Azure App Configuration mode);
+# moving to the chart-default AD-mode resolver matches dev.
+#
+# Wiring: referenced by the uat Helm app catalog entry as
+#   "serviceValuesRef": "services/insight/chart/values-uat.yaml"
+# Precedence, low -> high:
+#   values.yaml  <  values-uat.yaml (this file)  <  app-values/insight.yaml  <  inline
+#
+# Provenance: migrated from the uat catalog's source:"platform" entries plus the
+# three runtime-posture values. Booleans are quoted strings to match the chart's
+# {{ ... | quote }} rendering; do not convert to bare booleans.
+global:
+  # Observability: this environment exports cortex-otel traces + metrics via OTLP
+  # to the node-local otel-agent DaemonSet on hostPort 4318 (cortex-observability
+  # chart), which forwards to Azure Monitor (ADR-2026-05-19). endpoint/protocol
+  # are inherited from values.yaml.
+  observability:
+    enabled: "true"
+appInfra:
+  externalSecrets:
+    enabled: "true"
+route:
+  enabled: "true"
+backend:
+  image:
+    repository: insight-saas-backend
+    tag: "1.0.0"
+  env:
+    ENVIRONMENT: staging
+    # Indexer V2: publish document-indexing events to the rag-ingestion Service Bus
+    # control_queue. Target queue/namespace + tenant/app identifiers come from the
+    # operator-injected appInfra.* peer keys (root cross-app Terraform, #2114); this
+    # only keeps the feature toggle on. The meeting-queue path is unaffected.
+    INDEXER_V2_ENABLED: "true"
+bff:
+  image:
+    repository: insight-saas-bff
+    tag: "1.0.0"
+  env:
+    # dev (not production) so _can_configure_feature_flag() opens the in-app
+    # Feature Flags admin UI on qa, matching amber. qa's "production" already
+    # falls back to the "dev" App Config label, so flag *values* are unchanged
+    # — this only flips the admin gate. Backend keeps ENVIRONMENT=production.
+    ENVIRONMENT: staging
+    DEBUG: "false"
+    LOG_LEVEL: INFO
+
+# Per-env feature-flag overrides. uat has appConfig.enabled=false, so the BFF
+# resolves flags from FEATURE_* env (Priority-3) rendered from this map; it
+# deep-merges with the base featureFlags in values.yaml. The BFF gates
+# /api/v1/brief-templates/* on feature_brief-templates (default off), so enable
+# it here to unblock Brief Template selection on Generate Insights.
+featureFlags:
+  feature_brief-templates: true
+agenticCore:
+  # Interim unblock: agentic-core's tiktoken token-counter fetches its BPE vocab
+  # from openaipublic.blob.core.windows.net on :443. AKS egress is default-deny,
+  # so on the 2nd chat message that call hangs the (single) event loop and the
+  # request 504s. Opt into the operator's internet-egress policy until the vocab
+  # is baked into the image (the durable fix lives in the insight-saas repo).
+  egressInternet: true
+  image:
+    repository: insight-saas-agentic-core
+    tag: "1.0.0"
+  env:
+    VOICE_FILLERS_ENABLED: "false"
+    # Route via platform AI Gateway -> Compass (not direct Azure OpenAI).
+    # chat_completions remains the conservative default. QA can switch this to
+    # "responses" after Compass /v1/responses is validated through the platform
+    # gateway in that environment.
+    AZURE_OPENAI_API_MODE: "chat_completions"
+    AZURE_OPENAI_ENDPOINT: "http://ai-gateway.agent-gateway.svc.cluster.local:8080/v1"
+    AZURE_OPENAI_DEPLOYMENT: "gpt-4.1"
+    AZURE_OPENAI_API_VERSION_RESPONSES: "2025-04-01-preview"
+    # Indexer V2 completion listener: agentic-core reads the rag indexer's completion
+    # events off insight's own Service Bus (appInfra.serviceBusFqdn); the retrieval
+    # index + response queue come from appInfra.* (root cross-app Terraform, #2114).
+    INDEXER_V2_ENABLED: "true"
+llmGateway:
+  useEsoSecrets: "true"
+  image:
+    repository: insight-saas-llm-gateway
+    tag: "1.0.0"
+  workloadIdentity:
+    enabled: "true"
+  # Use LiteLLM's bundled model cost-map instead of fetching it from the public
+  # internet — uat egress is locked to the AI Gateway + Azure private
+  # endpoints, so the remote fetch hangs and stalls every completion.
+  extraEnv:
+    LITELLM_LOCAL_MODEL_COST_MAP: "True"
+  # Route every LiteLLM alias at the PLATFORM AI Gateway (-> Compass) instead of a
+  # per-tenant Azure OpenAI (the per-app TF does not provision one). model
+  # openai/gpt-4.1 + x-model-id header (matches what Insight uses today); api_key
+  # is the gateway dummy bearer. The gateway's APIKey BackendSecurityPolicy
+  # overwrites that placeholder Authorization header with the real Compass key. The
+  # x-model-id must exist in the platform aiGateway.modelRoutes catalogue.
+  # DATABASE_URL + LITELLM_MASTER_KEY come from insight-secrets (ESO from Key
+  # Vault) via the chart, NOT from here.
+  config: |
+    model_list:
+      - model_name: simulation
+        litellm_params:
+          model: openai/gpt-4.1
+          api_base: http://ai-gateway.agent-gateway.svc.cluster.local:8080/v1
+          api_key: gateway
+          extra_headers: {"x-model-id": "gpt-4.1"}
+      - model_name: chat-gpt4o
+        litellm_params:
+          model: openai/gpt-4.1
+          api_base: http://ai-gateway.agent-gateway.svc.cluster.local:8080/v1
+          api_key: gateway
+          extra_headers: {"x-model-id": "gpt-4.1"}
+      - model_name: default-gpt4o
+        litellm_params:
+          model: openai/gpt-4.1
+          api_base: http://ai-gateway.agent-gateway.svc.cluster.local:8080/v1
+          api_key: gateway
+          extra_headers: {"x-model-id": "gpt-4.1"}
+      - model_name: agentic-meeting-brief
+        litellm_params:
+          model: openai/gpt-4.1
+          api_base: http://ai-gateway.agent-gateway.svc.cluster.local:8080/v1
+          api_key: gateway
+          extra_headers: {"x-model-id": "gpt-4.1"}
+      - model_name: agentic-key-questions
+        litellm_params:
+          model: openai/gpt-4.1
+          api_base: http://ai-gateway.agent-gateway.svc.cluster.local:8080/v1
+          api_key: gateway
+          extra_headers: {"x-model-id": "gpt-4.1"}
+      - model_name: agentic-expert-lens
+        litellm_params:
+          model: openai/gpt-4.1
+          api_base: http://ai-gateway.agent-gateway.svc.cluster.local:8080/v1
+          api_key: gateway
+          extra_headers: {"x-model-id": "gpt-4.1"}
+      - model_name: agentic-chat
+        litellm_params:
+          model: openai/gpt-4.1
+          api_base: http://ai-gateway.agent-gateway.svc.cluster.local:8080/v1
+          api_key: gateway
+          extra_headers: {"x-model-id": "gpt-4.1"}
+      - model_name: agentic-insights
+        litellm_params:
+          model: openai/gpt-4.1
+          api_base: http://ai-gateway.agent-gateway.svc.cluster.local:8080/v1
+          api_key: gateway
+          extra_headers: {"x-model-id": "gpt-4.1"}
+      - model_name: agentic-agenda
+        litellm_params:
+          model: openai/gpt-4.1
+          api_base: http://ai-gateway.agent-gateway.svc.cluster.local:8080/v1
+          api_key: gateway
+          extra_headers: {"x-model-id": "gpt-4.1"}
+      - model_name: agentic-minutes
+        litellm_params:
+          model: openai/gpt-4.1
+          api_base: http://ai-gateway.agent-gateway.svc.cluster.local:8080/v1
+          api_key: gateway
+          extra_headers: {"x-model-id": "gpt-4.1"}
+      - model_name: decision-register
+        litellm_params:
+          model: openai/gpt-4.1
+          api_base: http://ai-gateway.agent-gateway.svc.cluster.local:8080/v1
+          api_key: gateway
+          extra_headers: {"x-model-id": "gpt-4.1"}
+      - model_name: translation
+        litellm_params:
+          model: openai/gpt-4.1
+          api_base: http://ai-gateway.agent-gateway.svc.cluster.local:8080/v1
+          api_key: gateway
+          extra_headers: {"x-model-id": "gpt-4.1"}
+      - model_name: translation-mini
+        litellm_params:
+          model: openai/gpt-4.1-mini
+          api_base: http://ai-gateway.agent-gateway.svc.cluster.local:8080/v1
+          api_key: gateway
+          extra_headers: {"x-model-id": "gpt-4.1-mini"}
+      - model_name: gpt-4.1
+        litellm_params:
+          model: openai/gpt-4.1
+          api_base: http://ai-gateway.agent-gateway.svc.cluster.local:8080/v1
+          api_key: gateway
+          extra_headers: {"x-model-id": "gpt-4.1"}
+      - model_name: evals-judge
+        litellm_params:
+          model: openai/gpt-4.1
+          api_base: http://ai-gateway.agent-gateway.svc.cluster.local:8080/v1
+          api_key: gateway
+          extra_headers: {"x-model-id": "gpt-4.1"}
+    litellm_settings:
+      # Langfuse callbacks intentionally omitted: Langfuse is not wired on uat,
+      # so enabling them only adds a disabled-client warning per request.
+      drop_params: true
+      num_retries: 2
+      request_timeout: 120
+digitalSimulator:
+  image:
+    repository: insight-saas-digital-simulator
+    tag: "1.0.0"
+  workloadIdentity:
+    enabled: "true"
+translation:
+  image:
+    repository: insight-saas-translation
+    tag: "1.0.0"
+  workloadIdentity:
+    enabled: "true"
+decisionRegister:
+  image:
+    repository: insight-saas-decision-register
+    tag: "1.0.0"
+  workloadIdentity:
+    enabled: "true"
+frontend:
+  image:
+    repository: insight-saas-frontend
+    tag: "1.0.0"
+cortex:
+  image:
+    repository: insight-saas-cortex
+    tag: "1.0.0"
+  workloadIdentity:
+    enabled: "true"
+spicedb:
+  image:
+    repository: acrcortex2uat001.azurecr.io/cortex-inception/cortex/docker.io/authzed/spicedb
+curl:
+  image: acrcortex2uat001.azurecr.io/cortex-inception/cortex/docker.io/curlimages/curl:8.21.0

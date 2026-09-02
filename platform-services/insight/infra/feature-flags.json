@@ -1,0 +1,752 @@
+[
+  {
+    "id": "agenda-ai-block-edit_enabled",
+    "description": "Enables block-level editing of AI-generated agenda sections (Agenda Summary, Expert Lenses, Key Challenges). Organiser-only; meeting must be in Draft state. No cascading regeneration.",
+    "enabled": true
+  },
+  {
+    "id": "arabic-support",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "draft_ai_generation_enabled",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "draft_ai_generation_item_status",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "draft_ai_generation_regeneration",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "enable-audio-brief-personalization",
+    "description": "Enables the Audio Brief personalization surface (Preferences > Audio brief tab): tone, duration band, custom instruction, voice samples, preview, and the apply-scope confirmation modal.",
+    "enabled": true
+  },
+  {
+    "id": "enable-meeting-pack-annotations-v1",
+    "description": "Pack-level My Notes panel and per-document annotation counts on meeting pack.",
+    "enabled": true
+  },
+  {
+    "id": "feature_activity-stream",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_add-user-personalization",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_agenda-ai-item-regenerate-dependents-enabled",
+    "description": "When an agenda block is accepted, automatically queues regeneration of dependent agenda blocks within the same item. Requires feature_agenda-ai-item-regenerate-enabled to also be on.",
+    "enabled": true
+  },
+  {
+    "id": "feature_agenda-ai-item-regenerate-enabled",
+    "description": "Enables block-level regeneration of AI-generated agenda blocks (Summary, Expert Lenses, Key Challenges) within an agenda item. Organiser-only; meeting must be in Draft state.",
+    "enabled": true
+  },
+  {
+    "id": "feature_agenda-item-supporting-documents",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_agenda-recommendations",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_agenda-templates",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_agent-connector",
+    "description": "Kill-switch for the Connectors page (Profile > Connectors) and its profile-page entry point. Per-connector flags (feature_m365-connector, feature_sap-agent, feature_sp-global) continue to gate individual connectors when this is on.",
+    "enabled": true
+  },
+  {
+    "id": "feature_ai-agenda-builder",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_ai-agenda-builder-item-editing",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_ai-assistant-slide-navigation",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_ai-chat",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_ai-chat-and-insight-panel",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_ai-chat-brief-me",
+    "description": "Enables the 'Explain this slide' (Brief Me) quick action in the meeting chat panel.",
+    "enabled": true
+  },
+  {
+    "id": "feature_ai-chat-quick-actions",
+    "description": "Enables the quick actions panel in the meeting chat sidebar.",
+    "enabled": true
+  },
+  {
+    "id": "feature_ai-editor-minutes",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_ai-highlight-notes",
+    "description": "Enables per-user meeting highlight notes (AI brief/insights) with optimistic updates.",
+    "enabled": true
+  },
+  {
+    "id": "feature_ai-item-visibility-control",
+    "description": "",
+    "enabled": false
+  },
+  {
+    "id": "feature_approval-workflow",
+    "description": "",
+    "enabled": false
+  },
+  {
+    "id": "feature_attendee-management",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_audio-brief-access-and-playback",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_audio-brief-generation",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_brief-citations-and-deep-links",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_brief-interaction",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_brief-personalization",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_brief-templates",
+    "description": "Enable Brief Template selection on Generate Insights for the Executive Brief.",
+    "enabled": true
+  },
+  {
+    "id": "feature_change-language",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_custom-meeting-minutes-templates-enabled",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_decision-readiness-questions-v2",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_decision-register-tab",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_decision-support-insights",
+    "description": "Live decision-simulation details panel: BFF proxy and frontend hook.",
+    "enabled": true
+  },
+  {
+    "id": "feature_delete-files",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_document-repository",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_document-upload-and-attachment",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_document-viewer-core",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_document-viewer-full-screen",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_document-viewer-navigation",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_edit-meeting-minutes",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_enable-arabic-welcome-screen",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_enable-first-run-personalization",
+    "description": "Enables First Run Experience onboarding APIs (brief depth and advisor bundles) via BFF proxy to backend.",
+    "enabled": true
+  },
+  {
+    "id": "feature_enable-personalized-brief-v1",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_enable-stale-annotation",
+    "description": "When enabled, the backend marks active annotations on the replaced document version as stale after a successful document replacement. BFF registration is for App Config merge parity only; stale logic runs on the backend and the replace proxy is unchanged.",
+    "enabled": true
+  },
+  {
+    "id": "feature_enable-template-library",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_expert-persona-lens",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_expert-personas-in-chat",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_first-login-welcome-screen-enabled",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_fullscreen-agenda-navigation-primary-docs-enabled",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_inalpha-agent",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_invite-meeting-participant",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_key-questions",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_language-russian",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_language-tajik",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_live-translation-to-arabic",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_live-translation-to-english",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_manage-branding",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_manage-meeting-group-permissions",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_manage-organization-context",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_retrieve-organization-context-from-url",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_manage-user-personalization",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_manual-agenda-builder",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_manual-agenda-builder-editing",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_meeting-brief-core",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_meeting-core-create-edit",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_meeting-draft-save-and-resume",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_meeting-end-schedule",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_meeting-group-history",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_meeting-history",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_meeting-lifecycle-admin",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_meeting-list-and-discovery",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_meeting-metadata-and-agenda-view",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_meeting-publish-and-invite",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_meeting-rsvp",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_meeting-scheduling-controls",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_meeting-stream-pending-decisions",
+    "description": "UI gate for live meeting-stream pending-decisions generation in agentic-core (DECISION_CAPTURED / DECISION_MISSING activity events).",
+    "enabled": true
+  },
+  {
+    "id": "feature_meeting-stream-persona-lens",
+    "description": "Enables live meeting-stream persona lens generation on agenda change (PERSONA_LENS activity events).",
+    "enabled": true
+  },
+  {
+    "id": "feature_meeting-stream-reactive-insights",
+    "description": "Enables live meeting-stream reactive insight generation (REACTIVE_INSIGHT activity events).",
+    "enabled": true
+  },
+  {
+    "id": "feature_meetings-bulk-delete_enabled",
+    "description": "Enables the bulk soft-delete meetings endpoint (POST /meetings/bulk-delete). Requires feature_meeting-lifecycle-admin to also be enabled.",
+    "enabled": true
+  },
+  {
+    "id": "feature_minutes-approval-comments",
+    "description": "Shows the workflow-wide comments thread in the minutes approval modal (read).",
+    "enabled": false
+  },
+  {
+    "id": "feature_minutes-approval-comments-create",
+    "description": "Enables posting new workflow comments in the minutes approval modal. Requires feature_minutes-approval-comments.",
+    "enabled": false
+  },
+  {
+    "id": "feature_outlook-integration",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_personal-brief-meeting_enabled",
+    "description": "Enables the meeting executive brief Official vs Personal toggle on the frontend. Default off for controlled rollout.",
+    "enabled": false
+  },
+  {
+    "id": "feature_publish-meeting-minutes",
+    "description": "",
+    "enabled": false
+  },
+  {
+    "id": "feature_repository-document-suggestions",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_sap-agent",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_search-document",
+    "description": "Enables the document-search UI in the Document Repository page and the meeting-group Documents tab, and gates the BFF document-search proxy endpoint.",
+    "enabled": true
+  },
+  {
+    "id": "feature_search_premeeting_enabled",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_subagenda-ai-item-regenerate-dependents-enabled",
+    "description": "When a sub-agenda block is accepted, automatically queues regeneration of dependent blocks (parent agenda blocks, meeting-level blocks, Play Audio Brief). Requires feature_subagenda-ai-item-regenerate-enabled to also be on.",
+    "enabled": true
+  },
+  {
+    "id": "feature_subagenda-ai-item-regenerate-enabled",
+    "description": "Enables block-level regeneration of AI-generated sub-agenda blocks (Sub-Agenda Summary, Expert Lenses, Key Challenges) within a sub-agenda item. Organiser-only; meeting must be in Draft state.",
+    "enabled": true
+  },
+  {
+    "id": "feature_summary-comparison-and-contextual-insights",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_transcription",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_upload-files-to-general-folder",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_upload-files-to-supporting-folder",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_upload-supporting-docs-enabled",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_view-excel-documents",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_view-help-page",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_view-word-documents",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_voice-chat",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_voting",
+    "description": "Enables the in-meeting voting feature for hosts.",
+    "enabled": false
+  },
+  {
+    "id": "feature_wake-word",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "feature_write-meeting-minutes-manually",
+    "description": "",
+    "enabled": true
+  },
+  {
+    "id": "meeting-brief-ai-block-edit_enabled",
+    "description": "Enables block-level editing of AI-generated Meeting Brief sections (Executive Brief, Key Decisions, Key Developments, Expert Lenses, Key Challenges). Organiser-only; meeting must be in Draft state. No cascading regeneration.",
+    "enabled": true
+  },
+  {
+    "id": "meeting-brief-ai-item-regenerate-dependents-enabled",
+    "description": "When a Meeting Brief block is accepted, automatically queues regeneration of dependent blocks (e.g. Audio Brief after Executive Brief changes). Requires meeting-brief-ai-item-regenerate-enabled to also be on.",
+    "enabled": false
+  },
+  {
+    "id": "meeting-brief-ai-item-regenerate-enabled",
+    "description": "Enables block-level regeneration of AI-generated Meeting Brief sections (Executive Brief, Key Decisions, Key Developments, Expert Lenses, Key Challenges). Organiser-only; meeting must be in Draft state.",
+    "enabled": false
+  },
+  {
+    "id": "personalized-brief-depth-preferences_enabled",
+    "description": "Enables the Personal Brief depth preference setting (Concise / Standard / Detailed) on the Preferences page and the apply-scope confirmation modal.",
+    "enabled": true
+  },
+  {
+    "id": "subagenda-ai-block-edit_enabled",
+    "description": "Enables block-level editing of AI-generated sub-agenda sections (Sub-Agenda Summary, Expert Lenses, Key Challenges). Organiser-only; meeting must be in Draft state. No cascading regeneration.",
+    "enabled": false
+  },
+  {
+    "id": "feature_access-control-and-governance",
+    "description": "Enables role-based access rules, entitlement checks, and governance-specific visibility behaviors",
+    "enabled": true
+  },
+  {
+    "id": "feature_agenda-ai-block-edit_enabled",
+    "description": "Enables block-level editing of AI-generated agenda sections (Agenda Summary, Expert Lenses, Key Challenges)",
+    "enabled": true
+  },
+  {
+    "id": "feature_agenda-item-time-allocation_enabled",
+    "description": "Enables time allocation for agenda items, allowing users to assign planned duration for each agenda entry",
+    "enabled": true
+  },
+  {
+    "id": "feature_arabic-support",
+    "description": "Enables Arabic language support across the platform",
+    "enabled": true
+  },
+  {
+    "id": "feature_board-prep-intelligence",
+    "description": "Story 8940 — Board-Prep Intelligence engagement scoring engine and content-free preparation instrumentation",
+    "enabled": true
+  },
+  {
+    "id": "feature_deck-quality-check",
+    "description": "Story 8942 — Deck Quality draft-marker detection and mark-as-reviewed flow",
+    "enabled": true
+  },
+  {
+    "id": "feature_deleted-supporting-document-temptray_enabled",
+    "description": "Story 7261 — Recently removed supporting-document tray in the agenda and sub-agenda reuse picker",
+    "enabled": true
+  },
+  {
+    "id": "feature_document_annotations_enabled",
+    "description": "Enables users to add and view annotations in documents in fullscreen mode",
+    "enabled": true
+  },
+  {
+    "id": "feature_draft_ai_generation_enabled",
+    "description": "Enables AI generation of draft meeting content",
+    "enabled": true
+  },
+  {
+    "id": "feature_draft_ai_generation_item_status",
+    "description": "Enables AI generation item status tracking in draft meetings",
+    "enabled": true
+  },
+  {
+    "id": "feature_draft_ai_generation_regeneration",
+    "description": "Enables regeneration of AI-generated draft content",
+    "enabled": true
+  },
+  {
+    "id": "feature_edit-transcript",
+    "description": "Enables post-meeting transcript editing on the Recap tab",
+    "enabled": true
+  },
+  {
+    "id": "feature_enable-agenda-custom-instructions",
+    "description": "Enables custom instructions for agenda items",
+    "enabled": true
+  },
+  {
+    "id": "feature_enable-ai-advisor-preferences",
+    "description": "Enables AI advisor preference settings",
+    "enabled": true
+  },
+  {
+    "id": "feature_enable-ai-insight-source-documents",
+    "description": "Enables source documents for AI insights",
+    "enabled": true
+  },
+  {
+    "id": "feature_enable-meeting-pack-annotations-v1",
+    "description": "Enables the document annotation notes panel in Meeting Pack",
+    "enabled": true
+  },
+  {
+    "id": "feature_enable-original-pdf-rendering",
+    "description": "Preserves and serves original full-quality PDFs for document rendering",
+    "enabled": true
+  },
+  {
+    "id": "feature_enable-shared-notes",
+    "description": "Story 7103: Shared Notes across peers",
+    "enabled": true
+  },
+  {
+    "id": "feature_enable-stale-notes",
+    "description": "Enables stale notes on documents",
+    "enabled": true
+  },
+  {
+    "id": "feature_enable-video-attachment",
+    "description": "Enables video supporting-file attachments in meetings",
+    "enabled": true
+  },
+  {
+    "id": "feature_enable-vote-attachments",
+    "description": "Enables attaching supporting documents to votes",
+    "enabled": true
+  },
+  {
+    "id": "feature_enable-vote-consent",
+    "description": "Enables vote consent capture before participants cast a vote",
+    "enabled": true
+  },
+  {
+    "id": "feature_handoff-chat",
+    "description": "Enables handoff chat workflow routing in agentic-core",
+    "enabled": true
+  },
+  {
+    "id": "feature_import-from-sharepoint",
+    "description": "Enables SharePoint browsing and document import",
+    "enabled": true
+  },
+  {
+    "id": "feature_indexer-v2",
+    "description": "Enables the Cortex V2 document indexer integration",
+    "enabled": true
+  },
+  {
+    "id": "feature_m365-connector",
+    "description": "Enables the Microsoft 365 connector",
+    "enabled": false
+  },
+  {
+    "id": "feature_meeting-brief-ai-block-edit_enabled",
+    "description": "Enables block-level editing of AI-generated Meeting Brief sections",
+    "enabled": true
+  },
+  {
+    "id": "feature_meeting-preview",
+    "description": "Enables ongoing meeting preview after navigating back",
+    "enabled": true
+  },
+  {
+    "id": "feature_meeting-tasks",
+    "description": "Enables the Meeting Tasks feature on the Recap tab",
+    "enabled": true
+  },
+  {
+    "id": "feature_notification-centre",
+    "description": "Enables the in-app Notification Centre",
+    "enabled": true
+  },
+  {
+    "id": "feature_personalized-brief-depth-preferences_enabled",
+    "description": "Enables Personal Brief depth preferences and apply-scope confirmation",
+    "enabled": true
+  },
+  {
+    "id": "feature_recap-tab-owner-only",
+    "description": "Restricts the Recap tab to meeting owners",
+    "enabled": true
+  },
+  {
+    "id": "feature_rsvp-reaccept",
+    "description": "Enables RSVP reacceptance for attendees",
+    "enabled": true
+  },
+  {
+    "id": "feature_simulation-details-panel",
+    "description": "Controls visibility of the digital-simulation details panel",
+    "enabled": true
+  },
+  {
+    "id": "feature_telemetry-and-operational-controls",
+    "description": "Enables telemetry, operational monitoring, and rollout observation hooks",
+    "enabled": true
+  },
+  {
+    "id": "feature_upload_supporting_docs_enabled",
+    "description": "Enables uploading supporting documents during agenda creation",
+    "enabled": true
+  },
+  {
+    "id": "feature_wiki-chat",
+    "description": "Enables wiki specialist routing and wiki-grounded chat responses",
+    "enabled": true
+  },
+  {
+    "id": "vote-cancellation-enabled",
+    "description": "Enables cancellation of votes in progress",
+    "enabled": true
+  }
+]

@@ -1,0 +1,16 @@
+{{- if .Values.backend.seedOrganization.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: insight-seed-org-script
+  namespace: {{ .Values.global.namespace | default .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: insight
+    app.kubernetes.io/instance: {{ .Release.Name }}
+data:
+  # Chart-owned tenant org bootstrap, mounted into the backend seed-org init
+  # container. Lives in services/insight/chart/files so the script ships with
+  # the chart and does not depend on the backend image bundling it.
+  seed_tenant_org.py: |
+{{ .Files.Get "files/seed_tenant_org.py" | indent 4 }}
+{{- end }}

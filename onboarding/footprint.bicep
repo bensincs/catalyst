@@ -601,6 +601,74 @@ resource vaultReadAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01
   }
 }
 
+
+// --- Private networking for platform services ---------------------------------
+//
+// Services that provision Azure data resources (Postgres, Redis, Storage, Key
+// Vault, Search, Service Bus, App Configuration, Cognitive) reach them over
+// Private Link rather than the public internet — several of them refuse public
+// access entirely. That needs two things the cluster does not come with: a
+// subnet for the private endpoints, and a private DNS zone per service type so
+// the resource's public FQDN resolves to its private address from inside the
+// cluster.
+//
+// Both live here rather than in a service's own module because they are shared:
+// every service that needs Private Link uses the same subnet and the same
+// zones, and a zone can only be linked to a virtual network once.
+
+@description('Address prefix for the private-endpoint subnet, inside the cluster vnet.')
+param privateEndpointSubnetPrefix string = '10.237.0.0/24'
+
+@description('Name of the AKS-managed virtual network. AKS derives this name itself and it cannot be computed, so the control plane looks it up and passes it in. Empty on the first stamp — the cluster does not exist yet — and the private networking is created on the next sweep.')
+param clusterVnetName string = ''
+
+var deployPrivateNetworking = deployCluster && !empty(clusterVnetName)
+
+module privateNetwork 'footprint-network.bicep' = if (deployPrivateNetworking) {
+  name: 'cortex-private-network'
+  scope: resourceGroup(nodeResourceGroupName)
+  dependsOn: [ aks ]
+  params: {
+    vnetName: clusterVnetName
+    addressPrefix: privateEndpointSubnetPrefix
+  }
+}
+
+// One zone per service type, each linked to the cluster's vnet. The names are
+// fixed by Azure — a private endpoint's DNS zone group only works if the zone is
+// named exactly this.
+var privateDnsZoneNames = [
+  'privatelink.vaultcore.azure.net'
+  'privatelink.blob.${environment().suffixes.storage}'
+  'privatelink.cognitiveservices.azure.com'
+  'privatelink.azconfig.io'
+  'privatelink.postgres.database.azure.com'
+  'privatelink.redis.cache.windows.net'
+  'privatelink.search.windows.net'
+  'privatelink.servicebus.windows.net'
+]
+
+resource privateDnsZones 'Microsoft.Network/privateDnsZones@2020-06-01' = [
+  for z in privateDnsZoneNames: if (deployPrivateNetworking) {
+    name: z
+    location: 'global'
+    tags: { SecurityControl: 'Ignore' }
+  }
+]
+
+// A zone resolves nothing until it is linked to the network doing the asking.
+resource privateDnsLinks 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-06-01' = [
+  for (z, i) in privateDnsZoneNames: if (deployPrivateNetworking) {
+    name: '${z}/link-to-cluster'
+    location: 'global'
+    dependsOn: [ privateDnsZones[i] ]
+    properties: {
+      registrationEnabled: false
+      virtualNetwork: { id: privateNetwork.outputs.vnetId }
+    }
+  }
+]
+
 output reconcilerPrincipalId string = reconIdentityPrincipalId
 output reconcilerClientId string = reconIdentityClientId
 output reconcilerIdentity string = reconIdentityName
@@ -612,3 +680,6 @@ output foundryProjectEndpoint string = foundryProjectEndpoint
 output vaultName string = vault.name
 output vaultUri string = vault.properties.vaultUri
 output vaultId string = vault.id
+output privateEndpointSubnetId string = deployPrivateNetworking ? privateNetwork.outputs.subnetId : ''
+output aksOidcIssuerUrl string = deployCluster ? aks.properties.oidcIssuerProfile.issuerURL : ''
+output privateDnsZoneResourceGroup string = resourceGroup().name

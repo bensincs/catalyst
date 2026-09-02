@@ -1,0 +1,106 @@
+{
+  "_comment": [
+    "InSight — registered as a platform service.",
+    "",
+    "    cortexctl create -f platform-services/insight/register.json",
+    "",
+    "Three entries and one wire. The Bicep module provisions ~20 Azure resources",
+    "behind Private Link and emits a single `appInfra` OBJECT; that object is",
+    "wired onto the chart's `.Values.appInfra`, which is the whole contract",
+    "between them. Everything else the chart needs it derives from that.",
+    "",
+    "Credentials never appear here. The tenant supplies four to the secret store;",
+    "they land in the tenant's own Key Vault, the module reads them from there",
+    "with Key Vault references (never as parameters), and the chart's own",
+    "ExternalSecrets read the six contract secrets the module writes — using the",
+    "workload identity the module federated. So the value goes tenant -> vault ->",
+    "pod without passing through the catalog, the control plane, or the template.",
+    "",
+    "Depends on external-secrets: the chart ships its own SecretStore and",
+    "ExternalSecret resources, which do nothing without that controller.",
+    "Register platform-services/external-secrets/register.json first.",
+    "",
+    "IMAGES: the nine first-party insight images are not reachable from this",
+    "environment — see NOTES.md. imageRegistry below points at the platform",
+    "registry; replace it with the real one when access exists."
+  ],
+
+  "secretSets": [
+    {
+      "name": "insight secrets",
+      "description": "Credentials InSight needs. Supplied once by each tenant: they provision the database and are read by the app at runtime. Stored in the tenant's own Key Vault, where the platform cannot read them back.",
+      "keys": [
+        "postgres-password",
+        "jwt-secret-key",
+        "spicedb-preshared-key",
+        "llm-gateway-master-key"
+      ]
+    }
+  ],
+
+  "infrastructure": [
+    {
+      "name": "insight infra",
+      "description": "InSight's Azure footprint: Key Vault with customer-managed keys, Postgres, Redis, Service Bus, Storage, AI Search, three Cognitive accounts and App Configuration — all reachable only over Private Link — plus the workload identity and federated credentials its pods authenticate with.",
+      "bicepModule": "br:cortexcpacr6hy6uurw.azurecr.io/bicep/insight:0.1.0",
+      "bicepParams": {
+        "tenantName": "{{tenant}}",
+        "env": "dev",
+        "tenantNamespace": "insight",
+        "workspaceSubdomain": "{{tenant}}",
+        "routingDomain": "apps.msft.ae",
+
+        "aksOidcIssuerUrl": "{{aksOidcIssuerUrl}}",
+        "peSubnetId": "{{peSubnetId}}",
+        "dnsZoneResourceGroup": "{{dnsZoneResourceGroup}}",
+
+        "vaultName": "{{vaultName}}",
+        "vaultResourceGroup": "{{vaultResourceGroup}}",
+        "secretSetId": "insight-secrets",
+
+        "postgresSkuName": "GP_Standard_D2ds_v5",
+        "postgresStorageMb": 32768,
+        "postgresBackupRetentionDays": 7,
+        "postgresGeoRedundantBackup": false,
+        "redisCapacity": 1,
+        "searchReplicaCount": 1,
+        "keyVaultSku": "standard"
+      },
+      "dependencies": []
+    }
+  ],
+
+  "applications": [
+    {
+      "name": "insight",
+      "description": "InSight admin portal — a ten-service application. Reads every credential from the tenant's own Key Vault at runtime via workload identity.",
+      "namespace": "insight",
+      "repoURL": "oci://cortexcpacr6hy6uurw.azurecr.io/charts",
+      "chart": "insight-admin-portal",
+      "targetRevision": "0.1.0",
+      "exposeService": "frontend",
+      "exposePort": 80,
+      "hostname": "insight",
+      "authRequired": false,
+      "embed": true,
+      "icon": "layout-grid",
+
+      "values": "imageRegistry: cortexcpacr6hy6uurw.azurecr.io/images\nimageTag: latest\nglobal:\n  namespace: insight\n  imagePullPolicy: IfNotPresent\n# appInfra is supplied by wiring from the infrastructure's appInfra output.\n# Do not set it here — it would be overwritten.\nlocalSecrets:\n  enabled: false\npostgres:\n  enabled: false\nappConfig:\n  enabled: false\nnetworkPolicy:\n  enabled: false\nroute:\n  enabled: \"true\"\ningress:\n  enabled: false\ngateway:\n  httpRoute:\n    enabled: false\n",
+
+      "dependencies": [
+        { "kind": "infrastructure", "id": "insight-infra" },
+        { "kind": "secret_set", "id": "insight-secrets" },
+        { "kind": "application", "id": "external-secrets" }
+      ],
+
+      "wiring": [
+        {
+          "sourceKind": "infrastructure",
+          "sourceId": "insight-infra",
+          "output": "appInfra",
+          "helmPath": "appInfra"
+        }
+      ]
+    }
+  ]
+}

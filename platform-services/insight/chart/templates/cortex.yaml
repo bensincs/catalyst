@@ -1,0 +1,164 @@
+{{- if .Values.cortex.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cortex
+  namespace: {{ .Values.global.namespace | default .Release.Namespace }}
+  labels:
+    app: cortex
+spec:
+  type: {{ .Values.cortex.service.type }}
+  ports:
+    - port: {{ .Values.cortex.service.port }}
+      targetPort: {{ .Values.cortex.service.port }}
+      protocol: TCP
+  selector:
+    app: cortex
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cortex
+  namespace: {{ .Values.global.namespace | default .Release.Namespace }}
+  labels:
+    app: cortex
+spec:
+  replicas: {{ .Values.cortex.replicaCount }}
+  selector:
+    matchLabels:
+      app: cortex
+  template:
+    metadata:
+      {{- if .Values.global.otelPythonInstrumentation.enabled }}
+      annotations:
+        instrumentation.opentelemetry.io/inject-python: {{ .Values.global.otelPythonInstrumentation.value | quote }}
+      {{- end }}
+      labels:
+        app: cortex
+        # cortex calls the platform authz-service (AUTHZ_SERVICE_URL). On Cortex
+        # the tenant default-deny-egress only admits authz-service:8080 for pods
+        # labelled cortex.ai/authz-client=true (allow-authz-client-egress policy);
+        # without this label those calls hang on an egress timeout. Harmless
+        # off-Cortex (no such policy). Mirrors the bff.
+        cortex.ai/authz-client: "true"
+        {{- if .Values.cortex.workloadIdentity.enabled }}
+        azure.workload.identity/use: "true"
+        {{- end }}
+    spec:
+      automountServiceAccountToken: false
+      {{- if .Values.cortex.workloadIdentity.enabled }}
+      serviceAccountName: {{ .Values.cortex.workloadIdentity.serviceAccountName | default "cortex-sa" }}
+      {{- end }}
+      {{- include "insight.podSecurityContext" . | nindent 6 }}
+      containers:
+        - name: cortex
+          {{- include "insight.containerSecurityContext" . | nindent 10 }}
+          image: "{{ .Values.imageRegistry }}{{ if .Values.imageRegistry }}/{{end}}{{ .Values.cortex.image.repository }}:{{ .Values.cortex.image.tag | default .Values.imageTag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - containerPort: {{ .Values.cortex.service.port }}
+          {{- if .Values.appConfig.enabled }}
+          envFrom:
+            - configMapRef:
+                name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                optional: true
+            {{- if .Values.appConfig.secrets.enabled }}
+            - secretRef:
+                name: {{ .Values.appConfig.secrets.secretName | default "insight-secrets" }}
+                optional: true
+            {{- end }}
+          env:
+            {{- include "insight.nonRootEnv" . | nindent 12 }}
+            # Platform authz-service (SpiceDB-backed roles/permissions).
+            # Identity is injected by the Envoy/OIDC gateway; cortex resolves
+            # roles via authz-service. Tokens are secrets.
+            - name: AUTHZ_SERVICE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.appConfig.configMapName | default "insight-config" }}
+                  key: insight--authz--service-url
+                  optional: true
+            - name: AUTHZ_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.appConfig.secrets.secretName | default "insight-secrets" }}
+                  key: insight--authz--admin-token
+                  optional: true
+            - name: AUTHZ_CHECK_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.appConfig.secrets.secretName | default "insight-secrets" }}
+                  key: insight--authz--check-token
+                  optional: true
+            # Fallback to Helm values for keys not in AppConfig
+            - name: AUTHZ_ROLE_CACHE_TTL_SECONDS
+              value: {{ .Values.cortex.env.AUTHZ_ROLE_CACHE_TTL_SECONDS | quote }}
+            - name: API_PREFIX
+              value: {{ .Values.cortex.env.API_PREFIX | quote }}
+            - name: ENVIRONMENT
+              value: {{ .Values.cortex.env.ENVIRONMENT | quote }}
+            - name: LOG_LEVEL
+              value: {{ .Values.cortex.env.LOG_LEVEL | quote }}
+            {{- if .Values.global.otelPythonInstrumentation.enabled }}
+            - name: OTEL_PYTHON_EXCLUDED_URLS
+              value: {{ .Values.global.otelPythonInstrumentation.excludedUrls | default "health,ready" | quote }}
+            {{- end }}
+          {{- else }}
+          env:
+            {{- include "insight.nonRootEnv" . | nindent 12 }}
+            # Platform authz-service (SpiceDB-backed roles/permissions).
+            # Identity is injected by the Envoy/OIDC gateway; cortex resolves
+            # roles via authz-service. Tokens are secrets in cloud.
+            - name: AUTHZ_SERVICE_URL
+              value: {{ .Values.cortex.env.AUTHZ_SERVICE_URL | default "http://authz-service.cortex-authz.svc.cluster.local:8080" | quote }}
+            # Both tokens come from the authz-admin-token key of the
+            # authz-admin-credentials Secret the tenant-operator materialises per
+            # tenant via ESO. The admin token is required for the admin-only authz
+            # endpoints cortex uses (list members/subjects/seeded roles/role
+            # permissions, ensure/assign/remove) and for last-admin protection;
+            # without it those calls raise "authz token is not configured". The
+            # check token authorises list-for-subject (/api/me role resolution).
+            # optional so off-Cortex/local renders without the Secret.
+            - name: AUTHZ_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: authz-admin-credentials
+                  key: authz-admin-token
+                  optional: true
+            - name: AUTHZ_CHECK_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: authz-admin-credentials
+                  key: authz-admin-token
+                  optional: true
+            - name: AUTHZ_ROLE_CACHE_TTL_SECONDS
+              value: {{ .Values.cortex.env.AUTHZ_ROLE_CACHE_TTL_SECONDS | quote }}
+            - name: API_PREFIX
+              value: {{ .Values.cortex.env.API_PREFIX | quote }}
+            - name: ENVIRONMENT
+              value: {{ .Values.cortex.env.ENVIRONMENT | quote }}
+            - name: LOG_LEVEL
+              value: {{ .Values.cortex.env.LOG_LEVEL | quote }}
+            {{- if .Values.global.otelPythonInstrumentation.enabled }}
+            - name: OTEL_PYTHON_EXCLUDED_URLS
+              value: {{ .Values.global.otelPythonInstrumentation.excludedUrls | default "health,ready" | quote }}
+            {{- end }}
+          {{- end }}
+          {{- if .Values.cortex.healthCheck.enabled }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.cortex.healthCheck.path }}
+              port: {{ .Values.cortex.service.port }}
+            initialDelaySeconds: {{ .Values.cortex.healthCheck.initialDelaySeconds }}
+            periodSeconds: {{ .Values.cortex.healthCheck.periodSeconds }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.cortex.healthCheck.path }}
+              port: {{ .Values.cortex.service.port }}
+            initialDelaySeconds: {{ .Values.cortex.healthCheck.initialDelaySeconds }}
+            periodSeconds: {{ .Values.cortex.healthCheck.periodSeconds }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.cortex.resources | nindent 12 }}
+{{- end }}

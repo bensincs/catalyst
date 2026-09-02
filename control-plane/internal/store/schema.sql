@@ -699,3 +699,12 @@ ALTER TABLE tenant_infrastructure ADD COLUMN IF NOT EXISTS deployed_hash text NO
 -- since an app with no URL has nothing to show.
 ALTER TABLE applications ADD COLUMN IF NOT EXISTS embed boolean NOT NULL DEFAULT false;
 ALTER TABLE applications ADD COLUMN IF NOT EXISTS icon  text    NOT NULL DEFAULT '';
+
+-- Per-tenant networking a platform service needs in order to use Private Link.
+-- Created by the footprint (a subnet in the cluster's own vnet, plus one private
+-- DNS zone per service type linked to it) and recorded here so a service's Bicep
+-- module can be handed them as deploy-time tokens rather than each module having
+-- to discover them. Empty until a footprint that creates them has been stamped.
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS pe_subnet_id     text NOT NULL DEFAULT '';
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS aks_oidc_issuer  text NOT NULL DEFAULT '';
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS dns_zone_rg      text NOT NULL DEFAULT '';

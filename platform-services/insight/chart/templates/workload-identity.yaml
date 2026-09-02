@@ -1,0 +1,119 @@
+{{- if .Values.agenticCore.workloadIdentity.enabled }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.agenticCore.workloadIdentity.serviceAccountName | default "agentic-core-sa" }}
+  namespace: {{ .Values.global.namespace | default .Release.Namespace }}
+  annotations:
+    azure.workload.identity/client-id: {{ .Values.appInfra.workloadIdentityClientId | default .Values.agenticCore.workloadIdentity.clientId | quote }}
+  labels:
+    azure.workload.identity/use: "true"
+    app: agentic-core
+automountServiceAccountToken: false
+{{- end }}
+
+{{- if .Values.bff.workloadIdentity.enabled }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.bff.workloadIdentity.serviceAccountName | default "bff-sa" }}
+  namespace: {{ .Values.global.namespace | default .Release.Namespace }}
+  annotations:
+    azure.workload.identity/client-id: {{ .Values.appInfra.workloadIdentityClientId | default .Values.bff.workloadIdentity.clientId | quote }}
+  labels:
+    azure.workload.identity/use: "true"
+    app: bff
+automountServiceAccountToken: false
+{{- end }}
+
+{{- if .Values.backend.workloadIdentity.enabled }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.backend.workloadIdentity.serviceAccountName | default "backend-sa" }}
+  namespace: {{ .Values.global.namespace | default .Release.Namespace }}
+  annotations:
+    azure.workload.identity/client-id: {{ .Values.appInfra.workloadIdentityClientId | default .Values.backend.workloadIdentity.clientId | quote }}
+  labels:
+    azure.workload.identity/use: "true"
+    app: backend
+automountServiceAccountToken: false
+{{- end }}
+
+{{- if .Values.digitalSimulator.workloadIdentity.enabled }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.digitalSimulator.workloadIdentity.serviceAccountName | default "digital-simulator-sa" }}
+  namespace: {{ .Values.global.namespace | default .Release.Namespace }}
+  annotations:
+    azure.workload.identity/client-id: {{ .Values.appInfra.workloadIdentityClientId | default .Values.digitalSimulator.workloadIdentity.clientId | quote }}
+  labels:
+    azure.workload.identity/use: "true"
+    app: digital-simulator
+automountServiceAccountToken: false
+{{- end }}
+
+{{- if .Values.llmGateway.workloadIdentity.enabled }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.llmGateway.workloadIdentity.serviceAccountName | default "llm-gateway-sa" }}
+  namespace: {{ .Values.global.namespace | default .Release.Namespace }}
+  annotations:
+    azure.workload.identity/client-id: {{ .Values.appInfra.workloadIdentityClientId | default .Values.llmGateway.workloadIdentity.clientId | quote }}
+  labels:
+    azure.workload.identity/use: "true"
+    app: llm-gateway
+automountServiceAccountToken: false
+{{- end }}
+
+{{- if .Values.decisionRegister.workloadIdentity.enabled }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.decisionRegister.workloadIdentity.serviceAccountName | default "decision-register-sa" }}
+  namespace: {{ .Values.global.namespace | default .Release.Namespace }}
+  annotations:
+    azure.workload.identity/client-id: {{ .Values.appInfra.workloadIdentityClientId | default .Values.decisionRegister.workloadIdentity.clientId | quote }}
+  labels:
+    azure.workload.identity/use: "true"
+    app: decision-register
+automountServiceAccountToken: false
+{{- end }}
+
+{{- if .Values.translation.workloadIdentity.enabled }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.translation.workloadIdentity.serviceAccountName | default "translation-sa" }}
+  namespace: {{ .Values.global.namespace | default .Release.Namespace }}
+  annotations:
+    azure.workload.identity/client-id: {{ .Values.appInfra.workloadIdentityClientId | default .Values.translation.workloadIdentity.clientId | quote }}
+  labels:
+    azure.workload.identity/use: "true"
+    app: translation
+automountServiceAccountToken: false
+{{- end }}
+
+{{- if .Values.cortex.workloadIdentity.enabled }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.cortex.workloadIdentity.serviceAccountName | default "cortex-sa" }}
+  namespace: {{ .Values.global.namespace | default .Release.Namespace }}
+  annotations:
+    azure.workload.identity/client-id: {{ .Values.appInfra.workloadIdentityClientId | default .Values.cortex.workloadIdentity.clientId | quote }}
+  labels:
+    azure.workload.identity/use: "true"
+    app: cortex
+automountServiceAccountToken: false
+{{- end }}

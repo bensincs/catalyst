@@ -342,6 +342,15 @@ func (s *Store) SetTenantVault(ctx context.Context, slug, name, uri, id string) 
 	return err
 }
 
+// SetTenantNetwork records the private-networking facts a footprint created, so
+// a service's module can be given them without discovering them itself.
+func (s *Store) SetTenantNetwork(ctx context.Context, slug, peSubnetID, oidcIssuer, dnsZoneRG string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE tenants SET pe_subnet_id = $2, aks_oidc_issuer = $3, dns_zone_rg = $4 WHERE id = $1`,
+		slug, peSubnetID, oidcIssuer, dnsZoneRG)
+	return err
+}
+
 // TenantVault returns the ARM resource id and URI of a tenant's own vault. Both
 // empty until the footprint that creates it has finished deploying.
 func (s *Store) TenantVault(ctx context.Context, slug string) (vaultID, vaultURI string, err error) {

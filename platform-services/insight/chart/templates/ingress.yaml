@@ -1,0 +1,111 @@
+{{- if .Values.ingress.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: insight-admin-portal-ingress
+  namespace: {{ .Values.global.namespace | default .Release.Namespace }}
+  labels:
+    app: insight-admin-portal
+  annotations:
+    {{- toYaml .Values.ingress.annotations | nindent 4 }}
+    # NGINX Inc ingress controller annotations (nginx.org)
+    nginx.org/websocket-services: "bff"
+    # Also keep nginx.ingress.kubernetes.io for compatibility if controller changes
+    nginx.ingress.kubernetes.io/websocket-services: "bff"
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host }}
+      {{- if .Values.ingress.tls.secretName }}
+      secretName: {{ .Values.ingress.tls.secretName }}
+      {{- end }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host }}
+      http:
+        paths:
+          # Direct API traffic to BFF
+          - path: /api/
+            pathType: Prefix
+            backend:
+              service:
+                name: bff
+                port:
+                  number: {{ .Values.bff.service.port | default 8001 }}
+
+          # Direct WebSocket traffic to BFF (all /ws/* paths)
+          - path: /ws/
+            pathType: Prefix
+            backend:
+              service:
+                name: bff
+                port:
+                  number: {{ .Values.bff.service.port | default 8001 }}
+
+          # Everything else goes to the frontend SPA
+          - path: {{ .Values.ingress.path }}
+            pathType: {{ .Values.ingress.pathType }}
+            backend:
+              service:
+                name: frontend
+                port:
+                  number: 80
+          # Health probe endpoint routed directly to BFF
+          - path: /healthProbe
+            pathType: Exact
+            backend:
+              service:
+                name: bff
+                port:
+                  number: 8001
+---
+# Separate ingress for meeting WebSocket connections with sticky sessions
+# This ensures ALL WebSocket connections for the same meeting go to the same pod
+# Includes: /ws/meetings/{id} and /ws/meetings/{id}/sync
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: insight-admin-portal-ingress-meeting-sync
+  namespace: {{ .Values.global.namespace | default .Release.Namespace }}
+  labels:
+    app: insight-admin-portal
+  annotations:
+    {{- toYaml .Values.ingress.annotations | nindent 4 }}
+    nginx.org/websocket-services: "bff"
+    nginx.ingress.kubernetes.io/websocket-services: "bff"
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+    # Hash by URI path only (excludes query params like ?token=...)
+    # This ensures all connections to same meeting_id go to same pod
+    nginx.ingress.kubernetes.io/upstream-hash-by: "$uri"
+    nginx.ingress.kubernetes.io/affinity: "cookie"
+    nginx.ingress.kubernetes.io/session-cookie-name: "meeting-sync-route"
+    nginx.ingress.kubernetes.io/session-cookie-hash: "sha1"
+    nginx.ingress.kubernetes.io/priority: "100"
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host }}
+      {{- if .Values.ingress.tls.secretName }}
+      secretName: {{ .Values.ingress.tls.secretName }}
+      {{- end }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host }}
+      http:
+        paths:
+          # ALL meeting WebSocket endpoints with sticky sessions
+          # Matches: /ws/meetings/{id} and /ws/meetings/{id}/sync
+          - path: /ws/meetings
+            pathType: Prefix
+            backend:
+              service:
+                name: bff
+                port:
+                  number: {{ .Values.bff.service.port | default 8001 }}
+{{- end }}
