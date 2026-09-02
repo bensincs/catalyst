@@ -544,13 +544,31 @@ func (s *Server) writeTenantContext(w http.ResponseWriter, r *http.Request, t mo
 		s.fail(w, r, err)
 		return
 	}
+	sets, err := s.store.SecretSetsForTenant(r.Context(), t.ID)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, model.TenantContextResponse{
 		Tenant:         t,
 		Agents:         gateAgentHealth(t, agents),
 		Infrastructure: enabledInfra(infra),
 		Applications:   enabledApps(apps),
 		Stores:         enabledStores(stores),
+		SecretSets:     enabledSecretSets(sets),
 	})
+}
+
+// enabledSecretSets keeps the sets the tenant has turned on — the ones with a
+// per-tenant instance, whose completeness gates the deployments that need them.
+func enabledSecretSets(in []model.SecretSet) []model.SecretSet {
+	out := []model.SecretSet{}
+	for _, s := range in {
+		if s.Enabled {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // enabled* keep only the resources actually enabled in the tenant (what's

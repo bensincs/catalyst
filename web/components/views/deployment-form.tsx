@@ -32,6 +32,15 @@ export interface DepOutputs {
 export const APP_OUTPUTS = ["name", "namespace", "serviceHost"];
 export const AGENT_OUTPUTS = ["agentId", "name"];
 
+/** A secret store's wireable outputs are NAMES, never values.
+ *
+ *  `secretName` is the Kubernetes Secret the reconciler writes; binding it into
+ *  whatever the chart calls its existing-secret option is how a chart reads a
+ *  secret without the secret entering these values. Wiring is merged into
+ *  spec.source.helm.values verbatim, so a value offered here would be published
+ *  in cleartext — which is why the value is not on offer. */
+export const SECRET_SET_OUTPUTS = ["secretName"];
+
 // Dotted leaf paths of a chart's default values — the Helm value-path suggestions.
 function flattenPaths(obj: Obj, base = ""): string[] {
   const out: string[] = [];
@@ -445,7 +454,7 @@ export function DeploymentForm({
           <Section
             icon={GitBranch}
             title="Dependencies"
-            desc="Infrastructure, applications, or agents this deployment waits on — dependencies converge first (Argo sync-waves order the deploy). Each dependency's outputs become wireable below."
+            desc="Infrastructure, applications, agents, or secret stores this deployment waits on — dependencies converge first (Argo sync-waves order the deploy). Each dependency's outputs become wireable below."
           >
             <DependencyPicker options={depOptions} value={dependencies} onChange={setDependencies} />
           </Section>

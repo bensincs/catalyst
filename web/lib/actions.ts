@@ -45,18 +45,24 @@ Every mutation flows through one generic resource surface on the control plane:
   DELETE /api/resources/{kind}/{id}/enable    disable in the caller's tenant
   PATCH  /api/tenants/{slug}/all-entitlements grant/revoke every kind at once
 
-`kind` is infrastructure | application | agent | memory_store. The typed
+`kind` is infrastructure | application | agent | memory_store | secret_set. The typed
 functions below are thin, name-stable wrappers so views don't carry the URL
 vocabulary.
 */
 
-export type ResourceKind = "infrastructure" | "application" | "agent" | "memory_store";
+export type ResourceKind =
+  | "infrastructure"
+  | "application"
+  | "agent"
+  | "memory_store"
+  | "secret_set";
 
 const enablePaths: Record<ResourceKind, string[]> = {
   infrastructure: ["/infrastructure"],
   application: ["/deployments"],
   agent: ["/", "/agents"],
   memory_store: ["/memory-stores"],
+  secret_set: ["/secret-stores"],
 };
 
 function resourcePath(kind: ResourceKind, id: string): string {
@@ -172,8 +178,16 @@ export async function setAllEntitlements(
         applications: byKind.application,
         agents: byKind.agent,
         memoryStores: byKind.memory_store,
+        secretSets: byKind.secret_set,
       }),
-    [`/tenants/${slug}`, "/agents", "/deployments", "/infrastructure", "/memory-stores"],
+    [
+      `/tenants/${slug}`,
+      "/agents",
+      "/deployments",
+      "/infrastructure",
+      "/memory-stores",
+      "/secret-stores",
+    ],
   );
 }
 
@@ -345,6 +359,46 @@ export async function enableStore(storeId: string): Promise<ActionResult> {
 
 export async function disableStore(storeId: string): Promise<ActionResult> {
   return disableResource("memory_store", storeId);
+}
+
+/* ── Secret stores ────────────────────────────────────────────────────────── */
+
+export async function createSecretSet(input: {
+  name: string;
+  description: string;
+  keys: string[];
+}): Promise<ActionResult> {
+  return run(() => apiSend("POST", "/api/resources", { secretSets: [input] }), ["/secret-stores"]);
+}
+
+export async function updateSecretSet(
+  id: string,
+  input: { name: string; description: string; keys: string[] },
+): Promise<ActionResult> {
+  return run(() => apiSend("PATCH", resourcePath("secret_set", id), input), ["/secret-stores"]);
+}
+
+export async function deleteSecretSet(id: string): Promise<ActionResult> {
+  return deleteResource("secret_set", id);
+}
+
+/** Enable a secret store, supplying values for its keys.
+ *
+ *  This is the only action in the console that sends a secret. The values go to
+ *  the tenant's own Azure Key Vault and are not stored here, not returned by any
+ *  endpoint, and not recoverable — by the tenant or by the platform. An omitted
+ *  or empty key means "leave that one as it is", so re-saving without retyping
+ *  every value is non-destructive.
+ */
+export async function enableSecretSet(
+  id: string,
+  values: Record<string, string>,
+): Promise<ActionResult> {
+  return enableResource("secret_set", id, { values });
+}
+
+export async function disableSecretSet(id: string): Promise<ActionResult> {
+  return disableResource("secret_set", id);
 }
 
 /* ── Deployments (Helm → Argo CD) ─────────────────────────────────────────── */

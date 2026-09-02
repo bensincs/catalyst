@@ -10,6 +10,7 @@ import {
   ServerCog,
   Settings,
   type LucideIcon,
+  KeyRound,
 } from "lucide-react";
 import type { Role } from "./types";
 
@@ -49,6 +50,12 @@ const PLATFORM_NAV: NavGroup[] = [
         href: "/memory-stores",
         icon: Database,
         hint: "Author shared memory stores and entitle tenants",
+      },
+      {
+        label: "Secret stores",
+        href: "/secret-stores",
+        icon: KeyRound,
+        hint: "Declare the secrets a deployment needs and entitle tenants",
       },
       {
         label: "Deployments",
@@ -105,6 +112,12 @@ const TENANT_NAV: NavGroup[] = [
         href: "/memory-stores",
         icon: Database,
         hint: "Enable or author memory stores for your agents",
+      },
+      {
+        label: "Secret stores",
+        href: "/secret-stores",
+        icon: KeyRound,
+        hint: "Supply the secrets your deployments need",
       },
       {
         label: "Deployments",

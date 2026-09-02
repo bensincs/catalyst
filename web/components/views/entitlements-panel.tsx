@@ -2,15 +2,36 @@
 
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Bot, Boxes, Brain, Layers, Lock, ShieldCheck, type LucideIcon } from "lucide-react";
+import {
+  Bot,
+  Boxes,
+  Brain,
+  KeyRound,
+  Layers,
+  Lock,
+  ShieldCheck,
+  type LucideIcon,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/form";
 import { useToast } from "@/components/providers/toast-provider";
 import { setAllEntitlements } from "@/lib/actions";
-import type { Application, CatalogAgent, Dependency, Infrastructure, MemoryStore } from "@/lib/types";
+import type {
+  Application,
+  CatalogAgent,
+  Dependency,
+  DepKind,
+  Infrastructure,
+  MemoryStore,
+  SecretSet,
+} from "@/lib/types";
 import styles from "./entitlements-panel.module.css";
 
-type Kind = "infrastructure" | "application" | "agent" | "memory_store";
+// The catalog's kind vocabulary, not a second copy of it. This union was
+// duplicated here, in the dependency graph and in the picker, so adding a kind
+// meant finding all four — and missing one showed up as a silently absent
+// section rather than a type error.
+type Kind = DepKind;
 const kkey = (kind: Kind, id: string) => `${kind}:${id}`;
 const splitKey = (k: string): [Kind, string] => {
   const i = k.indexOf(":");
@@ -30,6 +51,7 @@ const GROUPS: { kind: Kind; label: string; icon: LucideIcon }[] = [
   { kind: "application", label: "Applications", icon: Layers },
   { kind: "agent", label: "Agents", icon: Bot },
   { kind: "memory_store", label: "Memory stores", icon: Brain },
+  { kind: "secret_set", label: "Secret stores", icon: KeyRound },
 ];
 
 // One panel for every kind a tenant can be entitled to. Entitlements cascade the
@@ -46,6 +68,8 @@ export function EntitlementsPanel({
   entitledDeployments,
   entitledAgents,
   entitledStores,
+  secretSets,
+  entitledSecretSets,
 }: {
   slug: string;
   name: string;
@@ -53,10 +77,12 @@ export function EntitlementsPanel({
   deployments: Application[];
   agents: CatalogAgent[];
   stores: MemoryStore[];
+  secretSets: SecretSet[];
   entitledInfrastructure: string[];
   entitledDeployments: string[];
   entitledAgents: string[];
   entitledStores: string[];
+  entitledSecretSets: string[];
 }) {
   const router = useRouter();
   const { toast } = useToast();
@@ -74,8 +100,17 @@ export function EntitlementsPanel({
         deps: a.definition.memoryStore ? [{ kind: "memory_store" as const, id: a.definition.memoryStore }] : [],
       })),
       ...stores.map((s) => ({ kind: "memory_store" as const, id: s.id, name: s.name, detail: "Memory", deps: [] as Dependency[] })),
+      ...secretSets.map((s) => ({
+        kind: "secret_set" as const,
+        id: s.id,
+        name: s.name,
+        // The keys are the substance, and the count is what an admin needs to
+        // judge what they are asking this tenant to go and find.
+        detail: `${s.keys.length} key${s.keys.length === 1 ? "" : "s"}`,
+        deps: [] as Dependency[],
+      })),
     ],
-    [infrastructure, deployments, agents, stores],
+    [infrastructure, deployments, agents, stores, secretSets],
   );
   const depsByKey = useMemo(() => new Map(rows.map((r) => [kkey(r.kind, r.id), r.deps])), [rows]);
 
@@ -86,8 +121,9 @@ export function EntitlementsPanel({
         ...entitledDeployments.map((id) => kkey("application", id)),
         ...entitledAgents.map((id) => kkey("agent", id)),
         ...entitledStores.map((id) => kkey("memory_store", id)),
+        ...entitledSecretSets.map((id) => kkey("secret_set", id)),
       ]),
-    [entitledInfrastructure, entitledDeployments, entitledAgents, entitledStores],
+    [entitledInfrastructure, entitledDeployments, entitledAgents, entitledStores, entitledSecretSets],
   );
   // `picked` is what the admin explicitly chose; `required` is the transitive
   // dependency closure of those picks (auto-entitled + locked).
@@ -126,7 +162,13 @@ export function EntitlementsPanel({
   // The effective entitlement set (picks + their required deps), by kind.
   const finalByKind = useMemo(() => {
     const all = new Set<string>([...picked, ...required]);
-    const out: Record<Kind, string[]> = { infrastructure: [], application: [], agent: [], memory_store: [] };
+    const out: Record<Kind, string[]> = {
+      infrastructure: [],
+      application: [],
+      agent: [],
+      memory_store: [],
+      secret_set: [],
+    };
     for (const k of all) {
       const [kind, id] = splitKey(k);
       out[kind].push(id);

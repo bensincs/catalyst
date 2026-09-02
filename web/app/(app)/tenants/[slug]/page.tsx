@@ -1,5 +1,16 @@
 import { notFound } from "next/navigation";
-import { ApiError, getApplications, getCatalog, getInfrastructure, getMe, getMemoryStores, getTenantContext, getTenantMembers, getTenantsRegistry } from "@/lib/api";
+import {
+  ApiError,
+  getApplications,
+  getCatalog,
+  getInfrastructure,
+  getSecretSets,
+  getMe,
+  getMemoryStores,
+  getTenantContext,
+  getTenantMembers,
+  getTenantsRegistry,
+} from "@/lib/api";
 import { TenantOverview } from "@/components/views/tenant-overview";
 import { TenantAccessPanel } from "@/components/views/tenant-access-panel";
 import { TenantRenamePanel } from "@/components/views/tenant-rename-panel";
@@ -22,12 +33,20 @@ export default async function TenantDrillInPage({
 
     let entitlements = null;
     if (platform) {
-      const [registry, catalog, stores, deployments, infrastructure] = await Promise.all([
+      const [
+        registry,
+        catalog,
+        stores,
+        deployments,
+        infrastructure,
+        secretSets,
+      ] = await Promise.all([
         getTenantsRegistry(),
         getCatalog(),
         getMemoryStores(),
         getApplications(),
         getInfrastructure(),
+        getSecretSets(),
       ]);
       const row = registry.find((r) => r.id === slug);
       const platformHosted = ctx.summary.hostingMode === "platform";
@@ -35,11 +54,23 @@ export default async function TenantDrillInPage({
       entitlements = (
         <>
           <TenantRenamePanel slug={slug} name={ctx.tenant.name} />
-          <TenantAccessPanel slug={slug} name={ctx.tenant.name} enabled={ctx.tenant.enabled} />
+          <TenantAccessPanel
+            slug={slug}
+            name={ctx.tenant.name}
+            enabled={ctx.tenant.enabled}
+          />
           {platformHosted ? (
-            <TenantMembersPanel slug={slug} name={ctx.tenant.name} members={members} />
+            <TenantMembersPanel
+              slug={slug}
+              name={ctx.tenant.name}
+              members={members}
+            />
           ) : null}
-          <IngressPanel slug={slug} name={ctx.tenant.name} ingress={ctx.tenant.ingress} />
+          <IngressPanel
+            slug={slug}
+            name={ctx.tenant.name}
+            ingress={ctx.tenant.ingress}
+          />
           {ctx.tenant.cluster.infraDelegated ? (
             <FootprintPanel
               slug={slug}
@@ -56,8 +87,10 @@ export default async function TenantDrillInPage({
             deployments={deployments.filter((d) => d.owner === "")}
             agents={catalog.filter((a) => a.owner === "")}
             stores={stores.filter((s) => s.owner === "")}
+            secretSets={secretSets.filter((s) => s.owner === "")}
             entitledInfrastructure={row?.entitledInfrastructure ?? []}
             entitledDeployments={row?.entitledDeployments ?? []}
+            entitledSecretSets={row?.entitledSecretSets ?? []}
             entitledAgents={row?.entitledAgents ?? []}
             entitledStores={row?.entitledStores ?? []}
           />
@@ -81,12 +114,14 @@ export default async function TenantDrillInPage({
           infrastructure={ctx.infrastructure}
           applications={ctx.applications}
           stores={ctx.stores}
+          secretSets={ctx.secretSets}
         />
         {entitlements}
       </>
     );
   } catch (e) {
-    if (e instanceof ApiError && (e.status === 404 || e.status === 403)) notFound();
+    if (e instanceof ApiError && (e.status === 404 || e.status === 403))
+      notFound();
     throw e;
   }
 }

@@ -100,11 +100,12 @@ export interface ClusterInfo {
 }
 
 /** The kinds of catalog entity a dependency edge can point at. */
-export type DepKind = "infrastructure" | "application" | "agent" | "memory_store";
+export type DepKind = "infrastructure" | "application" | "agent" | "memory_store" | "secret_set";
 
 /** A typed dependency edge in the catalog graph. Allowed edges (enforced in the
- *  UI pickers): infrastructure → infrastructure; application → infrastructure |
- *  application | agent; agent → memory_store (handled in the agent editor). */
+ *  UI pickers): infrastructure → infrastructure | secret_set; application →
+ *  infrastructure | application | agent | secret_set; agent → memory_store
+ *  (handled in the agent editor). */
 export interface Dependency {
   kind: DepKind;
   id: string;
@@ -115,7 +116,7 @@ export interface Dependency {
  *  outputs), a dependency application (name / namespace / serviceHost), or a
  *  dependency agent (agentId / name). */
 export interface WireLink {
-  sourceKind: DepKind; // infrastructure | application | agent
+  sourceKind: DepKind; // infrastructure | application | agent | secret_set
   sourceId: string; // id of the dependency the output comes from
   output: string;
   helmPath: string;
@@ -311,6 +312,7 @@ export interface TenantRegistryRow {
   entitledAgents: string[];
   entitledCount: number;
   entitledStores: string[];
+  entitledSecretSets: string[];
   entitledDeployments: string[];
   entitledInfrastructure: string[];
   lifecycle: Lifecycle;
@@ -428,4 +430,45 @@ export interface Tombstone {
   name: string;
   deletedBy?: string;
   deletedAt?: string;
+}
+
+/** A named collection of secret KEYS — never values. The platform author
+ *  declares the shape; the tenant supplies the values when it enables the set,
+ *  and those go straight to the tenant's own Azure Key Vault.
+ *
+ *  There is deliberately no field here for a value, and no endpoint that returns
+ *  one. The control plane writes secrets through the ARM management plane, which
+ *  has no read-back, so nothing — not even a platform administrator — can
+ *  retrieve what a tenant entered. `keysSet` is the most that can be known: the
+ *  names of the keys a value exists for. */
+export interface SecretSet {
+  id: string;
+  name: string;
+  description: string;
+  owner: string; // "" = platform-authored; else tenant slug
+  keys: string[]; // declared key names
+  createdAt: string;
+  // platform view
+  ownerName?: string;
+  // tenant view flags
+  platform: boolean;
+  owned: boolean;
+  entitled: boolean;
+  enabled?: boolean;
+  health?: Health;
+  keysSet?: string[]; // keys a value has been supplied for
+  detail?: string;
+}
+
+/** The declared keys a tenant has not yet supplied a value for. */
+export function outstandingKeys(s: SecretSet): string[] {
+  const have = new Set(s.keysSet ?? []);
+  return s.keys.filter((k) => !have.has(k));
+}
+
+/** The fixed name of the Kubernetes Secret a set materialises as. Fixed and
+ *  documented rather than generated, because a chart author writes it by hand
+ *  into their values (`existingSecret: cortex-secret-<id>`). */
+export function secretSetName(id: string): string {
+  return `cortex-secret-${id}`;
 }

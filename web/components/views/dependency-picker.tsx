@@ -1,6 +1,6 @@
 "use client";
 
-import { Bot, Boxes, Database, Rocket, type LucideIcon } from "lucide-react";
+import { Bot, Boxes, Database, KeyRound, Rocket, type LucideIcon } from "lucide-react";
 import type { Dependency, DepKind, DepOption } from "@/lib/types";
 import styles from "./dependency-picker.module.css";
 
@@ -9,9 +9,16 @@ const KIND_META: Record<DepKind, { icon: LucideIcon; label: string }> = {
   application: { icon: Rocket, label: "Applications" },
   agent: { icon: Bot, label: "Agents" },
   memory_store: { icon: Database, label: "Memory stores" },
+  secret_set: { icon: KeyRound, label: "Secret stores" },
 };
 
-const GROUP_ORDER: DepKind[] = ["infrastructure", "application", "agent", "memory_store"];
+const GROUP_ORDER: DepKind[] = [
+  "infrastructure",
+  "application",
+  "agent",
+  "memory_store",
+  "secret_set",
+];
 
 /** A typed dependency picker: toggleable pills grouped by kind. Emits the full
  *  {kind,id} edge set. The parent pre-filters `options` to the allowed edges +

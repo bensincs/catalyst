@@ -50,10 +50,10 @@
   --success-ink: #126e40;
   --success-bg: rgb(18 110 64 / 0.1);
   --info: #a964f7;
-  --info-ink: #7c3aed;
+  --info-ink: #7836e9;
   --info-bg: rgb(169 100 247 / 0.12);
   --warning: #b45309;
-  --warning-ink: #b45309;
+  --warning-ink: #a74600;
   --warning-bg: rgb(217 119 6 / 0.12);
   --danger: #b5231b;
   --danger-strong: #b5231b;
@@ -61,7 +61,7 @@
   --danger-bg: rgb(181 35 27 / 0.1);
   --neutral: rgb(41 41 41 / 0.55);
   /* 0.70: at 0.62 a neutral badge's label measured 4.27:1 on its own tint. */
-  --neutral-ink: rgb(41 41 41 / 0.7);
+  --neutral-ink: rgb(41 41 41 / 0.72);
   --neutral-bg: rgb(41 41 41 / 0.08);
 
   --overlay: rgb(0 0 0 / 0.4);

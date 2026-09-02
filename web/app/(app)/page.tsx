@@ -8,7 +8,10 @@ export default async function HomePage() {
   const me = await getMe();
 
   if (me.role === "platform") {
-    const [fleet, tombstones] = await Promise.all([getFleet(), getTombstones()]);
+    const [fleet, tombstones] = await Promise.all([
+      getFleet(),
+      getTombstones(),
+    ]);
     return (
       <FleetView
         stats={fleet.stats}
@@ -31,6 +34,7 @@ export default async function HomePage() {
       infrastructure={ctx.infrastructure}
       applications={ctx.applications}
       stores={ctx.stores}
+      secretSets={ctx.secretSets}
     />
   );
 }

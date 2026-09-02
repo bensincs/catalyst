@@ -14,6 +14,7 @@ import type {
   EnabledAgent,
   FleetStats,
   MemoryStore,
+  SecretSet,
   MemoryStoreDefinition,
   Plan,
   EnrollmentStatus,
@@ -109,6 +110,7 @@ interface ApiTenantContext {
   infrastructure?: ApiInfrastructure[] | null;
   applications?: ApiApplication[] | null;
   stores?: ApiMemoryStore[] | null;
+  secretSets?: ApiSecretSet[] | null;
 }
 
 /* ── Auth: forward the API access token (server-side only) ────────────────── */
@@ -407,6 +409,7 @@ export interface TenantContext {
   infrastructure: Infrastructure[];
   applications: Application[];
   stores: MemoryStore[];
+  secretSets: SecretSet[];
 }
 
 const context = cache(async (path: string): Promise<TenantContext> => {
@@ -416,6 +419,7 @@ const context = cache(async (path: string): Promise<TenantContext> => {
     summary: toSummary(c.tenant),
     agents: (c.agents ?? []).map(toAgent),
     infrastructure: (c.infrastructure ?? []).map(toInfrastructure),
+    secretSets: (c.secretSets ?? []).map(toSecretSet),
     applications: (c.applications ?? []).map(toApplication),
     stores: (c.stores ?? []).map(toStore),
   };
@@ -474,6 +478,7 @@ interface ApiRegistryRow extends ApiTenant {
   entitledAgents: string[];
   entitledCount: number;
   entitledStores: string[];
+  entitledSecretSets?: string[] | null;
   entitledDeployments: string[];
   entitledInfrastructure: string[];
 }
@@ -493,6 +498,7 @@ export const getTenantsRegistry = cache(async (): Promise<TenantRegistryRow[]> =
     entitledAgents: t.entitledAgents ?? [],
     entitledCount: t.entitledCount,
     entitledStores: t.entitledStores ?? [],
+    entitledSecretSets: t.entitledSecretSets ?? [],
     entitledDeployments: t.entitledDeployments ?? [],
     entitledInfrastructure: t.entitledInfrastructure ?? [],
     lifecycle: (t.lifecycle ?? "enrolling") as Lifecycle,
@@ -632,6 +638,46 @@ function normalizeStoreDefinition(d?: Partial<MemoryStoreDefinition> | null): Me
 export const getMemoryStores = async (): Promise<MemoryStore[]> =>
   (await getResources()).stores;
 
+/* ── Secret sets ──────────────────────────────────────────────────────────── */
+
+interface ApiSecretSet {
+  id: string;
+  name: string;
+  description: string;
+  owner: string;
+  keys?: string[] | null;
+  createdAt: string;
+  ownerName?: string;
+  platform?: boolean;
+  owned?: boolean;
+  entitled?: boolean;
+  enabled?: boolean;
+  health?: string;
+  keysSet?: string[] | null;
+  detail?: string;
+}
+
+// Note what is absent: there is no value field, because the API has no way to
+// return one. See SecretSet in types.ts.
+const toSecretSet = (s: ApiSecretSet): SecretSet => ({
+  id: s.id,
+  name: s.name,
+  description: s.description ?? "",
+  owner: s.owner ?? "",
+  keys: s.keys ?? [],
+  createdAt: s.createdAt,
+  ownerName: s.ownerName,
+  platform: s.platform ?? s.owner === "",
+  owned: s.owned ?? false,
+  entitled: s.entitled ?? false,
+  enabled: s.enabled,
+  health: (s.health || undefined) as SecretSet["health"],
+  keysSet: s.keysSet ?? [],
+  detail: s.detail,
+});
+
+export const getSecretSets = async (): Promise<SecretSet[]> => (await getResources()).secretSets;
+
 /* ── Combined resource fetch (one call powers every catalog view) ─────────── */
 
 interface ApiResources {
@@ -639,6 +685,7 @@ interface ApiResources {
   applications?: ApiApplication[] | null;
   agents?: ApiCatalogAgent[] | null;
   memoryStores?: ApiMemoryStore[] | null;
+  secretSets?: ApiSecretSet[] | null;
 }
 
 export interface Resources {
@@ -646,6 +693,7 @@ export interface Resources {
   applications: Application[];
   agents: CatalogAgent[];
   stores: MemoryStore[];
+  secretSets: SecretSet[];
 }
 
 // One request returns every catalog entity the caller can see (role-aware on the
@@ -658,6 +706,7 @@ export const getResources = cache(async (): Promise<Resources> => {
     applications: (r.applications ?? []).map(toApplication),
     agents: (r.agents ?? []).map(toCatalogAgent),
     stores: (r.memoryStores ?? []).map(toStore),
+    secretSets: (r.secretSets ?? []).map(toSecretSet),
   };
 });
 

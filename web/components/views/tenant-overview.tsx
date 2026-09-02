@@ -14,6 +14,7 @@ import {
   type Infrastructure,
   type Lifecycle,
   type MemoryStore,
+  type SecretSet,
   type TenantContextInfo,
 } from "@/lib/types";
 import { useToast } from "@/components/providers/toast-provider";
@@ -29,6 +30,7 @@ export function TenantOverview({
   infrastructure,
   applications,
   stores,
+  secretSets,
 }: {
   tenant: TenantContextInfo;
   agents: EnabledAgent[];
@@ -37,6 +39,7 @@ export function TenantOverview({
   infrastructure?: Infrastructure[];
   applications?: Application[];
   stores?: MemoryStore[];
+  secretSets?: SecretSet[];
 }) {
   const { toast } = useToast();
   const router = useRouter();
@@ -119,6 +122,7 @@ export function TenantOverview({
           applications={applications ?? []}
           agents={agents}
           stores={stores ?? []}
+          secretSets={secretSets ?? []}
         />
       </section>
     </div>

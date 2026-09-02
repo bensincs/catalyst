@@ -2,12 +2,27 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { Bot, Boxes, Brain, Layers, type LucideIcon } from "lucide-react";
-import type { Application, EnabledAgent, Infrastructure, MemoryStore } from "@/lib/types";
-import { agentStatus, applicationStatus, infraStatus, storeStatus } from "@/lib/status";
+import { Bot, Boxes, Brain, KeyRound, Layers, type LucideIcon } from "lucide-react";
+import type {
+  Application,
+  DepKind,
+  EnabledAgent,
+  Infrastructure,
+  MemoryStore,
+  SecretSet,
+} from "@/lib/types";
+import { outstandingKeys } from "@/lib/types";
+import {
+  agentStatus,
+  applicationStatus,
+  infraStatus,
+  secretSetStatus,
+  storeStatus,
+} from "@/lib/status";
 import styles from "./dependency-graph.module.css";
 
-type Kind = "infrastructure" | "application" | "agent" | "memory_store";
+// The catalog's kind vocabulary, not a local copy of it.
+type Kind = DepKind;
 type Tone = "success" | "info" | "warning" | "danger" | "neutral";
 
 interface GNode {
@@ -34,8 +49,15 @@ const COLUMNS: { kind: Kind; label: string; icon: LucideIcon }[] = [
   { kind: "application", label: "Applications", icon: Layers },
   { kind: "agent", label: "Agents", icon: Bot },
   { kind: "memory_store", label: "Memory stores", icon: Brain },
+  { kind: "secret_set", label: "Secret stores", icon: KeyRound },
 ];
-const ICON: Record<Kind, LucideIcon> = { infrastructure: Boxes, application: Layers, agent: Bot, memory_store: Brain };
+const ICON: Record<Kind, LucideIcon> = {
+  infrastructure: Boxes,
+  application: Layers,
+  agent: Bot,
+  memory_store: Brain,
+  secret_set: KeyRound,
+};
 
 const nkey = (kind: Kind, id: string) => `${kind}:${id}`;
 
@@ -44,11 +66,13 @@ export function DependencyGraph({
   applications,
   agents,
   stores,
+  secretSets = [],
 }: {
   infrastructure: Infrastructure[];
   applications: Application[];
   agents: EnabledAgent[];
   stores: MemoryStore[];
+  secretSets?: SecretSet[];
 }) {
   const { nodes, edges, byColumn } = useMemo(() => {
     const nodes: GNode[] = [];
@@ -76,6 +100,28 @@ export function DependencyGraph({
       add({ key: nkey("memory_store", s.id), id: s.id, kind: "memory_store", name: s.name, tone: t.tone, state: t.label, pulse: t.pulse, href: "/memory-stores" });
     }
 
+    for (const s of secretSets) {
+      const t = secretSetStatus(s);
+      const missing = outstandingKeys(s);
+      add({
+        key: nkey("secret_set", s.id),
+        id: s.id,
+        kind: "secret_set",
+        name: s.name,
+        tone: t.tone,
+        state: t.label,
+        pulse: t.pulse,
+        href: "/secret-stores",
+        // The graph exists to explain why something is not live. For a secret
+        // store the reason is almost always "a value is missing", and naming the
+        // keys saves the operator a hop to find out which.
+        detail:
+          missing.length > 0
+            ? `Needs a value for ${missing.join(", ")}`
+            : s.detail,
+      });
+    }
+
     const edges: GEdge[] = [];
     const edge = (fromKind: Kind, fromId: string, toKey: string) => {
       const from = nkey(fromKind, fromId);
@@ -93,7 +139,7 @@ export function DependencyGraph({
 
     const byColumn = COLUMNS.map((c) => ({ ...c, nodes: nodes.filter((n) => n.kind === c.kind) }));
     return { nodes, edges, byColumn };
-  }, [infrastructure, applications, agents, stores]);
+  }, [infrastructure, applications, agents, stores, secretSets]);
 
   const total = nodes.length;
   const live = nodes.filter((n) => n.tone === "success").length;

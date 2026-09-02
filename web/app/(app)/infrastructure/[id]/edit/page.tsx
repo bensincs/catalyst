@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { getInfrastructure, getMe } from "@/lib/api";
+import { getInfrastructure, getMe, getSecretSets } from "@/lib/api";
 import { InfrastructureForm } from "@/components/views/infrastructure-form";
 import type { DepOption, Infrastructure } from "@/lib/types";
 
@@ -12,6 +12,7 @@ export default async function EditInfrastructurePage({ params }: { params: Promi
   const { id } = await params;
   const me = await getMe();
   const all = await getInfrastructure();
+  const sets = await getSecretSets();
 
   const infra = all.find((i) => i.id === id);
   const manageable = infra && (me.role === "platform" ? infra.owner === "" : infra.owned);
@@ -23,5 +24,7 @@ export default async function EditInfrastructurePage({ params }: { params: Promi
     .filter((i) => i.id !== id && usable(i))
     .map((i) => ({ id: i.id, name: i.name, kind: "infrastructure" as const }));
 
-  return <InfrastructureForm infra={infra} depOptions={depOptions} />;
+  const secretSets = sets.filter((s) => (platform ? s.owner === "" : s.owned || s.entitled));
+
+  return <InfrastructureForm infra={infra} depOptions={depOptions} secretSets={secretSets} />;
 }

@@ -133,6 +133,7 @@ type TenantContextResponse struct {
 	Infrastructure []Infrastructure `json:"infrastructure"`
 	Applications   []Application    `json:"applications"`
 	Stores         []MemoryStore    `json:"stores"`
+	SecretSets     []SecretSet      `json:"secretSets"`
 }
 
 type MeResponse struct {

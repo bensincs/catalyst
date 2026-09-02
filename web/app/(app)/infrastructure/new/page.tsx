@@ -1,4 +1,4 @@
-import { getInfrastructure, getMe } from "@/lib/api";
+import { getInfrastructure, getMe, getSecretSets } from "@/lib/api";
 import { InfrastructureForm } from "@/components/views/infrastructure-form";
 import type { DepOption, Infrastructure } from "@/lib/types";
 
@@ -10,6 +10,7 @@ export const dynamic = "force-dynamic";
 export default async function NewInfrastructurePage() {
   const me = await getMe();
   const all = await getInfrastructure();
+  const sets = await getSecretSets();
   const platform = me.role === "platform";
   const usable = (i: Infrastructure) => (platform ? i.owner === "" : i.owned || i.entitled);
 
@@ -17,5 +18,7 @@ export default async function NewInfrastructurePage() {
     .filter(usable)
     .map((i) => ({ id: i.id, name: i.name, kind: "infrastructure" as const }));
 
-  return <InfrastructureForm depOptions={depOptions} />;
+  const secretSets = sets.filter((s) => (platform ? s.owner === "" : s.owned || s.entitled));
+
+  return <InfrastructureForm depOptions={depOptions} secretSets={secretSets} />;
 }

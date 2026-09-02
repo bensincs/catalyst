@@ -69,6 +69,13 @@ export function agentStatus(a: { health?: string }): ResourceStatus {
   return fromHealth(a.health);
 }
 
+/** Secret sets — health carries two different situations: the tenant still owes
+ *  a value (blocked before anything was attempted), or the reconciler could not
+ *  deliver one. Both read as needing attention, and the row's detail says which. */
+export function secretSetStatus(s: { health?: string }): ResourceStatus {
+  return fromHealth(s.health);
+}
+
 /** Memory stores — reconciler health only. */
 export function storeStatus(s: { health?: string }): ResourceStatus {
   return fromHealth(s.health);
