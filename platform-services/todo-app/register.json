@@ -23,15 +23,15 @@
     "written to that tenant's own Key Vault, resolved from there by ARM when the",
     "server is provisioned, and delivered to the app as a Kubernetes Secret."
   ],
-
   "secretSets": [
     {
       "name": "todo database",
       "description": "The PostgreSQL credential. Supplied once by each tenant: it provisions their database server and is delivered to the app. Stored in the tenant's own Key Vault, where the platform cannot read it back.",
-      "keys": ["password"]
+      "keys": [
+        "password"
+      ]
     }
   ],
-
   "infrastructure": [
     {
       "name": "todo db",
@@ -51,7 +51,6 @@
       "dependencies": []
     }
   ],
-
   "applications": [
     {
       "name": "todo app",
@@ -65,21 +64,62 @@
       "exposePort": 80,
       "hostname": "todo",
       "authRequired": false,
-
       "dependencies": [
-        { "kind": "infrastructure", "id": "todo-db" },
-        { "kind": "secret_set", "id": "todo-database" }
+        {
+          "kind": "infrastructure",
+          "id": "todo-db"
+        },
+        {
+          "kind": "secret_set",
+          "id": "todo-database"
+        }
       ],
-
       "wiring": [
-        { "sourceKind": "infrastructure", "sourceId": "todo-db", "output": "host", "helmPath": "database.host" },
-        { "sourceKind": "infrastructure", "sourceId": "todo-db", "output": "port", "helmPath": "database.port" },
-        { "sourceKind": "infrastructure", "sourceId": "todo-db", "output": "administratorLogin", "helmPath": "database.user" },
-        { "sourceKind": "infrastructure", "sourceId": "todo-db", "output": "databaseName", "helmPath": "database.name" },
-        { "sourceKind": "infrastructure", "sourceId": "todo-db", "output": "sslMode", "helmPath": "database.sslMode" },
-        { "sourceKind": "secret_set", "sourceId": "todo-database", "output": "secretName", "helmPath": "database.existingSecret" },
-        { "sourceKind": "secret_set", "sourceId": "todo-database", "output": "key:password", "helmPath": "database.existingSecretPasswordKey" }
-      ]
+        {
+          "sourceKind": "infrastructure",
+          "sourceId": "todo-db",
+          "output": "host",
+          "helmPath": "database.host"
+        },
+        {
+          "sourceKind": "infrastructure",
+          "sourceId": "todo-db",
+          "output": "port",
+          "helmPath": "database.port"
+        },
+        {
+          "sourceKind": "infrastructure",
+          "sourceId": "todo-db",
+          "output": "administratorLogin",
+          "helmPath": "database.user"
+        },
+        {
+          "sourceKind": "infrastructure",
+          "sourceId": "todo-db",
+          "output": "databaseName",
+          "helmPath": "database.name"
+        },
+        {
+          "sourceKind": "infrastructure",
+          "sourceId": "todo-db",
+          "output": "sslMode",
+          "helmPath": "database.sslMode"
+        },
+        {
+          "sourceKind": "secret_set",
+          "sourceId": "todo-database",
+          "output": "secretName",
+          "helmPath": "database.existingSecret"
+        },
+        {
+          "sourceKind": "secret_set",
+          "sourceId": "todo-database",
+          "output": "key:password",
+          "helmPath": "database.existingSecretPasswordKey"
+        }
+      ],
+      "embed": true,
+      "icon": "check-square"
     }
   ]
 }

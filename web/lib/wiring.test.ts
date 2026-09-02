@@ -1,4 +1,5 @@
 import { dependenciesFor, outputLabel, secretSetOutputs } from "./wiring";
+import { pinnedAppsFor } from "./apps";
 
 // Wiring implies a dependency: an app that binds a source's output into its Helm
 // values necessarily depends on that source. Records exist carrying wiring with
@@ -126,5 +127,45 @@ describe("outputLabel", () => {
 
   it("falls back to the bare label when the store is unknown", () => {
     expect(outputLabel("secretName")).toBe("Secret name");
+  });
+});
+
+// An app only belongs in the sidebar when the console can actually open it.
+describe("pinnedAppsFor", () => {
+  const base = {
+    id: "todo-app",
+    name: "Todo",
+    embed: true,
+    enabled: true,
+    exposeService: "todo-app",
+    hostname: "todo",
+    icon: "check-square",
+  };
+  const ctx = (apps: unknown[], appsDomain = "apps.example.com") =>
+    ({ tenant: { ingress: { appsDomain } }, applications: apps }) as never;
+
+  it("builds the URL from the tenant's own domain", () => {
+    expect(pinnedAppsFor(ctx([base]))).toEqual([
+      { id: "todo-app", name: "Todo", icon: "check-square", url: "https://todo.apps.example.com" },
+    ]);
+  });
+
+  it("falls back to the app id when no hostname is set", () => {
+    expect(pinnedAppsFor(ctx([{ ...base, hostname: "" }]))[0].url).toBe(
+      "https://todo-app.apps.example.com",
+    );
+  });
+
+  it("pins nothing when the tenant has no domain", () => {
+    // Without a domain nothing is published, so every entry would open a URL
+    // that does not resolve.
+    expect(pinnedAppsFor(ctx([base], ""))).toEqual([]);
+  });
+
+  it("ignores apps that are not enabled, not embedded, or expose nothing", () => {
+    expect(pinnedAppsFor(ctx([{ ...base, enabled: false }]))).toEqual([]);
+    expect(pinnedAppsFor(ctx([{ ...base, embed: false }]))).toEqual([]);
+    // No Service means no URL — the entry would open nothing.
+    expect(pinnedAppsFor(ctx([{ ...base, exposeService: "" }]))).toEqual([]);
   });
 });

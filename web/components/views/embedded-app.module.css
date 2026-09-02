@@ -1,0 +1,81 @@
+.wrap {
+  display: flex;
+  flex-direction: column;
+  /* Fill the content area so the app gets the height it expects, rather than a
+     short box that makes every embedded app look broken. */
+  min-height: 0;
+  flex: 1;
+}
+
+.actions {
+  display: flex;
+  gap: var(--space-sm);
+}
+
+.frameWrap {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 480px;
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+/* A deliberate seam. The bar says whose software is below it — without one, a
+   page served by the app is indistinguishable from a page served by Cortex. */
+.frameBar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  background: var(--surface-sunken);
+  border-bottom: 1px solid var(--border);
+}
+
+.frameIcon {
+  display: grid;
+  place-items: center;
+  color: var(--text-muted);
+}
+
+.frameHost {
+  font-size: var(--text-caption);
+  color: var(--text-secondary);
+}
+
+.frameNote {
+  margin-left: auto;
+  font-size: var(--text-caption);
+  color: var(--text-muted);
+}
+
+.frame {
+  flex: 1;
+  width: 100%;
+  border: 0;
+  /* The app paints its own background; white avoids a flash of the console's
+     canvas colour showing through before it does. */
+  background: #ffffff;
+}
+
+.footnote {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-sm);
+  margin: var(--space-md) 0 0;
+  font-size: var(--text-body-sm);
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+.footnote svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+@media (max-width: 720px) {
+  .frameNote {
+    display: none;
+  }
+}

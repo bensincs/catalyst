@@ -5,106 +5,348 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Todo</title>
     <style>
+      /* Mirrors the Cortex console's design system (web/app/globals.css) so this
+         reads as part of the platform whether it is opened on its own or
+         embedded in the console's shell.
+
+         Restrained colour: a near-monochrome surface with ONE accent. The accent
+         marks focus and state; the thing you press is near-black ink. Keeping
+         those separate is what stops the violet becoming decoration. */
       :root {
-        --bg: #0f172a;
-        --panel: #1e293b;
-        --panel-2: #273449;
-        --text: #e2e8f0;
-        --muted: #94a3b8;
-        --accent: #38bdf8;
-        --danger: #f87171;
-        --done: #64748b;
+        --canvas: #f6f6f7;
+        --surface: #ffffff;
+        --surface-sunken: #ededed;
+        --surface-hover: rgb(41 41 41 / 0.05);
+
+        --text: #292929;
+        --text-secondary: rgb(41 41 41 / 0.74);
+        --text-muted: rgb(41 41 41 / 0.68);
+
+        --border: rgb(41 41 41 / 0.08);
+        --border-strong: rgb(41 41 41 / 0.16);
+        --field-border: rgb(41 41 41 / 0.24);
+
+        --primary: #292929;
+        --primary-hover: #1f1f1f;
+        --on-primary: #ffffff;
+
+        --accent: #a964f7;
+        --accent-bg: rgb(169 100 247 / 0.12);
+
+        --success-ink: #126e40;
+        --danger-ink: #b5231b;
+        --danger-bg: rgb(181 35 27 / 0.1);
+
+        --radius-xs: 4px;
+        --radius-md: 8px;
+        --radius-lg: 12px;
+        --radius-island: 24px;
+        --radius-full: 999px;
+
+        --space-xs: 4px;
+        --space-sm: 8px;
+        --space-md: 12px;
+        --space-base: 16px;
+        --space-lg: 24px;
+        --space-xl: 32px;
+
+        --dur-fast: 120ms;
+        --dur: 180ms;
+        --ease: cubic-bezier(0.25, 1, 0.5, 1);
+
+        --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.05);
       }
-      * { box-sizing: border-box; }
+
+      /* Not an inversion — a separate, tuned set, exactly as the console does it,
+         so the islands still read as raised against the page. */
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --canvas: #1a1a1a;
+          --surface: #232323;
+          --surface-sunken: #1a1a1a;
+          --surface-hover: rgb(237 237 237 / 0.06);
+
+          --text: #ededed;
+          --text-secondary: rgb(237 237 237 / 0.76);
+          --text-muted: rgb(237 237 237 / 0.7);
+
+          --border: rgb(237 237 237 / 0.1);
+          --border-strong: rgb(237 237 237 / 0.2);
+          --field-border: rgb(237 237 237 / 0.22);
+
+          --primary: #ededed;
+          --primary-hover: #ffffff;
+          --on-primary: #1a1a1a;
+
+          --accent: #a964f7;
+          --accent-bg: rgb(169 100 247 / 0.18);
+
+          --success-ink: #3cbd7d;
+          --danger-ink: #ff8a85;
+          --danger-bg: rgb(255 107 98 / 0.16);
+        }
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
       body {
         margin: 0;
         min-height: 100vh;
-        font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-        background: var(--bg);
+        padding: var(--space-xl) var(--space-base);
+        background: var(--canvas);
         color: var(--text);
-        display: flex;
-        justify-content: center;
-        padding: 3rem 1rem;
+        /* Inter when the browser already has it (the console loads it), with a
+           close system fallback — no external request from an embedded app. */
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+          "Helvetica Neue", sans-serif;
+        font-size: 0.875rem;
+        line-height: 1.5;
+        -webkit-font-smoothing: antialiased;
       }
-      main { width: 100%; max-width: 34rem; }
-      h1 { font-weight: 650; letter-spacing: -0.02em; margin: 0 0 1.25rem; }
-      h1 span { color: var(--accent); }
-      form { display: flex; gap: 0.5rem; margin-bottom: 1.25rem; }
+
+      main {
+        max-width: 640px;
+        margin: 0 auto;
+      }
+
+      header {
+        margin-bottom: var(--space-lg);
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 1.5rem;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+      }
+
+      .subtitle {
+        margin: var(--space-xs) 0 0;
+        color: var(--text-muted);
+        font-size: 0.8125rem;
+      }
+
+      /* The island: a white panel on the light-grey page. */
+      .panel {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-island);
+        padding: var(--space-lg);
+        box-shadow: var(--shadow-sm);
+      }
+
+      form {
+        display: flex;
+        gap: var(--space-sm);
+      }
+
       input[type="text"] {
         flex: 1;
-        padding: 0.7rem 0.85rem;
-        border-radius: 0.6rem;
-        border: 1px solid #334155;
-        background: var(--panel);
+        min-width: 0;
+        padding: var(--space-sm) var(--space-md);
+        font: inherit;
         color: var(--text);
-        font-size: 1rem;
+        background: var(--surface);
+        border: 1px solid var(--field-border);
+        border-radius: var(--radius-md);
+        transition: border-color var(--dur-fast) var(--ease);
       }
-      input[type="text"]:focus { outline: 2px solid var(--accent); border-color: transparent; }
+      input[type="text"]::placeholder {
+        color: var(--text-muted);
+      }
+      input[type="text"]:hover {
+        border-color: var(--border-strong);
+      }
+      input[type="text"]:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 1px;
+        border-color: var(--accent);
+      }
+
       button {
-        border: none;
-        border-radius: 0.6rem;
-        padding: 0.7rem 1.1rem;
-        font-size: 1rem;
-        font-weight: 600;
+        font: inherit;
         cursor: pointer;
-        background: var(--accent);
-        color: #062331;
+        border: 1px solid transparent;
+        border-radius: var(--radius-md);
+        transition:
+          background var(--dur-fast) var(--ease),
+          color var(--dur-fast) var(--ease);
       }
-      button:disabled { opacity: 0.5; cursor: default; }
-      ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.5rem; }
-      li {
+      button:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 1px;
+      }
+
+      /* The thing to press is solid ink, not the accent. */
+      .primary {
+        padding: var(--space-sm) var(--space-base);
+        font-weight: 500;
+        color: var(--on-primary);
+        background: var(--primary);
+        white-space: nowrap;
+      }
+      .primary:hover {
+        background: var(--primary-hover);
+      }
+      .primary:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+
+      ul {
+        list-style: none;
+        margin: var(--space-lg) 0 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+      }
+
+      li.item {
         display: flex;
         align-items: center;
-        gap: 0.75rem;
-        background: var(--panel);
-        border: 1px solid #273449;
-        border-radius: 0.6rem;
-        padding: 0.7rem 0.85rem;
+        gap: var(--space-md);
+        padding: var(--space-md) 0;
+        border-top: 1px solid var(--border);
       }
-      li .title { flex: 1; font-size: 1rem; }
-      li.done .title { text-decoration: line-through; color: var(--done); }
-      li input[type="checkbox"] { width: 1.15rem; height: 1.15rem; accent-color: var(--accent); cursor: pointer; }
-      li .delete {
-        background: transparent;
-        color: var(--danger);
-        padding: 0.25rem 0.5rem;
-        font-size: 1.1rem;
+      li.item:first-child {
+        border-top: none;
+      }
+
+      /* Checkbox: accent marks state, which is exactly what it is for. */
+      input[type="checkbox"] {
+        flex: none;
+        width: 16px;
+        height: 16px;
+        accent-color: var(--accent);
+        cursor: pointer;
+      }
+      input[type="checkbox"]:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+      }
+
+      .title {
+        flex: 1;
+        min-width: 0;
+        overflow-wrap: anywhere;
+      }
+      li.done .title {
+        color: var(--text-muted);
+        text-decoration: line-through;
+      }
+
+      .delete {
+        flex: none;
+        display: grid;
+        place-items: center;
+        width: 28px;
+        height: 28px;
+        font-size: 18px;
         line-height: 1;
+        color: var(--text-muted);
+        background: transparent;
+        border-radius: var(--radius-xs);
       }
-      .empty { color: var(--muted); text-align: center; padding: 2rem 0; }
-      .error { color: var(--danger); min-height: 1.25rem; margin-bottom: 0.75rem; font-size: 0.9rem; }
-      footer { margin-top: 1.5rem; color: var(--muted); font-size: 0.8rem; text-align: center; }
-      footer a { color: var(--muted); }
+      .delete:hover {
+        color: var(--danger-ink);
+        background: var(--danger-bg);
+      }
+
+      .empty {
+        padding: var(--space-xl) var(--space-base);
+        text-align: center;
+        color: var(--text-muted);
+      }
+
+      /* An error is the one thing that must not be missed, so it is the one
+         thing that looks different. */
+      .error {
+        display: none;
+        align-items: flex-start;
+        gap: var(--space-sm);
+        margin-bottom: var(--space-base);
+        padding: var(--space-md);
+        color: var(--text);
+        background: var(--danger-bg);
+        border-radius: var(--radius-md);
+        font-size: 0.8125rem;
+      }
+      .error[data-shown="true"] {
+        display: flex;
+      }
+
+      .count {
+        margin-top: var(--space-base);
+        color: var(--text-muted);
+        font-size: 0.75rem;
+      }
+
+      footer {
+        margin-top: var(--space-lg);
+        color: var(--text-muted);
+        font-size: 0.75rem;
+        text-align: center;
+      }
+      footer a {
+        color: var(--text-secondary);
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        * {
+          transition: none !important;
+        }
+      }
     </style>
   </head>
   <body>
     <main>
-      <h1>todo<span>.</span></h1>
-      <div id="error" class="error" role="alert"></div>
-      <form id="new-todo-form">
-        <input id="new-todo" type="text" placeholder="What needs doing?" maxlength="255" autocomplete="off" />
-        <button type="submit">Add</button>
-      </form>
-      <ul id="list"></ul>
-      <footer>API docs at <a href="/docs">/docs</a> &middot; health at <a href="/healthz">/healthz</a></footer>
+      <header>
+        <h1>Todo</h1>
+        <p class="subtitle">A platform service running in your tenant.</p>
+      </header>
+
+      <div class="panel">
+        <div id="error" class="error" role="alert"></div>
+
+        <form id="new-todo-form">
+          <input
+            id="new-todo"
+            type="text"
+            placeholder="What needs doing?"
+            maxlength="255"
+            autocomplete="off"
+            aria-label="New todo"
+          />
+          <button class="primary" type="submit">Add</button>
+        </form>
+
+        <ul id="list"></ul>
+        <p id="count" class="count"></p>
+      </div>
+
+      <footer>
+        API docs at <a href="/docs">/docs</a> &middot; health at <a href="/healthz">/healthz</a>
+      </footer>
     </main>
 
     <script>
       const api = "/api/todos";
       const listEl = document.getElementById("list");
       const errEl = document.getElementById("error");
+      const countEl = document.getElementById("count");
       const form = document.getElementById("new-todo-form");
       const input = document.getElementById("new-todo");
 
       function showError(msg) {
         errEl.textContent = msg || "";
+        errEl.dataset.shown = msg ? "true" : "false";
       }
 
       async function request(url, options) {
         const res = await fetch(url, options);
-        if (!res.ok) {
-          throw new Error("Request failed (" + res.status + ")");
-        }
+        if (!res.ok) throw new Error("Request failed (" + res.status + ")");
         return res.status === 204 ? null : res.json();
       }
 
@@ -112,20 +354,21 @@
         listEl.innerHTML = "";
         if (!todos.length) {
           const li = document.createElement("li");
-          li.className = "empty-wrap";
-          li.style.background = "transparent";
-          li.style.border = "none";
-          li.innerHTML = '<div class="empty">Nothing here yet. Add your first todo.</div>';
+          li.className = "empty";
+          li.textContent = "Nothing here yet. Add your first todo.";
           listEl.appendChild(li);
+          countEl.textContent = "";
           return;
         }
+
         for (const t of todos) {
           const li = document.createElement("li");
-          if (t.completed) li.className = "done";
+          li.className = t.completed ? "item done" : "item";
 
           const cb = document.createElement("input");
           cb.type = "checkbox";
           cb.checked = t.completed;
+          cb.setAttribute("aria-label", (t.completed ? "Mark incomplete: " : "Mark complete: ") + t.title);
           cb.addEventListener("change", () => toggle(t, cb.checked));
 
           const span = document.createElement("span");
@@ -136,12 +379,16 @@
           del.className = "delete";
           del.type = "button";
           del.innerHTML = "&times;";
-          del.title = "Delete";
+          del.setAttribute("aria-label", "Delete: " + t.title);
           del.addEventListener("click", () => remove(t));
 
           li.append(cb, span, del);
           listEl.appendChild(li);
         }
+
+        const open = todos.filter((t) => !t.completed).length;
+        countEl.textContent =
+          todos.length + (todos.length === 1 ? " item" : " items") + " · " + open + " open";
       }
 
       async function load() {
@@ -153,9 +400,10 @@
         }
       }
 
-      async function toggle(todo, completed) {
+      async function toggle(t, completed) {
         try {
-          await request(api + "/" + todo.id, {
+          showError("");
+          await request(api + "/" + t.id, {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ completed }),
@@ -166,9 +414,10 @@
         }
       }
 
-      async function remove(todo) {
+      async function remove(t) {
         try {
-          await request(api + "/" + todo.id, { method: "DELETE" });
+          showError("");
+          await request(api + "/" + t.id, { method: "DELETE" });
           await load();
         } catch (e) {
           showError(e.message);
@@ -180,6 +429,7 @@
         const title = input.value.trim();
         if (!title) return;
         try {
+          showError("");
           await request(api, {
             method: "POST",
             headers: { "Content-Type": "application/json" },

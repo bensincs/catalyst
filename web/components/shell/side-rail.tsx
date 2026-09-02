@@ -5,7 +5,8 @@ import { usePathname } from "next/navigation";
 import { signOut } from "next-auth/react";
 import { LogOut, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { useConsole } from "@/components/providers/console-provider";
-import { navForRole, homeForRole } from "@/lib/nav";
+import { navForRole, homeForRole, type NavGroup } from "@/lib/nav";
+import { appIcon } from "@/lib/app-icons";
 import { BrandMark } from "./brand-mark";
 import styles from "./side-rail.module.css";
 
@@ -16,9 +17,27 @@ export function RailNav({
   collapsed: boolean;
   onNavigate?: () => void;
 }) {
-  const { role } = useConsole();
+  const { role, pinnedApps } = useConsole();
   const pathname = usePathname();
-  const groups = navForRole(role);
+  // Applications the tenant has installed sit in their own group, below the
+  // console's own navigation. They are the tenant's software, not ours, and
+  // mixing them into "Operate" would blur whose is whose.
+  const appsGroup: NavGroup[] =
+    pinnedApps.length > 0
+      ? [
+          {
+            id: "apps",
+            label: "Apps",
+            items: pinnedApps.map((a) => ({
+              label: a.name,
+              href: `/apps/${a.id}`,
+              icon: appIcon(a.icon),
+              hint: `Open ${a.name}`,
+            })),
+          },
+        ]
+      : [];
+  const groups = [...navForRole(role), ...appsGroup];
   const main = groups.filter((g) => g.id !== "system");
   const system = groups.filter((g) => g.id === "system");
 

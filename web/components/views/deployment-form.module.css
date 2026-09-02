@@ -304,3 +304,48 @@
   flex: 1;
   min-width: 0;
 }
+
+/* Icon choices for an app that appears in the console's navigation. A grid of
+   the icon itself rather than a list of names: the publisher is choosing what
+   the tenant will SEE, so they should be looking at it. */
+.iconGrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+}
+
+.iconChoice {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  color: var(--text-secondary);
+  background: var(--surface);
+  border: 1px solid var(--field-border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease-out-quart),
+    border-color var(--dur-fast) var(--ease-out-quart),
+    background var(--dur-fast) var(--ease-out-quart);
+}
+.iconChoice:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+.iconChoice:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+/* Selection is the accent's job — it is state, not decoration. */
+.iconChoice[data-selected] {
+  color: var(--accent-ink);
+  background: var(--accent-bg);
+  border-color: var(--accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .iconChoice {
+    transition: none;
+  }
+}

@@ -3,13 +3,14 @@ import { redirect } from "next/navigation";
 import { CloudOff, ShieldAlert } from "lucide-react";
 import { auth } from "@/auth";
 import { ApiError, getFleet, getMe, getMyContext, type Me } from "@/lib/api";
+import { pinnedAppsFor } from "@/lib/apps";
 import { ConsoleProvider, type ConsoleData } from "@/components/providers/console-provider";
 import { ToastProvider } from "@/components/providers/toast-provider";
 import { AppShell } from "@/components/shell/app-shell";
 import { PendingApproval } from "@/components/views/pending-approval";
 import { ErrorState } from "@/components/ui/error-state";
 import { RetryButton } from "@/components/ui/retry-button";
-import type { Environment, TenantContextInfo, TenantSummary } from "@/lib/types";
+import type { Environment, PinnedApp, TenantContextInfo, TenantSummary } from "@/lib/types";
 
 // Every authed page reads the signed-in session and the control-plane API per
 // request — there is nothing to prerender. Force dynamic so `next build` never
@@ -59,6 +60,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   let tenants: TenantSummary[] = [];
   let activeTenant: TenantContextInfo | null = null;
   let activeTenantSlug = "";
+  let pinnedApps: PinnedApp[] = [];
 
   try {
     me = await getMe();
@@ -72,7 +74,9 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
     if (me.role === "platform") {
       tenants = (await getFleet()).tenants;
     } else {
-      activeTenant = (await getMyContext()).tenant;
+      const ctx = await getMyContext();
+      activeTenant = ctx.tenant;
+      pinnedApps = pinnedAppsFor(ctx);
     }
   } catch (e) {
     // Session alive but token missing/expired → send them back to sign in.
@@ -112,6 +116,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
     activeTenant,
     cortexTenants: me.tenants ?? [],
     activeTenantSlug,
+    pinnedApps,
   };
 
   return (

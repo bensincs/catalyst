@@ -686,3 +686,16 @@ ALTER TABLE infrastructure DROP COLUMN IF EXISTS secret_params;
 -- Comparing the hash lets a CHANGED template resubmit exactly once, while an
 -- unchanged one still fails fast instead of hammering ARM every sweep.
 ALTER TABLE tenant_infrastructure ADD COLUMN IF NOT EXISTS deployed_hash text NOT NULL DEFAULT '';
+
+-- Publishing an application into the console's own navigation.
+--
+-- An application a tenant has enabled is already reachable at its own URL, but
+-- the operator has to know it exists and go looking. `embed` lets the publisher
+-- offer it as a first-class destination: once a tenant enables it, it appears in
+-- their sidebar and opens inside the console. `icon` is the lucide icon name the
+-- publisher picks so it is recognisable there.
+--
+-- Only meaningful for an application that publishes a Service (expose_service),
+-- since an app with no URL has nothing to show.
+ALTER TABLE applications ADD COLUMN IF NOT EXISTS embed boolean NOT NULL DEFAULT false;
+ALTER TABLE applications ADD COLUMN IF NOT EXISTS icon  text    NOT NULL DEFAULT '';

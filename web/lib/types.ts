@@ -229,6 +229,12 @@ export interface Application {
   hostname?: string; // label under the tenant's domain; blank ⇒ the app's name
   oidcScope?: string; // scope on the tenant's app registration this app needs
   authRequired?: boolean; // put the app behind the tenant's OIDC application
+  /** Offer the app as a destination in the console's sidebar once a tenant
+   *  enables it, instead of leaving them to find its URL. Only meaningful when
+   *  the app publishes a Service — without one there is no URL to open. */
+  embed?: boolean;
+  /** Icon name the publisher picked, so it is recognisable in the sidebar. */
+  icon?: string;
   wiring: WireLink[]; // infrastructure output → Helm values path
   dependencies: Dependency[]; // typed dependencies that must converge first
   createdAt: string;
@@ -489,4 +495,14 @@ export function outstandingKeys(s: SecretSet): string[] {
  *  into their values (`existingSecret: cortex-secret-<id>`). */
 export function secretSetName(id: string): string {
   return `cortex-secret-${id}`;
+}
+
+/** An enabled application the tenant can open from the console's own sidebar.
+ *  Derived per tenant: the catalog says which apps offer this, the tenant's
+ *  domain says where each one actually lives. */
+export interface PinnedApp {
+  id: string;
+  name: string;
+  icon: string;
+  url: string;
 }

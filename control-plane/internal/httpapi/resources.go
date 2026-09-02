@@ -84,6 +84,8 @@ type appInput struct {
 	Hostname       string             `json:"hostname"`
 	OIDCScope      string             `json:"oidcScope"`
 	AuthRequired   bool               `json:"authRequired"`
+	Embed          bool               `json:"embed"`
+	Icon           string             `json:"icon"`
 	Wiring         []shared.WireLink  `json:"wiring"`
 	Dependencies   []model.Dependency `json:"dependencies"`
 }
@@ -128,6 +130,10 @@ func (in appInput) build(id, owner string) model.Application {
 		Hostname:     strings.ToLower(strings.TrimSpace(in.Hostname)),
 		OIDCScope:    strings.TrimSpace(in.OIDCScope),
 		AuthRequired: in.AuthRequired,
+		// Offering an app in the sidebar only means anything when it publishes a
+		// Service: without one there is no URL, and the entry would open nothing.
+		Embed:        in.Embed && strings.TrimSpace(in.ExposeService) != "",
+		Icon:         strings.TrimSpace(in.Icon),
 		Wiring:       in.Wiring,
 		Dependencies: in.Dependencies,
 	}

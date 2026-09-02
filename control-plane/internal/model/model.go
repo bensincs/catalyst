@@ -334,8 +334,8 @@ type Infrastructure struct {
 	ArmTemplate  string         `json:"-"` // resolved ARM template; worker-only
 	BicepOutputs []string       `json:"bicepOutputs"`
 	Dependencies []Dependency   `json:"dependencies"` // infrastructure → infrastructure only
-	CreatedBy    string                `json:"createdBy,omitempty"`
-	CreatedAt    time.Time             `json:"createdAt"`
+	CreatedBy    string         `json:"createdBy,omitempty"`
+	CreatedAt    time.Time      `json:"createdAt"`
 
 	// Populated in the tenant view (per-tenant enablement + runtime status):
 	Platform   bool   `json:"platform"`
@@ -376,9 +376,16 @@ type Application struct {
 	// (<hostname>.<appsDomain>); empty ⇒ the app id. AuthRequired puts the app
 	// behind an OIDC login; OIDCScope is the scope on the tenant's app
 	// registration it requires.
-	Hostname     string            `json:"hostname"`
-	OIDCScope    string            `json:"oidcScope"`
-	AuthRequired bool              `json:"authRequired"`
+	Hostname     string `json:"hostname"`
+	OIDCScope    string `json:"oidcScope"`
+	AuthRequired bool   `json:"authRequired"`
+	// Embed offers the app as a destination in the console's own sidebar once a
+	// tenant enables it, rather than leaving them to find its URL. Icon is the
+	// lucide icon name the publisher picks so it is recognisable there. Only
+	// meaningful when the app publishes a Service — an app with no URL has
+	// nothing to show.
+	Embed        bool              `json:"embed"`
+	Icon         string            `json:"icon,omitempty"`
 	Wiring       []shared.WireLink `json:"wiring"`       // infra dependency output → Helm values path
 	Dependencies []Dependency      `json:"dependencies"` // infrastructure | application | agent
 	CreatedBy    string            `json:"createdBy,omitempty"`

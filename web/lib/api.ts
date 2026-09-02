@@ -330,6 +330,8 @@ function toApplication(a: ApiApplication): Application {
     hostname: a.hostname || undefined,
     oidcScope: a.oidcScope || undefined,
     authRequired: Boolean(a.authRequired),
+    embed: Boolean(a.embed),
+    icon: a.icon || undefined,
     wiring: a.wiring ?? [],
     dependencies: a.dependencies ?? [],
     createdAt: a.createdAt,
@@ -594,6 +596,8 @@ interface ApiApplication {
   exposeService?: string;
   exposePort?: number;
   hostname?: string;
+  embed?: boolean;
+  icon?: string;
   oidcScope?: string;
   authRequired?: boolean;
   wiring?: WireLink[] | null;

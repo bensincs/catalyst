@@ -43,6 +43,7 @@ import type {
   Role,
   WireLink,
 } from "@/lib/types";
+import { APP_ICONS } from "@/lib/app-icons";
 import styles from "./deployment-form.module.css";
 
 type Obj = Record<string, unknown>;
@@ -131,6 +132,8 @@ export function DeploymentForm({
   const [exposePort, setExposePort] = useState(app?.exposePort ?? 80);
   const [hostname, setHostname] = useState(app?.hostname ?? "");
   const [authRequired, setAuthRequired] = useState(Boolean(app?.authRequired));
+  const [embed, setEmbed] = useState(Boolean(app?.embed));
+  const [icon, setIcon] = useState(app?.icon ?? APP_ICONS[0].name);
   const [oidcScope, setOidcScope] = useState(app?.oidcScope ?? "");
   const [wiring, setWiring] = useState<WireLink[]>(app?.wiring ?? []);
   const [dependencies, setDependencies] = useState<Dependency[]>(() =>
@@ -253,6 +256,8 @@ export function DeploymentForm({
       exposePort: exposePort || 80,
       hostname: hostname.trim().toLowerCase(),
       authRequired,
+      embed,
+      icon,
       oidcScope: oidcScope.trim(),
       wiring: cleanWiring,
       dependencies,
@@ -582,6 +587,66 @@ export function DeploymentForm({
               </span>
             </span>
           </label>
+          {/* Offering the app in the console's own navigation. Only sensible
+              once it publishes a Service — without one there is no URL, so the
+              entry would open nothing. */}
+          {exposeService.trim() !== "" && (
+            <>
+              <label
+                style={{
+                  display: "flex",
+                  gap: 8,
+                  alignItems: "flex-start",
+                  marginTop: 14,
+                  fontSize: 13,
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={embed}
+                  onChange={(e) => setEmbed(e.target.checked)}
+                  style={{ marginTop: 3 }}
+                />
+                <span>
+                  <strong>Show in the sidebar</strong>
+                  <span
+                    style={{
+                      display: "block",
+                      color: "var(--text-secondary)",
+                      fontSize: 12,
+                    }}
+                  >
+                    Once a tenant enables this, it appears in their navigation and opens
+                    inside the console — instead of them having to know its URL. It stays
+                    their application, served from their own domain.
+                  </span>
+                </span>
+              </label>
+
+              {embed && (
+                <div style={{ marginTop: 12 }}>
+                  <Field label="Icon" htmlFor="app-icon" hint="How it is recognised in the sidebar.">
+                    <div className={styles.iconGrid}>
+                      {APP_ICONS.map(({ name, label, icon: I }: (typeof APP_ICONS)[number]) => (
+                        <button
+                          key={name}
+                          type="button"
+                          className={styles.iconChoice}
+                          data-selected={icon === name || undefined}
+                          onClick={() => setIcon(name)}
+                          aria-label={label}
+                          aria-pressed={icon === name}
+                          title={label}
+                        >
+                          <I size={17} strokeWidth={2} aria-hidden />
+                        </button>
+                      ))}
+                    </div>
+                  </Field>
+                </div>
+              )}
+            </>
+          )}
         </Section>
 
         {depOptions.length > 0 && (

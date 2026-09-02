@@ -11,6 +11,7 @@ import {
 } from "react";
 import type {
   Environment,
+  PinnedApp,
   Role,
   TenantContextInfo,
   TenantSummary,
@@ -33,6 +34,9 @@ export interface ConsoleData {
   activeTenant: TenantContextInfo | null; // tenant: own; platform: null
   cortexTenants: TenantSummary[]; // every Cortex tenant the caller can operate (delegated + memberships)
   activeTenantSlug: string; // the explicitly-selected tenant slug ('' ⇒ primary)
+  /** Enabled applications the tenant can open from inside the console. Empty for
+   *  the platform view, which operates tenants rather than using their apps. */
+  pinnedApps: PinnedApp[];
 }
 
 interface ConsoleState extends ConsoleData {

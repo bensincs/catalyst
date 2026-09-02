@@ -1990,6 +1990,7 @@ var ErrDeploymentNotAccessible = errors.New("deployment not accessible to tenant
 const applicationCols = `a.id, a.name, a.description, a.owner_tenant, a.namespace,
 	a.repo_url, a.chart, a.target_revision, a.values, a.expose_service, a.expose_port,
 	coalesce(a.hostname,''), coalesce(a.oidc_scope,''), coalesce(a.auth_required,false),
+	coalesce(a.embed,false), coalesce(a.icon,''),
 	a.wiring, a.dependencies, a.created_by, a.created_at`
 
 // appScanDest scans the fixed columns; wiring + dependencies (jsonb) are captured
@@ -1998,6 +1999,7 @@ func appScanDest(a *model.Application, wiringRaw, depsRaw *[]byte) []any {
 	return []any{&a.ID, &a.Name, &a.Description, &a.Owner, &a.Namespace,
 		&a.RepoURL, &a.Chart, &a.TargetRevision, &a.Values, &a.ExposeService, &a.ExposePort,
 		&a.Hostname, &a.OIDCScope, &a.AuthRequired,
+		&a.Embed, &a.Icon,
 		wiringRaw, depsRaw, &a.CreatedBy, &a.CreatedAt}
 }
 
@@ -2228,10 +2230,12 @@ func (s *Store) UpdateApplication(ctx context.Context, a model.Application) erro
 		`UPDATE applications SET name = $2, description = $3, namespace = $4, repo_url = $5,
 		   chart = $6, target_revision = $7, values = $8, expose_service = $9, expose_port = $10,
 		   hostname = $11, oidc_scope = $12, auth_required = $13,
-		   wiring = $14, dependencies = $15
+		   embed = $14, icon = $15,
+		   wiring = $16, dependencies = $17
 		 WHERE id = $1`,
 		a.ID, a.Name, a.Description, a.Namespace, a.RepoURL, a.Chart, a.TargetRevision, a.Values,
 		a.ExposeService, a.ExposePort, a.Hostname, a.OIDCScope, a.AuthRequired,
+		a.Embed, a.Icon,
 		wiringJSON(a.Wiring), depsJSON(a.Dependencies))
 	if err != nil {
 		return err
