@@ -1,0 +1,57 @@
+{
+  "_comment": [
+    "Registers the todo app in the platform catalog. Apply with:",
+    "    cortexctl create -f platform-services/todo-app/register.json",
+    "or POST it to /api/resources. The whole batch is created in one",
+    "transaction, in dependency order, so the application may reference the",
+    "secret store declared alongside it.",
+    "",
+    "Ids are derived from name: 'todo app' -> 'todo-app'. Keep the names as",
+    "they are or the dependency and wiring ids below stop matching.",
+    "",
+    "INFRASTRUCTURE IS DELIBERATELY ABSENT. See register-infrastructure.md —",
+    "the Postgres module requires a @secure() admin password, and there is",
+    "currently no way to give it one without baking it into the ARM template."
+  ],
+
+  "secretSets": [
+    {
+      "name": "todo database",
+      "description": "The PostgreSQL credential the todo app connects with. Each tenant supplies its own value; it is written to that tenant's own Key Vault and cannot be read back by the platform.",
+      "keys": ["password"]
+    }
+  ],
+
+  "applications": [
+    {
+      "name": "todo app",
+      "description": "FastAPI + PostgreSQL todo service. Reads its database credential from a Kubernetes Secret rather than from its own values.",
+      "namespace": "todo-app",
+      "repoURL": "oci://cortexcpacr6hy6uurw.azurecr.io/charts",
+      "chart": "todo-app",
+      "targetRevision": "0.1.0",
+      "values": "image:\n  repository: cortexcpacr6hy6uurw.azurecr.io/images/todo-app\nimagePullSecrets:\n  - name: cortex-registry\ndatabase:\n  host: REPLACE_ME.postgres.database.azure.com\n  port: 5432\n  name: todos\n  user: todoadmin\n  sslMode: require\n",
+      "exposeService": "todo-app-todo-app",
+      "exposePort": 80,
+      "hostname": "todo",
+      "authRequired": false,
+
+      "dependencies": [{ "kind": "secret_set", "id": "todo-database" }],
+
+      "wiring": [
+        {
+          "sourceKind": "secret_set",
+          "sourceId": "todo-database",
+          "output": "secretName",
+          "helmPath": "database.existingSecret"
+        },
+        {
+          "sourceKind": "secret_set",
+          "sourceId": "todo-database",
+          "output": "key:password",
+          "helmPath": "database.existingSecretPasswordKey"
+        }
+      ]
+    }
+  ]
+}

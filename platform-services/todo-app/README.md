@@ -51,6 +51,22 @@ The chart supports either style — set `database.password` and it creates its o
 Secret, or set `database.existingSecret` and it reads one. The platform always
 uses the second.
 
+## Registering it
+
+```sh
+cortexctl create -f platform-services/todo-app/register.json
+```
+
+Publish the artifacts first — the **Publish platform service** workflow, with
+`service: todo-app`. It refuses to overwrite a version that already exists,
+because a tenant pins one and republishing changes what is already running.
+
+`register.json` registers the **application** and its **secret store**. The
+Postgres module is deliberately not registered yet: it requires a `@secure()`
+admin password, and there is no way to supply one without baking it into the ARM
+template. See [register-infrastructure.md](register-infrastructure.md) for the
+three options and a recommendation.
+
 ## Local development
 
 ```sh

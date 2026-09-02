@@ -1,0 +1,123 @@
+name: Platform services CI
+
+# Validates every platform service on each change: the app's tests, its image
+# build, its chart, and its Bicep module. Nothing is published here — publishing
+# is a deliberate act (publish-platform-service.yml), because a tenant pins a
+# version and republishing one changes what is already running in its cluster.
+
+on:
+  push:
+    paths:
+      - "platform-services/**"
+      - ".github/workflows/platform-services.yml"
+  pull_request:
+    paths:
+      - "platform-services/**"
+  workflow_dispatch:
+
+concurrency:
+  group: platform-services-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Which services exist is derived from the directory listing rather than
+  # maintained by hand, so adding a service cannot be half-done.
+  discover:
+    name: discover services
+    runs-on: ubuntu-latest
+    outputs:
+      services: ${{ steps.list.outputs.services }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: list
+        run: |
+          set -euo pipefail
+          services=$(find platform-services -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort | jq -R . | jq -sc .)
+          echo "services=$services" >> "$GITHUB_OUTPUT"
+          echo "Found: $services"
+
+  validate:
+    name: ${{ matrix.service }}
+    needs: discover
+    if: needs.discover.outputs.services != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJson(needs.discover.outputs.services) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: App tests
+        run: |
+          set -euo pipefail
+          dir="platform-services/${{ matrix.service }}/app"
+          [ -d "$dir" ] || { echo "no app/ — nothing to test"; exit 0; }
+          pipx install uv >/dev/null 2>&1 || pip install uv
+          cd "$dir"
+          uv sync --frozen
+          uv run pytest -q
+
+      - name: Image builds
+        run: |
+          set -euo pipefail
+          df="platform-services/${{ matrix.service }}/app/Dockerfile"
+          [ -f "$df" ] || { echo "no Dockerfile — nothing to build"; exit 0; }
+          docker build -f "$df" "platform-services/${{ matrix.service }}/app" -t "${{ matrix.service }}:ci"
+
+      - name: Chart lints
+        run: |
+          set -euo pipefail
+          dir="platform-services/${{ matrix.service }}/chart"
+          [ -d "$dir" ] || { echo "no chart/ — nothing to lint"; exit 0; }
+          helm lint "$dir" --strict \
+            --set database.host=example.postgres.database.azure.com \
+            --set database.user=admin \
+            --set database.existingSecret=cortex-secret-example
+          helm template "$dir" \
+            --set database.host=example.postgres.database.azure.com \
+            --set database.user=admin \
+            --set database.existingSecret=cortex-secret-example > /dev/null
+
+      - name: Chart takes a secret by reference, not by value
+        run: |
+          set -euo pipefail
+          dir="platform-services/${{ matrix.service }}/chart"
+          [ -d "$dir" ] || exit 0
+          # A chart that can ONLY take a literal credential cannot be used by the
+          # platform: values are copied verbatim into the Argo Application, so a
+          # password set there is readable by anyone with cluster access. Charts
+          # that take no credential at all are fine and skip this.
+          if grep -rqi "password\|secretKey\|apiKey" "$dir/values.yaml"; then
+            grep -qi "existingSecret" "$dir/values.yaml" || {
+              echo "::error::$dir takes a credential but offers no existingSecret option."
+              echo "Add one, or the credential has to be written into the deployment's values."
+              exit 1
+            }
+          fi
+
+      - name: Bicep module compiles
+        run: |
+          set -euo pipefail
+          f="platform-services/${{ matrix.service }}/infra/main.bicep"
+          [ -f "$f" ] || { echo "no infra/main.bicep — nothing to compile"; exit 0; }
+          az bicep install
+          az bicep build --file "$f" --outfile /tmp/${{ matrix.service }}.json
+
+      - name: Bicep module does not emit a secret
+        run: |
+          set -euo pipefail
+          f="platform-services/${{ matrix.service }}/infra/main.bicep"
+          [ -f "$f" ] || exit 0
+          # A @secure() output is not secure once re-exported: it lands in
+          # cleartext in the deployment's outputs, is stored against the tenant,
+          # and is then merged into a dependent app's Helm values. The control
+          # plane drops them for that reason; failing here says so at authoring
+          # time instead of leaving the author wondering where their output went.
+          if awk '/^@secure\(\)/{s=1;next} /^output /{if(s){print;s=0};next} {s=0}' "$f" | grep -q .; then
+            echo "::error::$f declares a @secure() output. Secrets must not leave a module as outputs."
+            exit 1
+          fi

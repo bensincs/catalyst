@@ -23,9 +23,9 @@ import (
 // so the same binary drives any environment.
 const (
 	defAPIURL   = "https://api.catalyst.msft.ae"
-	defAPIAppID = "1680be6b-9a92-4244-b800-4d3b902fecff"           // the control-plane API app registration
-	defClientID = "04b07795-8ddb-461a-bbee-02f9e1bf7b46"           // Azure CLI public client (pre-consented to the API scope)
-	defTenant   = "organizations"                                  // any work/school tenant; pin with --tenant
+	defAPIAppID = "1680be6b-9a92-4244-b800-4d3b902fecff" // the control-plane API app registration
+	defClientID = "04b07795-8ddb-461a-bbee-02f9e1bf7b46" // Azure CLI public client (pre-consented to the API scope)
+	defTenant   = "organizations"                        // any work/school tenant; pin with --tenant
 )
 
 type config struct {
@@ -113,10 +113,14 @@ The resources file is the batch the control plane's POST /api/resources accepts:
     "infrastructure": [ { "name": "kv", "bicepModule": "br/public:avm/res/key-vault/vault:0.13.3", "bicepParams": {}, "dependencies": [] } ],
     "memoryStores":   [ { "name": "notes", "description": "", "definition": {} } ],
     "agents":         [ { "name": "Reviewer", "type": "prompt", "model": "gpt-4o", "definition": { "instructions": "..." } } ],
-    "applications":   [ { "name": "web", "repoURL": "https://…", "chart": "nginx", "namespace": "web", "dependencies": [] } ]
+    "applications":   [ { "name": "web", "repoURL": "https://…", "chart": "nginx", "namespace": "web", "dependencies": [] } ],
+    "secretSets":     [ { "name": "db creds", "keys": ["password"] } ]
   }
 
-Any subset of the four kinds is allowed; the whole batch is created in one
+A secret set declares KEY NAMES only — there is no field for a value, because
+each tenant supplies its own when it enables the set.
+
+Any subset of the kinds is allowed; the whole batch is created in one
 transaction, in dependency order. Common flags: --api-url, --tenant, --client-id.
 Env: CORTEX_API_URL, CORTEX_TENANT, CORTEX_CLIENT_ID, CORTEX_CLIENT_SECRET.
 `)
@@ -124,17 +128,18 @@ Env: CORTEX_API_URL, CORTEX_TENANT, CORTEX_CLIENT_ID, CORTEX_CLIENT_SECRET.
 
 /* ── create ─────────────────────────────────────────────────────────────── */
 
-// batch mirrors the control plane's ApplyBatch: any subset of the four kinds.
+// batch mirrors the control plane's ApplyBatch: any subset of the kinds.
 // Items stay raw so the file is passed through verbatim (the API is the schema).
 type batch struct {
 	Infrastructure []json.RawMessage `json:"infrastructure,omitempty"`
 	MemoryStores   []json.RawMessage `json:"memoryStores,omitempty"`
 	Agents         []json.RawMessage `json:"agents,omitempty"`
 	Applications   []json.RawMessage `json:"applications,omitempty"`
+	SecretSets     []json.RawMessage `json:"secretSets,omitempty"`
 }
 
 func (b batch) count() int {
-	return len(b.Infrastructure) + len(b.MemoryStores) + len(b.Agents) + len(b.Applications)
+	return len(b.Infrastructure) + len(b.MemoryStores) + len(b.Agents) + len(b.Applications) + len(b.SecretSets)
 }
 
 func cmdCreate(args []string) error {

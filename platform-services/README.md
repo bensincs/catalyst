@@ -30,6 +30,24 @@ platform-services/<service>/
   README.md what it is and how it is registered
 ```
 
+## Publishing and registering
+
+Every service is validated on push (**Platform services CI**): its tests, image
+build, chart lint and Bicep compile. Publishing is separate and manual
+(**Publish platform service**), because a tenant pins a version — republishing
+one changes what is already running in its cluster, so it should be a decision
+rather than a side effect of merging. That job refuses to overwrite an existing
+version unless explicitly told to.
+
+Artifact names follow the directory name: `platform-services/todo-app` publishes
+`images/todo-app`, `charts/todo-app` and `bicep/todo-app`.
+
+Each service carries a `register.json` — the batch the catalog accepts:
+
+```sh
+cortexctl create -f platform-services/<service>/register.json
+```
+
 ## Secrets do not travel in values
 
 A credential is never written into a chart's values, and never passed as a Bicep

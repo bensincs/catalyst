@@ -1,0 +1,152 @@
+name: Publish platform service
+
+# Publishes a platform service's artifacts to the platform registry: the
+# container image, the Helm chart, and the Bicep module.
+#
+# Manual on purpose. A tenant pins a version, so republishing one changes what is
+# already running in somebody's cluster — that should be a decision, not a
+# consequence of merging. The job refuses to overwrite an existing version unless
+# asked to.
+
+on:
+  workflow_dispatch:
+    inputs:
+      service:
+        description: "Service directory under platform-services/"
+        required: true
+        type: string
+      artifacts:
+        description: "Which artifacts to publish"
+        required: true
+        default: all
+        type: choice
+        options: [all, image, chart, bicep]
+      overwrite:
+        description: "Republish a version that already exists (changes what tenants pinned to it are running)"
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: publish-${{ inputs.service }}
+  cancel-in-progress: false
+
+permissions:
+  id-token: write # OIDC token for azure/login
+  contents: read
+
+jobs:
+  publish:
+    name: ${{ inputs.service }}
+    runs-on: ubuntu-latest
+    env:
+      ACR_NAME: ${{ vars.ACR_NAME || 'cortexcpacr6hy6uurw' }}
+      SERVICE: ${{ inputs.service }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve service + versions
+        id: v
+        run: |
+          set -euo pipefail
+          dir="platform-services/$SERVICE"
+          [ -d "$dir" ] || { echo "::error::no such service: $dir"; exit 1; }
+
+          # The chart is the source of truth for both versions: `version` is the
+          # chart's own, `appVersion` is the application it deploys and therefore
+          # the image tag. The Bicep module has no intrinsic version, so it takes
+          # the app's — one service release, one number.
+          chart_ver=""; app_ver=""
+          if [ -f "$dir/chart/Chart.yaml" ]; then
+            chart_ver=$(awk '/^version:/{print $2; exit}' "$dir/chart/Chart.yaml" | tr -d '"')
+            app_ver=$(awk '/^appVersion:/{print $2; exit}' "$dir/chart/Chart.yaml" | tr -d '"')
+          fi
+          : "${app_ver:=$chart_ver}"
+          [ -n "$app_ver" ] || { echo "::error::cannot determine a version for $SERVICE"; exit 1; }
+
+          echo "dir=$dir"              >> "$GITHUB_OUTPUT"
+          echo "chart_ver=$chart_ver"  >> "$GITHUB_OUTPUT"
+          echo "app_ver=$app_ver"      >> "$GITHUB_OUTPUT"
+          echo "chart $chart_ver · app $app_ver"
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Refuse to overwrite a published version
+        if: ${{ !inputs.overwrite }}
+        run: |
+          set -euo pipefail
+          clash=0
+          check() { # repo, tag
+            if az acr repository show-tags --name "$ACR_NAME" --repository "$1" -o tsv 2>/dev/null | grep -qx "$2"; then
+              echo "::error::$1:$2 already exists. Bump the version, or re-run with overwrite."
+              clash=1
+            fi
+          }
+          want="${{ inputs.artifacts }}"
+          case "$want" in
+            all|image) check "images/$SERVICE" "${{ steps.v.outputs.app_ver }}" ;;
+          esac
+          case "$want" in
+            all|chart) check "charts/$SERVICE" "${{ steps.v.outputs.chart_ver }}" ;;
+          esac
+          case "$want" in
+            all|bicep) check "bicep/$SERVICE" "${{ steps.v.outputs.app_ver }}" ;;
+          esac
+          exit $clash
+
+      - name: Publish image
+        if: ${{ inputs.artifacts == 'all' || inputs.artifacts == 'image' }}
+        run: |
+          set -euo pipefail
+          dir="${{ steps.v.outputs.dir }}"
+          [ -f "$dir/app/Dockerfile" ] || { echo "no app/Dockerfile — skipping"; exit 0; }
+          az acr build \
+            --registry "$ACR_NAME" \
+            --image "images/$SERVICE:${{ steps.v.outputs.app_ver }}" \
+            --file "$dir/app/Dockerfile" \
+            "$dir/app"
+          echo "### image \`images/$SERVICE:${{ steps.v.outputs.app_ver }}\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish chart
+        if: ${{ inputs.artifacts == 'all' || inputs.artifacts == 'chart' }}
+        run: |
+          set -euo pipefail
+          dir="${{ steps.v.outputs.dir }}"
+          [ -d "$dir/chart" ] || { echo "no chart/ — skipping"; exit 0; }
+          # ACR's documented Helm login: a refresh token against the null GUID.
+          token=$(az acr login --name "$ACR_NAME" --expose-token --query accessToken -o tsv)
+          helm registry login "$ACR_NAME.azurecr.io" \
+            --username 00000000-0000-0000-0000-000000000000 --password "$token"
+          helm package "$dir/chart" --destination /tmp/dist
+          helm push "/tmp/dist/$SERVICE-${{ steps.v.outputs.chart_ver }}.tgz" \
+            "oci://$ACR_NAME.azurecr.io/charts"
+          helm registry logout "$ACR_NAME.azurecr.io" || true
+          echo "### chart \`charts/$SERVICE:${{ steps.v.outputs.chart_ver }}\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish Bicep module
+        if: ${{ inputs.artifacts == 'all' || inputs.artifacts == 'bicep' }}
+        run: |
+          set -euo pipefail
+          dir="${{ steps.v.outputs.dir }}"
+          [ -f "$dir/infra/main.bicep" ] || { echo "no infra/main.bicep — skipping"; exit 0; }
+          az bicep install
+          az bicep publish \
+            --file "$dir/infra/main.bicep" \
+            --target "br:$ACR_NAME.azurecr.io/bicep/$SERVICE:${{ steps.v.outputs.app_ver }}" \
+            --force
+          echo "### module \`bicep/$SERVICE:${{ steps.v.outputs.app_ver }}\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: How to register it
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+
+          Register with:
+          \`\`\`
+          cortexctl create -f platform-services/$SERVICE/register.json
+          \`\`\`
+          EOF
