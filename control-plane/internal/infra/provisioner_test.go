@@ -6,8 +6,8 @@ import (
 )
 
 func TestSubstituteTokens(t *testing.T) {
-	arm := `{"name":"cortexkv{{tenantHash}}","tenant":"{{tenant}}","loc":"{{region}}"}`
-	out := substituteTokens(arm, "t-cff8707ddd78", "uaenorth")
+	arm := `{"name":"cortexkv{{tenantHash}}","tenant":"{{tenant}}","loc":"{{region}}","vault":"{{vaultName}}"}`
+	out := substituteTokens(arm, "t-cff8707ddd78", "uaenorth", "cortex-kv-abc123")
 	if strings.Contains(out, "{{") {
 		t.Fatalf("tokens not substituted: %s", out)
 	}
@@ -21,6 +21,11 @@ func TestSubstituteTokens(t *testing.T) {
 	}
 	if tenantHash("t-other") == h {
 		t.Fatalf("tenantHash collision")
+	}
+	// The tenant's vault name reaches the template so a module can resolve its
+	// own credential from it — a name, never a value.
+	if !strings.Contains(out, `"vault":"cortex-kv-abc123"`) {
+		t.Fatalf("vaultName token not applied: %s", out)
 	}
 	if !strings.Contains(out, "cortexkv"+h) {
 		t.Fatalf("hash token not applied: %s", out)

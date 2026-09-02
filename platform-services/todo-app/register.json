@@ -2,55 +2,76 @@
   "_comment": [
     "Registers the todo app in the platform catalog. Apply with:",
     "    cortexctl create -f platform-services/todo-app/register.json",
-    "or POST it to /api/resources. The whole batch is created in one",
-    "transaction, in dependency order, so the application may reference the",
-    "secret store declared alongside it.",
     "",
-    "Ids are derived from name: 'todo app' -> 'todo-app'. Keep the names as",
-    "they are or the dependency and wiring ids below stop matching.",
+    "The whole batch is created in one transaction, in dependency order, so the",
+    "application may reference the infrastructure and secret store declared",
+    "alongside it.",
     "",
-    "INFRASTRUCTURE IS DELIBERATELY ABSENT. See register-infrastructure.md —",
-    "the Postgres module requires a @secure() admin password, and there is",
-    "currently no way to give it one without baking it into the ARM template."
+    "Ids come from names: 'todo app' -> 'todo-app'. Keep the names as they are,",
+    "or the dependency and wiring ids stop matching.",
+    "",
+    "Publish the artifacts first (Publish platform service, service: todo-app).",
+    "",
+    "No credential appears anywhere in this file, and there is nowhere to put",
+    "one. The tenant supplies the password once, to the secret store; it is",
+    "written to that tenant's own Key Vault, resolved from there by ARM when the",
+    "server is provisioned, and delivered to the app as a Kubernetes Secret."
   ],
 
   "secretSets": [
     {
       "name": "todo database",
-      "description": "The PostgreSQL credential the todo app connects with. Each tenant supplies its own value; it is written to that tenant's own Key Vault and cannot be read back by the platform.",
+      "description": "The PostgreSQL credential. Supplied once by each tenant: it provisions their database server and is delivered to the app. Stored in the tenant's own Key Vault, where the platform cannot read it back.",
       "keys": ["password"]
+    }
+  ],
+
+  "infrastructure": [
+    {
+      "name": "todo db",
+      "description": "Azure Database for PostgreSQL Flexible Server. Reads its admin password from the tenant's own Key Vault at deploy time rather than being handed one.",
+      "bicepModule": "br:cortexcpacr6hy6uurw.azurecr.io/bicep/todo-app:0.1.0",
+      "bicepParams": {
+        "name": "todo-{{tenantHash}}",
+        "databaseName": "todos",
+        "administratorLogin": "todoadmin",
+        "vaultName": "{{vaultName}}",
+        "passwordSecretName": "set-todo-database--password",
+        "skuName": "Standard_B1ms",
+        "skuTier": "Burstable",
+        "storageSizeGB": 32
+      },
+      "dependencies": []
     }
   ],
 
   "applications": [
     {
       "name": "todo app",
-      "description": "FastAPI + PostgreSQL todo service. Reads its database credential from a Kubernetes Secret rather than from its own values.",
+      "description": "FastAPI + PostgreSQL todo service. Its database credential is read from a Kubernetes Secret, never from its own values.",
       "namespace": "todo-app",
       "repoURL": "oci://cortexcpacr6hy6uurw.azurecr.io/charts",
       "chart": "todo-app",
       "targetRevision": "0.1.0",
-      "values": "image:\n  repository: cortexcpacr6hy6uurw.azurecr.io/images/todo-app\nimagePullSecrets:\n  - name: cortex-registry\ndatabase:\n  host: REPLACE_ME.postgres.database.azure.com\n  port: 5432\n  name: todos\n  user: todoadmin\n  sslMode: require\n",
+      "values": "image:\n  repository: cortexcpacr6hy6uurw.azurecr.io/images/todo-app\nimagePullSecrets:\n  - name: cortex-registry\n",
       "exposeService": "todo-app-todo-app",
       "exposePort": 80,
       "hostname": "todo",
       "authRequired": false,
 
-      "dependencies": [{ "kind": "secret_set", "id": "todo-database" }],
+      "dependencies": [
+        { "kind": "infrastructure", "id": "todo-db" },
+        { "kind": "secret_set", "id": "todo-database" }
+      ],
 
       "wiring": [
-        {
-          "sourceKind": "secret_set",
-          "sourceId": "todo-database",
-          "output": "secretName",
-          "helmPath": "database.existingSecret"
-        },
-        {
-          "sourceKind": "secret_set",
-          "sourceId": "todo-database",
-          "output": "key:password",
-          "helmPath": "database.existingSecretPasswordKey"
-        }
+        { "sourceKind": "infrastructure", "sourceId": "todo-db", "output": "host", "helmPath": "database.host" },
+        { "sourceKind": "infrastructure", "sourceId": "todo-db", "output": "port", "helmPath": "database.port" },
+        { "sourceKind": "infrastructure", "sourceId": "todo-db", "output": "administratorLogin", "helmPath": "database.user" },
+        { "sourceKind": "infrastructure", "sourceId": "todo-db", "output": "databaseName", "helmPath": "database.name" },
+        { "sourceKind": "infrastructure", "sourceId": "todo-db", "output": "sslMode", "helmPath": "database.sslMode" },
+        { "sourceKind": "secret_set", "sourceId": "todo-database", "output": "secretName", "helmPath": "database.existingSecret" },
+        { "sourceKind": "secret_set", "sourceId": "todo-database", "output": "key:password", "helmPath": "database.existingSecretPasswordKey" }
       ]
     }
   ]

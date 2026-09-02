@@ -215,7 +215,7 @@ func (p *Provisioner) ensure(ctx context.Context, tgt store.InfraTarget) {
 	// Substitute per-tenant tokens (e.g. {{tenantHash}} for a globally-unique Key
 	// Vault name) into the template before deploying, so a single platform-authored
 	// infra yields tenant-unique resource names instead of colliding across tenants.
-	armStr := substituteTokens(tgt.ArmTemplate, tgt.TenantSlug, p.region)
+	armStr := substituteTokens(tgt.ArmTemplate, tgt.TenantSlug, p.region, tgt.VaultName)
 	var template map[string]any
 	if err := json.Unmarshal([]byte(armStr), &template); err != nil {
 		slog.Warn("infra: template is not valid ARM JSON; skipping", "infra", tgt.InfraID)
@@ -589,11 +589,12 @@ func parseResourceID(id string) (sub, ns, rtype string, ok bool) {
 //	{{tenant}}     — the tenant slug (e.g. t-cff8707ddd78)
 //	{{tenantHash}} — a short, stable hash of the slug (safe for length/charset-limited names)
 //	{{region}}     — the deployment region
-func substituteTokens(arm, slug, region string) string {
+func substituteTokens(arm, slug, region, vaultName string) string {
 	return strings.NewReplacer(
 		"{{tenant}}", slug,
 		"{{tenantHash}}", tenantHash(slug),
 		"{{region}}", region,
+		"{{vaultName}}", vaultName,
 	).Replace(arm)
 }
 

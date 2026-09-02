@@ -1669,6 +1669,10 @@ type InfraTarget struct {
 	State          string // current infra_state
 	HostingMode    string // 'delegated' | 'platform'
 	ResourceGroup  string // the tenant's footprint RG (platform-hosted); '' ⇒ config default
+	// VaultName is the tenant's own Key Vault. Substituted into the template as
+	// {{vaultName}} so a module can resolve a credential from it at deploy time
+	// rather than being handed one. Not a secret — a name.
+	VaultName string
 }
 
 // InfraTargets returns every enabled infrastructure entity (across tenants) that
@@ -1676,7 +1680,7 @@ type InfraTarget struct {
 func (s *Store) InfraTargets(ctx context.Context) ([]InfraTarget, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT t.id, coalesce(t.tenant_id,''), coalesce(t.subscription_id,''), i.id, i.arm_template, coalesce(ti.infra_state,''),
-		        coalesce(t.hosting_mode,'delegated'), coalesce(t.resource_group,'')
+		        coalesce(t.hosting_mode,'delegated'), coalesce(t.resource_group,''), coalesce(t.vault_name,'')
 		 FROM tenant_infrastructure ti
 		 JOIN infrastructure i ON i.id = ti.infra_id
 		 JOIN tenants t ON t.id = ti.tenant_slug
@@ -1689,7 +1693,7 @@ func (s *Store) InfraTargets(ctx context.Context) ([]InfraTarget, error) {
 	for rows.Next() {
 		var it InfraTarget
 		if err := rows.Scan(&it.TenantSlug, &it.TenantID, &it.SubscriptionID, &it.InfraID, &it.ArmTemplate, &it.State,
-			&it.HostingMode, &it.ResourceGroup); err != nil {
+			&it.HostingMode, &it.ResourceGroup, &it.VaultName); err != nil {
 			return nil, err
 		}
 		out = append(out, it)

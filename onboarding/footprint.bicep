@@ -573,6 +573,12 @@ resource vault 'Microsoft.KeyVault/vaults@2023-07-01' = {
     sku: { family: 'A', name: 'standard' }
     tenantId: tenantId
     enableRbacAuthorization: true
+    // Lets ARM resolve a Key Vault reference inside a deployment. A module that
+    // needs a credential fetches it from here itself (kv.getSecret) rather than
+    // being passed one, so the value is never written into the template and
+    // never recorded in the deployment history. Without this the reference
+    // fails and the only way to supply the parameter is a baked literal.
+    enabledForTemplateDeployment: true
     enableSoftDelete: true
     softDeleteRetentionInDays: 7
     enablePurgeProtection: null

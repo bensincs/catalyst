@@ -26,9 +26,19 @@ Note what is *not* an output: the password. `administratorLoginPassword` is
 deployment's outputs and from there into the app's Helm values, so the module
 does not emit it.
 
-**Secret store** — declares one key, `password`. The platform declares the shape;
-each tenant supplies its own value, which is written to that tenant's Key Vault
-and delivered into the cluster as a Kubernetes Secret by the reconciler.
+**Secret store** — declares one key, `password`. Each tenant supplies its own
+value, once. It is written to that tenant's own Key Vault, and from there it is
+used **twice**: ARM resolves it to provision the server, and the reconciler
+delivers it into the cluster as a Kubernetes Secret for the app.
+
+That is why the module takes `vaultName` and `passwordSecretName` rather than a
+password. Anything passed to a module is compiled into the ARM template as a
+literal and kept in the tenant's Azure deployment history permanently;
+`vault.getSecret()` compiles to a *reference* instead, and ARM resolves the value
+during the deployment. The control plane cannot read the tenant's vault at all,
+so it could not have supplied the value even if the template could hold it.
+
+`{{vaultName}}` is filled in per tenant at deploy time, like `{{tenantHash}}`.
 
 **Application** — the Helm chart, wired as:
 
@@ -61,11 +71,9 @@ Publish the artifacts first — the **Publish platform service** workflow, with
 `service: todo-app`. It refuses to overwrite a version that already exists,
 because a tenant pins one and republishing changes what is already running.
 
-`register.json` registers the **application** and its **secret store**. The
-Postgres module is deliberately not registered yet: it requires a `@secure()`
-admin password, and there is no way to supply one without baking it into the ARM
-template. See [register-infrastructure.md](register-infrastructure.md) for the
-three options and a recommendation.
+`register.json` registers all three — infrastructure, secret store and
+application — and contains no credential, because there is nowhere in it to put
+one.
 
 ## Local development
 

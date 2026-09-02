@@ -1,12 +1,21 @@
-metadata name = 'PostgreSQL Flexible Server'
-metadata description = 'Provisions an Azure Database for PostgreSQL Flexible Server, a database, and firewall rules. Emits outputs shaped to feed the todo-app Helm chart.'
-metadata owner = 'platform'
-
-targetScope = 'resourceGroup'
-
-// --------------------------------------------------------------------------- //
-// Parameters
-// --------------------------------------------------------------------------- //
+// Azure Database for PostgreSQL Flexible Server for the todo app.
+//
+// The admin password is NOT a parameter of this module. It is read from the
+// tenant's own Key Vault at deploy time, by ARM, using a Key Vault reference.
+//
+// That indirection is the whole point. Everything an author passes to a module
+// is compiled into the ARM template as a literal, stored against the tenant, and
+// kept in that tenant's Azure deployment history permanently — readable by
+// anyone with reader access on the resource group. A password has no business
+// there. `kv.getSecret()` compiles to a REFERENCE instead: the template carries
+// the vault id and the secret's name, and ARM resolves the value itself during
+// the deployment. Nothing that handles this template ever sees the credential —
+// not the control plane, which cannot read the tenant's vault at all, and not
+// the deployment history, which records secure parameters as redacted.
+//
+// The value is the one the tenant supplied to the `todo database` secret store,
+// so the same credential provisions the server and is delivered to the app: one
+// secret, entered once, in the tenant's own vault.
 
 @description('Name of the PostgreSQL Flexible Server (3-63 chars, lowercase letters, numbers and hyphens).')
 @minLength(3)
@@ -22,10 +31,11 @@ param tags object = {}
 @description('Administrator login name.')
 param administratorLogin string = 'todoadmin'
 
-@description('Administrator login password.')
-@secure()
-@minLength(8)
-param administratorLoginPassword string
+@description('The tenant\'s own Key Vault, holding the credential. Pass {{vaultName}} and the control plane fills in the tenant\'s vault.')
+param vaultName string
+
+@description('Name of the vault secret holding the admin password. This is the name a secret store materialises as: set-<secret store id>--<key>.')
+param passwordSecretName string = 'set-todo-database--password'
 
 @description('Compute SKU name, e.g. Standard_B1ms, Standard_D2ds_v5.')
 param skuName string = 'Standard_B1ms'
@@ -39,227 +49,49 @@ param skuName string = 'Standard_B1ms'
 param skuTier string = 'Burstable'
 
 @description('PostgreSQL major version.')
-@allowed([
-  '13'
-  '14'
-  '15'
-  '16'
-  '17'
-])
 param postgresVersion string = '16'
 
-@description('Provisioned storage size in GB.')
-@allowed([
-  32
-  64
-  128
-  256
-  512
-  1024
-  2048
-  4096
-  8192
-  16384
-  32768
-])
+@description('Storage size in GB.')
 param storageSizeGB int = 32
 
-@description('Automatically grow storage when nearly full.')
-@allowed([
-  'Enabled'
-  'Disabled'
-])
-param storageAutoGrow string = 'Enabled'
-
-@description('Name of the application database to create.')
-@minLength(1)
-@maxLength(63)
+@description('Name of the application database created on the server.')
 param databaseName string = 'todos'
 
-@description('Backup retention in days.')
-@minValue(7)
-@maxValue(35)
-param backupRetentionDays int = 7
-
-@description('Geo-redundant backups.')
-@allowed([
-  'Enabled'
-  'Disabled'
-])
-param geoRedundantBackup string = 'Disabled'
-
-@description('High-availability mode.')
-@allowed([
-  'Disabled'
-  'ZoneRedundant'
-  'SameZone'
-])
-param highAvailabilityMode string = 'Disabled'
-
-@description('Primary availability zone. Empty string lets Azure choose.')
-@allowed([
-  ''
-  '1'
-  '2'
-  '3'
-])
-param availabilityZone string = ''
-
-@description('Standby availability zone (only used when highAvailabilityMode is ZoneRedundant).')
-@allowed([
-  ''
-  '1'
-  '2'
-  '3'
-])
-param standbyAvailabilityZone string = ''
-
-@description('Allow public network access to the server.')
-@allowed([
-  'Enabled'
-  'Disabled'
-])
-param publicNetworkAccess string = 'Enabled'
-
-@description('Add a firewall rule permitting other Azure services/resources (0.0.0.0).')
+@description('Allow other Azure services to reach the server.')
 param allowAzureServices bool = true
 
-@description('Additional firewall rules to create.')
-param firewallRules array = []
-// Example:
-// [
-//   { name: 'office', startIpAddress: '203.0.113.0', endIpAddress: '203.0.113.255' }
-// ]
+// Existing, because the vault belongs to the tenant and is created by its
+// footprint — this module reads from it and never writes to it.
+resource vault 'Microsoft.KeyVault/vaults@2023-07-01' existing = {
+  name: vaultName
+}
 
-@description('Server parameters (configurations) to override, e.g. [{ name: "max_connections", value: "100" }].')
-param serverConfigurations array = []
-
-// --------------------------------------------------------------------------- //
-// Variables
-// --------------------------------------------------------------------------- //
-
-var highAvailability = highAvailabilityMode == 'Disabled'
-  ? {
-      mode: 'Disabled'
-    }
-  : (empty(standbyAvailabilityZone)
-      ? {
-          mode: highAvailabilityMode
-        }
-      : {
-          mode: highAvailabilityMode
-          standbyAvailabilityZone: standbyAvailabilityZone
-        })
-
-// --------------------------------------------------------------------------- //
-// Resources
-// --------------------------------------------------------------------------- //
-
-resource server 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' = {
-  name: name
-  location: location
-  tags: tags
-  sku: {
-    name: skuName
-    tier: skuTier
-  }
-  properties: {
-    version: postgresVersion
+module server 'server.bicep' = {
+  name: '${deployment().name}-pg'
+  params: {
+    name: name
+    location: location
+    tags: tags
     administratorLogin: administratorLogin
-    administratorLoginPassword: administratorLoginPassword
-    createMode: 'Default'
-    availabilityZone: availabilityZone
-    storage: {
-      storageSizeGB: storageSizeGB
-      autoGrow: storageAutoGrow
-    }
-    backup: {
-      backupRetentionDays: backupRetentionDays
-      geoRedundantBackup: geoRedundantBackup
-    }
-    highAvailability: highAvailability
-    network: {
-      publicNetworkAccess: publicNetworkAccess
-    }
+    // Resolved by ARM from the vault. Never present in this template.
+    administratorLoginPassword: vault.getSecret(passwordSecretName)
+    skuName: skuName
+    skuTier: skuTier
+    postgresVersion: postgresVersion
+    storageSizeGB: storageSizeGB
+    databaseName: databaseName
+    allowAzureServices: allowAzureServices
   }
 }
 
-resource database 'Microsoft.DBforPostgreSQL/flexibleServers/databases@2024-08-01' = {
-  parent: server
-  name: databaseName
-  properties: {
-    charset: 'UTF8'
-    collation: 'en_US.utf8'
-  }
-}
-
-// Firewall rules and databases must not be provisioned concurrently on a
-// Flexible Server, so serialise them with dependsOn + batchSize(1).
-resource allowAzure 'Microsoft.DBforPostgreSQL/flexibleServers/firewallRules@2024-08-01' = if (allowAzureServices) {
-  parent: server
-  name: 'AllowAllAzureServicesAndResources'
-  properties: {
-    startIpAddress: '0.0.0.0'
-    endIpAddress: '0.0.0.0'
-  }
-  dependsOn: [
-    database
-  ]
-}
-
-@batchSize(1)
-resource extraFirewallRules 'Microsoft.DBforPostgreSQL/flexibleServers/firewallRules@2024-08-01' = [
-  for rule in firewallRules: {
-    parent: server
-    name: rule.name
-    properties: {
-      startIpAddress: rule.startIpAddress
-      endIpAddress: rule.endIpAddress
-    }
-    dependsOn: [
-      database
-      allowAzure
-    ]
-  }
-]
-
-@batchSize(1)
-resource configurations 'Microsoft.DBforPostgreSQL/flexibleServers/configurations@2024-08-01' = [
-  for config in serverConfigurations: {
-    parent: server
-    name: config.name
-    properties: {
-      value: config.value
-      source: 'user-override'
-    }
-    dependsOn: [
-      database
-    ]
-  }
-]
-
-// --------------------------------------------------------------------------- //
-// Outputs — these are designed to be wired straight into the Helm chart values.
-// (The password is intentionally NOT emitted; secrets must not be outputs.)
-// --------------------------------------------------------------------------- //
-
-@description('Fully qualified domain name of the server -> Helm value database.host')
-output host string = server.properties.fullyQualifiedDomainName
-
-@description('PostgreSQL port -> Helm value database.port')
-output port int = 5432
-
-@description('Application database name -> Helm value database.name')
-output databaseName string = databaseName
-
-@description('Administrator login -> Helm value database.user')
-output administratorLogin string = administratorLogin
-
-@description('Required SSL mode -> Helm value database.sslMode')
-output sslMode string = 'require'
-
-@description('Resource ID of the server.')
-output serverId string = server.id
-
-@description('Name of the server.')
-output serverName string = server.name
+// Everything the todo app's chart needs, and nothing it does not. The password
+// is deliberately absent: a secure output is not secure once re-exported — it
+// lands in cleartext in the deployment's outputs and from there in the app's
+// Helm values. The app receives it as a Kubernetes Secret instead.
+output host string = server.outputs.host
+output port int = server.outputs.port
+output databaseName string = server.outputs.databaseName
+output administratorLogin string = server.outputs.administratorLogin
+output sslMode string = server.outputs.sslMode
+output serverId string = server.outputs.serverId
+output serverName string = server.outputs.serverName
