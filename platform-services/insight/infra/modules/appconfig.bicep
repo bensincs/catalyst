@@ -84,7 +84,11 @@ resource configKey 'Microsoft.AppConfiguration/configurationStores/keyValues@202
 
 resource featureFlag 'Microsoft.AppConfiguration/configurationStores/keyValues@2024-05-01' = [for item in featureFlags: {
   parent: store
-  name: format('.appconfig.featureflag/{0}\${1}', item.id, label)
+  // A feature flag's key genuinely contains a slash (".appconfig.featureflag/<id>"),
+  // but ARM reads a slash in a resource name as a parent/child separator and
+  // rejects the name for having three segments where two were expected. The
+  // slash has to be percent-encoded; App Configuration decodes it back.
+  name: format('.appconfig.featureflag%2F{0}\${1}', item.id, label)
   properties: {
     contentType: 'application/vnd.microsoft.appconfig.ff+json;charset=utf-8'
     value: string({
