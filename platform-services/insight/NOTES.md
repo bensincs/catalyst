@@ -273,3 +273,25 @@ the app registration only had the todo app's callback, added by hand earlier.
 tenant's OIDC application manually**, or its login is broken at the last step,
 after everything else looks healthy. Worth automating: the platform already
 knows the host it publishes an app on, so it knows the callback it will need.
+
+### The authz service is required, not optional
+
+Forwarding the OIDC ID token as a Bearer JWT (rather than Basic auth) got
+requests as far as the application — `/api/v1/feature-flags` answers 200 where
+previously nothing but health checks arrived. Authentication still fails at
+`/api/v1/auth/me` with 401, and it cannot be fixed by configuring the proxy:
+
+    backend: JWT_SECRET_KEY = <insight--backend--jwt-secret-key>
+             JWT_ALGORITHM  = HS256
+
+The backend validates a **symmetric HS256** token signed with a secret it shares
+with the rest of Insight. What the gateway forwards is an Entra ID token —
+**RS256, signed by Microsoft**. No amount of proxy configuration makes one into
+the other; something has to exchange the Entra identity for an Insight-issued
+token, and that is precisely what the chart says ext-authz does (it "sets the
+Authorization JWT + x-cortex-sub / x-cortex-tenant").
+
+That service — `authz-service.cortex-authz.svc.cluster.local:8080`, referenced
+by both `bff` and `cortex` — does not exist here: no namespace, no
+`authz-admin-credentials` secret, and no image published in GHCR under any name
+tried. Per-user authorization is blocked on it, and so is completing login.
