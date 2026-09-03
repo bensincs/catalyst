@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.40.2.10011",
-      "templateHash": "3397901582050181868"
+      "templateHash": "452726404438575959"
     }
   },
   "parameters": {
@@ -324,6 +324,7 @@
       "privatelink.azconfig.io",
       "privatelink.postgres.database.azure.com",
       "privatelink.redis.cache.windows.net",
+      "[format('privatelink.{0}.redisenterprise.cache.azure.net', parameters('location'))]",
       "privatelink.search.windows.net",
       "privatelink.servicebus.windows.net"
     ]

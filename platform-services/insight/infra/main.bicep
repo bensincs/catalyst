@@ -67,12 +67,8 @@ param postgresStorageMb int = 131072
 param postgresBackupRetentionDays int = 14
 @description('PostgreSQL geo-redundant backup.')
 param postgresGeoRedundantBackup bool = true
-@description('Redis capacity.')
-param redisCapacity int = 1
-@description('Redis family.')
-param redisFamily string = 'P'
-@description('Redis SKU.')
-param redisSkuName string = 'Premium'
+@description('Azure Managed Redis SKU, e.g. Balanced_B0. Managed Redis has a single SKU name — no separate family or capacity as Azure Cache for Redis had.')
+param redisSkuName string = 'Balanced_B0'
 @description('Service Bus Premium messaging units.')
 param servicebusCapacity int = 1
 @description('AI Search SKU.')
@@ -119,7 +115,7 @@ var blobDnsZoneId = resourceId(subscription().subscriptionId, dnsZoneResourceGro
 var cognitiveDnsZoneId = resourceId(subscription().subscriptionId, dnsZoneResourceGroup, 'Microsoft.Network/privateDnsZones', 'privatelink.cognitiveservices.azure.com')
 var appConfigurationDnsZoneId = resourceId(subscription().subscriptionId, dnsZoneResourceGroup, 'Microsoft.Network/privateDnsZones', 'privatelink.azconfig.io')
 var postgresDnsZoneId = resourceId(subscription().subscriptionId, dnsZoneResourceGroup, 'Microsoft.Network/privateDnsZones', 'privatelink.postgres.database.azure.com')
-var redisDnsZoneId = resourceId(subscription().subscriptionId, dnsZoneResourceGroup, 'Microsoft.Network/privateDnsZones', 'privatelink.redis.cache.windows.net')
+var redisDnsZoneId = resourceId(subscription().subscriptionId, dnsZoneResourceGroup, 'Microsoft.Network/privateDnsZones', 'privatelink.${location}.redisenterprise.cache.azure.net')
 var searchDnsZoneId = resourceId(subscription().subscriptionId, dnsZoneResourceGroup, 'Microsoft.Network/privateDnsZones', 'privatelink.search.windows.net')
 var servicebusDnsZoneId = resourceId(subscription().subscriptionId, dnsZoneResourceGroup, 'Microsoft.Network/privateDnsZones', 'privatelink.servicebus.windows.net')
 
@@ -330,13 +326,10 @@ module redis 'modules/redis.bicep' = {
     name: redisName
     location: location
     tags: tags
-    capacity: redisCapacity
-    family: redisFamily
     skuName: redisSkuName
     peSubnetId: peSubnetId
     dnsZoneId: redisDnsZoneId
     workloadPrincipalId: uai.properties.principalId
-    workloadClientId: uai.properties.clientId
   }
 }
 
@@ -471,7 +464,7 @@ var configKeys = [
   { key: 'insight--bff--translation-service-url', value: 'http://translation:8012' }
   { key: 'insight--bff--redis-enabled', value: 'true' }
   { key: 'insight--bff--redis-host', value: redis.outputs.hostname }
-  { key: 'insight--bff--redis-port', value: '6380' }
+  { key: 'insight--bff--redis-port', value: string(redis.outputs.port) }
   { key: 'insight--bff--redis-use-ssl', value: 'true' }
   { key: 'insight--bff--redis-use-managed-identity', value: 'true' }
   { key: 'insight--bff--azure-redis-username', value: uai.properties.clientId }
@@ -552,6 +545,7 @@ output appInfra object = {
   postgresHost: postgres.outputs.fqdn
   postgresDatabases: 'insight,spicedb'
   redisHost: redis.outputs.hostname
+  redisPort: string(redis.outputs.port)
   serviceBusNamespace: servicebus.outputs.name
   serviceBusFqdn: '${servicebus.outputs.name}.servicebus.windows.net'
   serviceBusQueues: 'insight-indexer-queue,meeting-queue'

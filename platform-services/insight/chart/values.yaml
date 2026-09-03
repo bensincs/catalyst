@@ -98,8 +98,10 @@ featureFlags:
 #     (commonly 172.20.x.x) or you silently block Azure Private Link
 #     (Postgres/Redis/ServiceBus/Storage/Search/KV/Cognitive). The default
 #     intentionally omits 172.16.0.0/12 for this reason.
-#   extraPorts: additional TCP egress ports beyond 443/5432 (e.g. 6380 Redis
-#     SSL, 5671/5672 Service Bus AMQP).
+#   extraPorts: additional TCP egress ports beyond 443/5432 (e.g. 6380 Azure
+#     Cache for Redis SSL, 10000 Azure Managed Redis, 5671/5672 Service Bus
+#     AMQP). Omitting the Redis port silently blocks Private Link rather than
+#     failing loudly.
 networkPolicy:
   enabled: false
   externalEgress:
@@ -108,6 +110,7 @@ networkPolicy:
       - 192.168.0.0/16
     extraPorts:
       - 6380
+      - 10000
       - 5671
       - 5672
 
@@ -146,6 +149,8 @@ appInfra:
   keyvaultTenantId: ""
   appConfigEndpoint: ""
   redisHost: ""
+  # Azure Managed Redis listens on 10000, not the 6380 of Azure Cache for Redis.
+  redisPort: ""
   # Platform ACS Email (infra/base) — send via workload identity.
   acsEndpoint: ""
   acsFromEmail: ""
@@ -331,7 +336,7 @@ bff:
     ORGANIZATION_ID: "00000000-0000-0000-0000-000000000000"
     # Redis (used when appConfig.enabled=false; App Config path uses insight--bff--*).
     REDIS_ENABLED: "true"
-    REDIS_PORT: "6380"
+    REDIS_PORT: "10000"
     REDIS_USE_SSL: "true"
     REDIS_USE_MANAGED_IDENTITY: "true"
     # Prefer appInfra.principalId at render time; empty fallback here.
@@ -474,7 +479,7 @@ agenticCore:
     # Redis-backed pod-safe meeting stream coordination
     REDIS_ENABLED: "true"
     REDIS_HOST: ""
-    REDIS_PORT: "6380"
+    REDIS_PORT: "10000"
     REDIS_USE_SSL: "true"
     REDIS_USE_MANAGED_IDENTITY: "true"
     # Entra Redis AUTH username = UAI object/principal ID. Prefer appInfra.principalId

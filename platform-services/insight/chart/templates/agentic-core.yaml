@@ -613,7 +613,7 @@ spec:
               value: {{ .Values.appInfra.redisHost | default .Values.agenticCore.env.REDIS_HOST | quote }}
             {{- end }}
             - name: REDIS_PORT
-              value: {{ .Values.agenticCore.env.REDIS_PORT | default "6380" | quote }}
+              value: {{ .Values.appInfra.redisPort | default .Values.agenticCore.env.REDIS_PORT | default "10000" | quote }}
             - name: REDIS_USE_SSL
               value: {{ .Values.agenticCore.env.REDIS_USE_SSL | default "true" | quote }}
             - name: REDIS_USE_MANAGED_IDENTITY

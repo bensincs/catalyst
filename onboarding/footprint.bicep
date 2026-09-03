@@ -644,6 +644,10 @@ var privateDnsZoneNames = [
   'privatelink.azconfig.io'
   'privatelink.postgres.database.azure.com'
   'privatelink.redis.cache.windows.net'
+  // Azure Managed Redis is a different service from Azure Cache for Redis and
+  // resolves through a different, REGION-SCOPED zone. New Azure Cache for Redis
+  // instances are refused as retiring, so anything needing Redis lands here.
+  'privatelink.${location}.redisenterprise.cache.azure.net'
   'privatelink.search.windows.net'
   'privatelink.servicebus.windows.net'
 ]

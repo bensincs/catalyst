@@ -200,8 +200,9 @@ spec:
       ports:
         - { protocol: TCP, port: 8080 }
     # Per-tenant Azure private endpoints. Override cortexEgress.privateEndpointCidr
-    # to the tenant's PE subnet. Ports: Postgres 5432, Redis 6379/6380, Service
-    # Bus 5671/5672/443, Storage/Search/KV/Cognitive/AppConfig 443.
+    # to the tenant's PE subnet. Ports: Postgres 5432, Redis 6379/6380 (Azure
+    # Cache for Redis) and 10000 (Azure Managed Redis), Service Bus
+    # 5671/5672/443, Storage/Search/KV/Cognitive/AppConfig 443.
     {{- with .Values.cortexEgress.privateEndpointCidr }}
     - to:
         - ipBlock:
@@ -210,6 +211,7 @@ spec:
         - { protocol: TCP, port: 5432 }
         - { protocol: TCP, port: 6379 }
         - { protocol: TCP, port: 6380 }
+        - { protocol: TCP, port: 10000 }
         - { protocol: TCP, port: 5671 }
         - { protocol: TCP, port: 5672 }
         - { protocol: TCP, port: 443 }
