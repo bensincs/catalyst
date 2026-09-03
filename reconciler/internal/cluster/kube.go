@@ -649,15 +649,22 @@ func buildApplication(a shared.DesiredApplication, name string) *unstructured.Un
 			},
 			"syncPolicy": map[string]any{
 				"automated": map[string]any{"prune": true, "selfHeal": true},
-				// ServerSideApply because a client-side apply stores the whole
-				// manifest in the last-applied-configuration annotation, and
-				// Kubernetes caps annotations at 262144 bytes. Charts carrying
-				// large CRDs exceed that and cannot be installed at all — the
-				// External Secrets SecretStore CRD fails with "metadata.annotations:
-				// Too long", and it is far from the only one (Istio, Prometheus
-				// and Crossplane are the same shape). Server-side apply keeps no
-				// such annotation, so the size limit does not arise.
-				"syncOptions": []any{"CreateNamespace=true", "ServerSideApply=true"},
+				// Deliberately NOT ServerSideApply, despite the annotation-size
+				// limit it would solve (a client-side apply stores the whole
+				// manifest in last-applied-configuration, and Kubernetes caps
+				// annotations at 262144 bytes, which charts carrying large CRDs
+				// exceed).
+				//
+				// Turning it on switches Argo to a structured-merge diff, and
+				// this Argo (v2.13) is too old for this cluster (Kubernetes
+				// 1.35): the diff fails with ".status.terminatingReplicas: field
+				// not declared in schema" for every Deployment. That leaves each
+				// application's sync status Unknown, and Argo then refuses to
+				// auto-sync it at all — so the cure was worse than the disease.
+				//
+				// Revisit when Argo is upgraded to a version whose bundled
+				// schema knows this cluster's API.
+				"syncOptions": []any{"CreateNamespace=true"},
 			},
 		},
 	}}

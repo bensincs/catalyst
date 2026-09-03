@@ -420,15 +420,15 @@ func TestPublishFailureIsNotOverwrittenByArgo(t *testing.T) {
 	// pins the premise that makes the guard necessary.
 }
 
-// A chart carrying large CRDs must still be installable.
+// Server-side apply must stay OFF until Argo is new enough for this cluster.
 //
-// A client-side apply records the entire manifest in the
-// last-applied-configuration annotation, and Kubernetes rejects annotations over
-// 262144 bytes. The External Secrets SecretStore CRD is past that limit, so
-// syncing it failed outright with "metadata.annotations: Too long" and the
-// controller then crash-looped against CRDs that had never been upgraded.
-// Server-side apply writes no such annotation.
-func TestApplicationUsesServerSideApply(t *testing.T) {
+// It looks like the right fix for the annotation-size limit that stops charts
+// with large CRDs installing, and it was briefly enabled for that reason. But
+// Argo v2.13 against Kubernetes 1.35 then fails to diff any Deployment
+// (".status.terminatingReplicas: field not declared in schema"), every
+// application's sync status goes Unknown, and Argo declines to auto-sync
+// anything at all.
+func TestApplicationDoesNotUseServerSideApply(t *testing.T) {
 	app := buildApplication(shared.DesiredApplication{
 		ID: "external-secrets", Chart: "external-secrets", TargetRevision: "0.19.2",
 	}, "external-secrets")
@@ -437,13 +437,9 @@ func TestApplicationUsesServerSideApply(t *testing.T) {
 	policy, _ := spec["syncPolicy"].(map[string]any)
 	opts, _ := policy["syncOptions"].([]any)
 
-	var found bool
 	for _, o := range opts {
 		if s, _ := o.(string); s == "ServerSideApply=true" {
-			found = true
+			t.Fatalf("ServerSideApply breaks diffing on Argo v2.13 with Kubernetes 1.35 — every app goes Unknown and stops auto-syncing; got %v", opts)
 		}
-	}
-	if !found {
-		t.Fatalf("syncOptions must request ServerSideApply, got %v — charts with large CRDs cannot sync without it", opts)
 	}
 }
