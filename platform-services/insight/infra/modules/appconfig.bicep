@@ -19,6 +19,9 @@ param configKeys array = []
 @description('Feature flags to seed. Each item: { id: string, description: string, enabled: bool }.')
 param featureFlags array = []
 
+@description('Principal ID of the workload identity that reads this configuration at runtime.')
+param workloadPrincipalId string
+
 @description('Resource ID of the subnet used for the private endpoint.')
 param peSubnetId string
 
@@ -98,6 +101,22 @@ resource pe 'Microsoft.Network/privateEndpoints@2024-05-01' = {
 // App Configuration Data Owner, held by whoever runs the deployment: with
 // Pass-through, ARM performs the key-value writes below as that identity.
 var appConfigurationDataOwnerRoleId = '5ae67dd6-50cb-40e7-96ff-dc2bfa4b606b'
+
+// App Configuration Data Reader for the workload. Without it the store exists,
+// is reachable and holds every key, and the application still fails with
+// Forbidden on startup — the configuration is written by the deployment but was
+// never readable by the thing that consumes it.
+var appConfigurationDataReaderRoleId = '516239f1-63e1-4d78-a4de-a74fb236a071'
+
+resource workloadDataAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(store.id, workloadPrincipalId, appConfigurationDataReaderRoleId)
+  scope: store
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', appConfigurationDataReaderRoleId)
+    principalId: workloadPrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
 
 resource deployerDataAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(store.id, deployer().objectId, appConfigurationDataOwnerRoleId)

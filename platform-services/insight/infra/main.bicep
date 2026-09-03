@@ -516,6 +516,7 @@ module appconfig 'modules/appconfig.bicep' = {
     label: env
     configKeys: configKeys
     featureFlags: loadJsonContent('feature-flags.json')
+    workloadPrincipalId: uai.properties.principalId
     peSubnetId: peSubnetId
     dnsZoneId: appConfigurationDnsZoneId
   }
