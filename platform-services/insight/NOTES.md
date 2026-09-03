@@ -187,3 +187,63 @@ misleading: the API kept serving reads from an already-running revision while
 every write (PATCH) hung until the 240s ingress cap, and a newly deployed
 revision crash-looped on "startup probe failed". Worth a health check that
 distinguishes "cannot reach the database" from "starting".
+
+## Second run — infrastructure complete
+
+`insight-infra` is **ready**: all 11 nested deployments succeeded and the
+application syncs. Remaining fixes beyond the Managed Redis migration:
+
+7. **App Configuration key-values could not be written by ARM.** Three
+   constraints interact: the key-values are written by ARM rather than the
+   workload; with local auth disabled ARM cannot use the store's access keys;
+   and with public network access disabled ARM can only reach the data plane via
+   `privateLinkDelegation`, which Azure refuses unless the authentication mode is
+   `Pass-through`. Pass-through then returned `Forbidden` on every write, and
+   still did twelve minutes after the deploying principal was granted App
+   Configuration Data Owner — so it was never RBAC. ARM was being refused at the
+   network layer, and `privateLinkDelegation` does not in fact let it through.
+   Settled on public network access ON with local auth OFF: no access keys
+   exist, ARM writes as the deploying principal, the workload reads with its
+   managed identity. Note that **omitting `dataPlaneProxy` does not reset a store
+   that already has it** — the property keeps its old value.
+
+8. **Feature flag names escape the slash as `~2F`, not `%2F`.** A flag's key
+   contains a slash, which ARM reads as a parent/child separator. `%2F` passes
+   the template parser and is then rejected by the resource provider with
+   `KeyValueNameInvalid`. Confirmed by creating both against a real store —
+   `az deployment group validate` reports BOTH as valid.
+
+9. **CMK requires a purge-protected vault** (`Keyvault policy recoverable is not
+   set`), so the purge-protection parameter cannot be turned off where the
+   storage account uses a customer-managed key.
+
+10. **The chart needs its own HTTPRoute** — it splits frontend and BFF by path
+    under one host, which the platform's single-service route cannot express —
+    and that route needs a hostname nobody supplied. The infrastructure now
+    publishes `routeHostname` on the appInfra contract.
+
+### Platform findings
+
+* **A successful ARM deployment is never re-submitted**, even when the module
+  changes. The retry-on-change logic covers failures only, so a fix to an
+  already-deployed module does not reach the tenant until its deployment record
+  is deleted by hand.
+* **External Secrets 0.19.2 cannot upgrade in place.** Its SecretStore CRDs
+  exceed the 262144-byte annotation limit a client-side apply writes, so those
+  patches fail while smaller CRDs succeed; the controller then crash-loops
+  watching a `v1` it never got. Server-side apply is the documented fix but
+  cannot be used here: Argo v2.13 is older than this cluster's Kubernetes 1.35
+  and its structured-merge diff fails on `.status.terminatingReplicas`, leaving
+  every application `Unknown` and blocking auto-sync. **Upgrading Argo is the
+  prerequisite.** A clean reinstall works in the meantime.
+* **Argo will not auto-retry a failed sync to the same revision**
+  ("Skipping auto-sync: failed previous sync attempt"), so a fixed chart at an
+  unchanged version needs a manual sync.
+
+### Still blocked
+
+The nine first-party images do not exist, so 15 of 16 pods cannot start.
+`spicedb` runs, from a public image, which shows the chart itself is sound.
+
+**The cluster is also too small**: two 2-vCPU nodes, and 10 pods are `Pending`
+on `Insufficient cpu`. Even with the images this will not all schedule.
