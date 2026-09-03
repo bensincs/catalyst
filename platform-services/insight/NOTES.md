@@ -247,3 +247,29 @@ The nine first-party images do not exist, so 15 of 16 pods cannot start.
 
 **The cluster is also too small**: two 2-vCPU nodes, and 10 pods are `Pending`
 on `Insufficient cpu`. Even with the images this will not all schedule.
+
+## Authentication
+
+The app is behind the gateway's OIDC login: `authRequired` puts the platform's
+own oauth2-proxy in front and points the route at it. Two things were needed
+beyond flipping the flag.
+
+**The chart's own HTTPRoute had to be turned off.** It names a `tenant-gateway`
+that does not exist here, so it never attached and looked harmless — but it
+lists `frontend` and `bff` as *direct* backends, so it would have served the
+whole application UNAUTHENTICATED the moment such a gateway appeared. The
+platform's route is sufficient on its own: everything goes to the oauth2-proxy,
+and the frontend proxies `/api` to the BFF internally (it answers 401 rather
+than 404, so that path is live).
+
+**The Entra redirect URI is not registered by the platform.** Login failed with
+
+    AADSTS50011: The redirect URI 'https://insight.apps.msft.ae/oauth2/callback'
+    ... does not match the redirect URIs configured for the application
+
+because nothing in the control plane or reconciler ever writes redirect URIs —
+the app registration only had the todo app's callback, added by hand earlier.
+**Every application that turns on `authRequired` needs its callback added to the
+tenant's OIDC application manually**, or its login is broken at the last step,
+after everything else looks healthy. Worth automating: the platform already
+knows the host it publishes an app on, so it knows the callback it will need.
