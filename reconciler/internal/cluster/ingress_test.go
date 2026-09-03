@@ -443,3 +443,29 @@ func TestApplicationDoesNotUseServerSideApply(t *testing.T) {
 		}
 	}
 }
+
+// The upstream must receive the ID token as a Bearer JWT, not Basic auth.
+//
+// oauth2-proxy's --pass-basic-auth puts "Authorization: Basic <user:password>"
+// on the request. That occupies the one header a JWT-validating application
+// reads, so the app sees a credential it cannot parse and reports the session as
+// invalid — which looks like an expired login rather than a misconfigured proxy.
+func TestAuthProxyPassesBearerTokenNotBasic(t *testing.T) {
+	ing := &shared.IngressConfig{
+		AppsDomain:       "apps.example",
+		OIDCIssuer:       "https://issuer.example/v2.0",
+		OIDCClientID:     "client",
+		OIDCClientSecret: "secret",
+	}
+	app := shared.DesiredApplication{ID: "insight", ExposeService: "frontend", ExposePort: 80}
+	d := authDeployment("insight-auth", "insight", app, ing, "insight.apps.example")
+
+	raw, _ := json.Marshal(d.Object)
+	got := string(raw)
+	if !strings.Contains(got, "--pass-authorization-header=true") {
+		t.Error("the ID token must be forwarded as a Bearer JWT (--pass-authorization-header)")
+	}
+	if strings.Contains(got, `--pass-basic-auth=true`) {
+		t.Error("--pass-basic-auth overwrites Authorization with Basic and hides the JWT from the app")
+	}
+}

@@ -125,7 +125,16 @@ func authDeployment(name, namespace string, a shared.DesiredApplication, ing *sh
 		"--cookie-httponly=true",
 		"--cookie-samesite=lax",
 		// Identity for the upstream app.
-		"--pass-basic-auth=true",
+		//
+		// The Authorization header carries the OIDC ID token as a Bearer JWT,
+		// because that is what an application behind a gateway expects to
+		// receive. --pass-basic-auth is deliberately OFF: it puts
+		// "Authorization: Basic <user:password>" on the request instead, which
+		// does not merely fail to help — it occupies the one header a JWT-
+		// validating upstream reads, so the app sees a credential it cannot
+		// parse and reports the session as invalid.
+		"--pass-authorization-header=true",
+		"--pass-basic-auth=false",
 		"--pass-user-headers=true",
 		"--set-xauthrequest=true",
 	}
