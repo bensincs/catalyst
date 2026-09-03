@@ -151,6 +151,8 @@ appInfra:
   redisHost: ""
   # Azure Managed Redis listens on 10000, not the 6380 of Azure Cache for Redis.
   redisPort: ""
+  # Host this deployment is served on, published by the infrastructure.
+  routeHostname: ""
   # Platform ACS Email (infra/base) — send via workload identity.
   acsEndpoint: ""
   acsFromEmail: ""

@@ -561,6 +561,10 @@ output appInfra object = {
   translatorRegion: translator.outputs.location
   documentIntelligenceEndpoint: documentIntelligence.outputs.endpoint
   spiceDbEndpoint: 'spicedb:50051'
+  // Where this deployment is reachable. The chart routes frontend and BFF by
+  // path under a single host, so it needs its own HTTPRoute rather than the
+  // platform's single-service one, and that route needs a hostname.
+  routeHostname: '${workspaceSubdomain}.${routingDomain}'
   acsEndpoint: platformAcsEndpoint
   acsFromEmail: platformAcsFromEmail
   // Folded in so a single `appInfra -> appInfra` wire (the platform overwrites

@@ -1,6 +1,6 @@
 {{- $routeEnabled := or .Values.gateway.httpRoute.enabled .Values.route.enabled -}}
 {{- if $routeEnabled }}
-{{- $routeHost := .Values.gateway.httpRoute.host | default .Values.route.hostname -}}
+{{- $routeHost := .Values.gateway.httpRoute.host | default .Values.route.hostname | default .Values.appInfra.routeHostname -}}
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute

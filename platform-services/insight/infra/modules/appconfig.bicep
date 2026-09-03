@@ -33,8 +33,29 @@ resource store 'Microsoft.AppConfiguration/configurationStores@2024-05-01' = {
     name: sku
   }
   properties: {
+    // Written by ARM, not by the workload, and that is what constrains this.
+    //
+    // With public network access disabled, ARM can only reach the data plane
+    // via privateLinkDelegation — and Azure refuses that unless the
+    // authentication mode is Pass-through ("Data plane proxy authentication
+    // mode must be set to Pass-through to enable private link delegation").
+    // Pass-through in that configuration returned Forbidden on every key-value
+    // write, and still did twelve minutes after the deploying principal was
+    // granted App Configuration Data Owner, so it was not RBAC propagation —
+    // ARM was being refused at the network layer.
+    //
+    // So the store accepts public network connections while keeping local
+    // authentication OFF: no access keys exist, ARM writes as the deploying
+    // principal via Pass-through, and the workload still reads with its managed
+    // identity. Reaching the store therefore always requires an Entra identity
+    // holding a data-plane role; what is given up is network-level isolation of
+    // the management path, not authentication.
     disableLocalAuth: true
-    publicNetworkAccess: 'Disabled'
+    publicNetworkAccess: 'Enabled'
+    dataPlaneProxy: {
+      authenticationMode: 'Pass-through'
+      privateLinkDelegation: 'Disabled'
+    }
   }
 }
 
@@ -74,8 +95,22 @@ resource pe 'Microsoft.Network/privateEndpoints@2024-05-01' = {
   }
 }
 
+// App Configuration Data Owner, held by whoever runs the deployment: with
+// Pass-through, ARM performs the key-value writes below as that identity.
+var appConfigurationDataOwnerRoleId = '5ae67dd6-50cb-40e7-96ff-dc2bfa4b606b'
+
+resource deployerDataAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(store.id, deployer().objectId, appConfigurationDataOwnerRoleId)
+  scope: store
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', appConfigurationDataOwnerRoleId)
+    principalId: deployer().objectId
+  }
+}
+
 resource configKey 'Microsoft.AppConfiguration/configurationStores/keyValues@2024-05-01' = [for item in configKeys: {
   parent: store
+  dependsOn: [ deployerDataAccess ]
   name: format('{0}\${1}', item.key, label)
   properties: {
     value: item.value
@@ -86,9 +121,15 @@ resource featureFlag 'Microsoft.AppConfiguration/configurationStores/keyValues@2
   parent: store
   // A feature flag's key genuinely contains a slash (".appconfig.featureflag/<id>"),
   // but ARM reads a slash in a resource name as a parent/child separator and
-  // rejects the name for having three segments where two were expected. The
-  // slash has to be percent-encoded; App Configuration decodes it back.
-  name: format('.appconfig.featureflag%2F{0}\${1}', item.id, label)
+  // rejects the name for having three segments where two were expected.
+  //
+  // App Configuration escapes it as ~2F, NOT the %2F you would expect: %2F is
+  // accepted by the template parser and then rejected by the resource provider
+  // with KeyValueNameInvalid. Confirmed by creating both against a real store —
+  // `az deployment group validate` reports BOTH as valid, so it cannot be used
+  // to check this.
+  name: format('.appconfig.featureflag~2F{0}\${1}', item.id, label)
+  dependsOn: [ deployerDataAccess ]
   properties: {
     contentType: 'application/vnd.microsoft.appconfig.ff+json;charset=utf-8'
     value: string({
