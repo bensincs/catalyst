@@ -78,10 +78,10 @@
       "exposeService": "frontend",
       "exposePort": 80,
       "hostname": "insight",
-      "authRequired": false,
+      "authRequired": true,
       "embed": true,
       "icon": "layout-grid",
-      "values": "imageRegistry: cortexcpacr6hy6uurw.azurecr.io/insight\nimageTag: latest\nglobal:\n  namespace: insight\n  imagePullPolicy: IfNotPresent\nlocalSecrets:\n  enabled: false\npostgres:\n  enabled: false\nappConfig:\n  enabled: false\nnetworkPolicy:\n  enabled: false\nroute:\n  enabled: 'true'\ningress:\n  enabled: false\ngateway:\n  httpRoute:\n    enabled: false\nbackend:\n  image:\n    repository: insight-saas-backend\nbff:\n  image:\n    repository: insight-saas-bff\nfrontend:\n  image:\n    repository: insight-saas-frontend\nagenticCore:\n  image:\n    repository: insight-saas-agentic-core\nllmGateway:\n  image:\n    repository: insight-saas-llm-gateway\n  useEsoSecrets: true\ndigitalSimulator:\n  image:\n    repository: insight-saas-digital-simulator\ntranslation:\n  image:\n    repository: insight-saas-translation\ndecisionRegister:\n  image:\n    repository: insight-saas-decision-register\ncortex:\n  image:\n    repository: insight-saas-cortex\n",
+      "values": "imageRegistry: cortexcpacr6hy6uurw.azurecr.io/insight\nimageTag: latest\nglobal:\n  namespace: insight\n  imagePullPolicy: IfNotPresent\nlocalSecrets:\n  enabled: false\npostgres:\n  enabled: false\nappConfig:\n  enabled: false\nnetworkPolicy:\n  enabled: false\nroute:\n  enabled: false\ningress:\n  enabled: false\ngateway:\n  httpRoute:\n    enabled: false\nbackend:\n  image:\n    repository: insight-saas-backend\nbff:\n  image:\n    repository: insight-saas-bff\nfrontend:\n  image:\n    repository: insight-saas-frontend\nagenticCore:\n  image:\n    repository: insight-saas-agentic-core\nllmGateway:\n  image:\n    repository: insight-saas-llm-gateway\n  useEsoSecrets: true\ndigitalSimulator:\n  image:\n    repository: insight-saas-digital-simulator\ntranslation:\n  image:\n    repository: insight-saas-translation\ndecisionRegister:\n  image:\n    repository: insight-saas-decision-register\ncortex:\n  image:\n    repository: insight-saas-cortex\n",
       "dependencies": [
         {
           "kind": "infrastructure",
