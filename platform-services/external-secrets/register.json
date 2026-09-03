@@ -1,12 +1,12 @@
 {
   "_comment": [
-    "External Secrets Operator — a platform service other services depend on.",
+    "External Secrets Operator \u2014 a platform service other services depend on.",
     "",
     "It is what turns a secret in a tenant's Key Vault into a Kubernetes Secret",
     "a chart can read, using the workload identity that service's Bicep module",
     "federated. Cortex's own secret stores do not need it (the reconciler writes",
     "those Secrets directly), but a vendor chart that ships its own",
-    "SecretStore/ExternalSecret resources does — insight is the first.",
+    "SecretStore/ExternalSecret resources does \u2014 insight is the first.",
     "",
     "Pulled straight from the upstream Helm repository rather than mirrored: it",
     "is public, and a mirror is a copy to keep current for no benefit.",
@@ -14,7 +14,6 @@
     "No infrastructure and no secret store: it is a controller, and the",
     "credentials it reads belong to the services that use it."
   ],
-
   "applications": [
     {
       "name": "external secrets",
@@ -22,7 +21,7 @@
       "namespace": "external-secrets",
       "repoURL": "https://charts.external-secrets.io",
       "chart": "external-secrets",
-      "targetRevision": "0.10.7",
+      "targetRevision": "0.19.2",
       "values": "installCRDs: true\nwebhook:\n  create: true\ncertController:\n  create: true\n",
       "exposeService": "",
       "authRequired": false,

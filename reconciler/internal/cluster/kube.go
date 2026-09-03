@@ -648,8 +648,16 @@ func buildApplication(a shared.DesiredApplication, name string) *unstructured.Un
 				"namespace": a.Namespace,
 			},
 			"syncPolicy": map[string]any{
-				"automated":   map[string]any{"prune": true, "selfHeal": true},
-				"syncOptions": []any{"CreateNamespace=true"},
+				"automated": map[string]any{"prune": true, "selfHeal": true},
+				// ServerSideApply because a client-side apply stores the whole
+				// manifest in the last-applied-configuration annotation, and
+				// Kubernetes caps annotations at 262144 bytes. Charts carrying
+				// large CRDs exceed that and cannot be installed at all — the
+				// External Secrets SecretStore CRD fails with "metadata.annotations:
+				// Too long", and it is far from the only one (Istio, Prometheus
+				// and Crossplane are the same shape). Server-side apply keeps no
+				// such annotation, so the size limit does not arise.
+				"syncOptions": []any{"CreateNamespace=true", "ServerSideApply=true"},
 			},
 		},
 	}}
