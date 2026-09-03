@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.40.2.10011",
-      "templateHash": "452726404438575959"
+      "templateHash": "18249625714781335367"
     }
   },
   "parameters": {
@@ -166,6 +166,21 @@
       "minValue": 1,
       "metadata": {
         "description": "AKS system node count."
+      }
+    },
+    "workloadNodeVmSize": {
+      "type": "string",
+      "defaultValue": "Standard_D8s_v5",
+      "metadata": {
+        "description": "AKS workload node pool VM size. The system pool is deliberately small and sized for the platform's own components; anything a tenant installs runs here. A real application does not fit in the system pool — Insight alone requests over 6 vCPU, where two Standard_D2s_v5 system nodes offer under 4 in total."
+      }
+    },
+    "workloadNodeCount": {
+      "type": "int",
+      "defaultValue": 2,
+      "minValue": 0,
+      "metadata": {
+        "description": "AKS workload node count. Zero omits the pool entirely, for a footprint that will only ever run platform components."
       }
     },
     "acmeDirectoryUrl": {
@@ -496,6 +511,23 @@
           }
         }
       }
+    },
+    {
+      "condition": "[and(parameters('deployCluster'), greater(parameters('workloadNodeCount'), 0))]",
+      "type": "Microsoft.ContainerService/managedClusters/agentPools",
+      "apiVersion": "2024-09-01",
+      "name": "[format('{0}/{1}', parameters('clusterName'), 'workload')]",
+      "properties": {
+        "mode": "User",
+        "count": "[parameters('workloadNodeCount')]",
+        "vmSize": "[parameters('workloadNodeVmSize')]",
+        "osType": "Linux",
+        "osSKU": "AzureLinux",
+        "type": "VirtualMachineScaleSets"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ContainerService/managedClusters', parameters('clusterName'))]"
+      ]
     },
     {
       "type": "Microsoft.Authorization/roleAssignments",

@@ -97,6 +97,13 @@ param nodeVmSize string = 'Standard_D2s_v5'
 @minValue(1)
 param nodeCount int = 2
 
+@description('AKS workload node pool VM size. The system pool is deliberately small and sized for the platform\'s own components; anything a tenant installs runs here. A real application does not fit in the system pool — Insight alone requests over 6 vCPU, where two Standard_D2s_v5 system nodes offer under 4 in total.')
+param workloadNodeVmSize string = 'Standard_D8s_v5'
+
+@description('AKS workload node count. Zero omits the pool entirely, for a footprint that will only ever run platform components.')
+@minValue(0)
+param workloadNodeCount int = 2
+
 @description('ACME directory the reconciler obtains wildcard certificates from. Blank = Let\'s Encrypt production.')
 param acmeDirectoryUrl string = ''
 
@@ -336,6 +343,9 @@ resource aks 'Microsoft.ContainerService/managedClusters@2025-09-02-preview' = i
         type: 'VirtualMachineScaleSets'
       }
     ]
+    // A workload pool is declared separately below rather than here, because
+    // adding an agent pool profile to an EXISTING cluster through this property
+    // is not a safe edit — ARM reconciles the whole list.
     // Application Gateway for Containers (AGC) via the AKS add-on: installs the
     // Gateway API + ALB controller, which auto-provisions the AGC identity, roles,
     // federated credential, and delegated subnet. The reconciler then programs it
@@ -345,6 +355,27 @@ resource aks 'Microsoft.ContainerService/managedClusters@2025-09-02-preview' = i
       gatewayAPI: { installation: 'Standard' }
       applicationLoadBalancer: { enabled: true }
     }
+  }
+}
+
+// Declared as its own resource rather than a second entry in agentPoolProfiles:
+// that property is reconciled as a whole list, so adding a pool there to a
+// cluster that already exists is not a safe edit.
+//
+// The system pool is sized for the platform's own components. Anything a tenant
+// installs runs here, and a real application does not fit alongside them —
+// Insight alone requests over 6 vCPU, where two Standard_D2s_v5 system nodes
+// offer under 4 in total, and its pods simply sat Pending.
+resource workloadPool 'Microsoft.ContainerService/managedClusters/agentPools@2024-09-01' = if (deployCluster && workloadNodeCount > 0) {
+  parent: aks
+  name: 'workload'
+  properties: {
+    mode: 'User'
+    count: workloadNodeCount
+    vmSize: workloadNodeVmSize
+    osType: 'Linux'
+    osSKU: 'AzureLinux'
+    type: 'VirtualMachineScaleSets'
   }
 }
 
