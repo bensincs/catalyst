@@ -54,3 +54,20 @@ application. In Cortex that is EnvoyGateway's `SecurityPolicy` calling
 `/v1/ext-authz` and forwarding the headers on an allow. This platform fronts
 apps with oauth2-proxy instead, which has no ext-authz — so Insight still
 receives no identity it recognises.
+
+## Applications bring their own roles
+
+An application declares `roles` in its registration — its own vocabulary for
+describing a person. Insight declares `org_admin`, `mg_admin`, `member` and
+`guest`, which is exactly what its `role_utils.ORG_ROLE_PRIORITY` uses.
+
+Nothing about this service appears in an application's manifest. The
+registration hook here asks for `{{role}}`, and the reconciler calls it once per
+role the application declared. A hook that does not mention `{{role}}` is about
+the application itself and is called once, not multiplied. An application that
+declares no roles still gets one (`user`), so it stays grantable rather than
+becoming invisible to whoever manages access.
+
+Left over: every application registered before this carries a `user` role that
+its code may never refer to — Insight has one. There is no route that deletes a
+role, so these cannot be tidied up through the API.
