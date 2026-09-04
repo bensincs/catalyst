@@ -126,3 +126,40 @@ async def test_access_lists_every_grant_in_one_query(
     }
     # Sorted, so the table does not reshuffle between refreshes.
     assert grants == sorted(grants, key=lambda g: (g["subject"], g["app"], g["role"]))
+
+
+@pytest.mark.asyncio
+async def test_catalog_returns_roles_per_application(
+    client: AsyncClient, mock_spicedb_client: AsyncMock
+) -> None:
+    """Roles belong to their application.
+
+    An earlier version read the roles of the FIRST app and applied that name to
+    every app the operator picked, which is wrong the moment two applications
+    define different roles.
+    """
+    from tests.conftest import TENANT_A
+
+    sfx = TENANT_A.replace("-", "_")
+    rel = lambda res, sub: type("R", (), {"resource": res, "subject": sub})()
+    mock_spicedb_client.list_relationships = AsyncMock(
+        return_value=type("L", (), {"relationships": [
+            rel(f"app_permission:insight|cortex_dot_role_dot_defined_{sfx}",
+                f"app_role:insight|admin_{sfx}"),
+            rel(f"app_permission:insight|cortex_dot_role_dot_defined_{sfx}",
+                f"app_role:insight|user_{sfx}"),
+            rel(f"app_permission:todo|cortex_dot_role_dot_defined_{sfx}",
+                f"app_role:todo|user_{sfx}"),
+            # Not the sentinel: says what a role can do, not that it exists.
+            rel(f"app_permission:todo|report_dot_read_{sfx}", f"app_role:todo|user_{sfx}"),
+        ]})()
+    )
+
+    resp = await client.get("/v1/ui/catalog", headers=_ADMIN)
+
+    assert resp.status_code == 200
+    assert mock_spicedb_client.list_relationships.await_count == 1
+    assert resp.json()["apps"] == [
+        {"name": "insight", "roles": ["admin", "user"]},
+        {"name": "todo", "roles": ["user"]},
+    ]

@@ -270,3 +270,51 @@ async def list_access(
         )
     grants.sort(key=lambda g: (g["subject"], g["app"], g["role"]))
     return {"grants": grants}
+
+
+@router.get("/catalog")
+async def catalog(
+    _: str = Depends(require_admin),
+    authz: SpiceDBClient = Depends(get_authz_client),
+) -> dict:
+    """Every application and the roles it defines, in one query.
+
+    The editor offers a role per application, because roles are per application
+    — a previous version read the roles of the FIRST app and applied that name
+    to all of them, which is wrong the moment two apps differ. Fetching them one
+    app at a time would be a request per row, so they are read from the sentinel
+    permission that every seeded role is granted against.
+    """
+    from routes.app_permissions import (
+        _GRANT_RELATION,
+        _ROLE_EXISTS_PERMISSION,
+        _decode_fragment,
+        _split_role_object,
+        _tenant_suffix,
+    )
+
+    result = await authz.list_relationships(
+        tenant_id=TENANT_ID, resource_type="app_permission", relation=_GRANT_RELATION
+    )
+    suffix = f"_{_tenant_suffix(TENANT_ID)}"
+    apps: dict[str, set[str]] = {}
+    for item in result.relationships:
+        # Only the sentinel says "this role exists"; other permission grants are
+        # about what a role can do, not which roles there are.
+        object_id = item.resource.removeprefix("app_permission:")
+        if not object_id.endswith(suffix):
+            continue
+        encoded_app, sep, encoded_perm = object_id[: -len(suffix)].partition("|")
+        if sep != "|" or _decode_fragment(encoded_perm) != _ROLE_EXISTS_PERMISSION:
+            continue
+        parts = _split_role_object(item.subject, TENANT_ID)
+        if parts is None:
+            continue
+        app, role = parts
+        apps.setdefault(app, set()).add(role)
+
+    return {
+        "apps": [
+            {"name": name, "roles": sorted(roles)} for name, roles in sorted(apps.items())
+        ]
+    }

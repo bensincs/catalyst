@@ -143,20 +143,12 @@ select:focus-visible, input:focus-visible {
 
 /* Each application a person holds, with its own removal control — a row-level
    action could not say which access it meant. */
-.access { display: flex; flex-wrap: wrap; gap: 6px; }
-.chip {
-  display: inline-flex; align-items: center; gap: 2px;
-  padding: 3px 4px 3px 10px; border-radius: 999px;
-  background: var(--neutral-bg, rgb(41 41 41 / 0.08));
-  color: var(--text-secondary); font-size: 12px; font-weight: 500;
-}
-.chip-x {
-  border: 0; background: none; cursor: pointer; color: var(--text-muted);
-  font-size: 15px; line-height: 1; padding: 0 5px; border-radius: 999px;
-}
-.chip-x:hover { color: var(--danger-ink); background: rgb(181 35 27 / 0.12); }
-.chip-x:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--focus-glow); }
-.chip-x:disabled { opacity: 0.4; cursor: not-allowed; }
+
+
+
+
+
+
 
 /* ─── Dialog ──────────────────────────────────────────────────────────────── */
 dialog {
@@ -180,3 +172,36 @@ dialog .field { margin-bottom: var(--space-base); }
 }
 .checks label:has(input:focus-visible) { box-shadow: 0 0 0 3px var(--focus-glow); }
 .checks input { width: auto; margin: 0; }
+
+/* ─── Accessibility ───────────────────────────────────────────────────────── */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+/* ─── Table ───────────────────────────────────────────────────────────────── */
+.grants tbody tr { cursor: pointer; }
+.grants tbody tr:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.apps { display: flex; flex-wrap: wrap; gap: 6px; }
+.tag {
+  display: inline-block; padding: 2px 8px; border-radius: 999px;
+  background: rgb(41 41 41 / 0.08); color: var(--text-secondary);
+  font-size: 12px; font-weight: 500;
+}
+.tag.none { background: none; color: var(--text-muted); font-style: italic; padding-left: 0; }
+.state { padding: var(--space-xl); text-align: center; color: var(--text-muted); margin: 0; }
+.state[hidden] { display: none; }
+
+/* ─── Editor ──────────────────────────────────────────────────────────────── */
+.label { display: block; font-size: 13px; font-weight: 500; color: var(--text-secondary); margin-bottom: 6px; }
+.applist { border: 1px solid var(--border); border-radius: var(--radius-md); max-height: 260px; overflow-y: auto; }
+.approw {
+  display: flex; align-items: center; gap: var(--space-md);
+  padding: 8px var(--space-md); border-bottom: 1px solid var(--border);
+}
+.approw:last-child { border-bottom: 0; }
+.approw:hover { background: var(--surface-hover); }
+.approw label { display: flex; align-items: center; gap: 8px; flex: 1; cursor: pointer; font-weight: 400; color: var(--text); }
+.approw input[type="checkbox"] { width: auto; margin: 0; cursor: pointer; }
+.approw select { width: auto; min-width: 110px; padding: 4px 8px; font-size: 13px; }
+.approw select:disabled { opacity: 0.45; }
