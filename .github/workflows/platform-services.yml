@@ -78,14 +78,18 @@ jobs:
           set -euo pipefail
           dir="platform-services/${{ matrix.service }}/chart"
           [ -d "$dir" ] || { echo "no chart/ — nothing to lint"; exit 0; }
-          helm lint "$dir" --strict \
-            --set database.host=example.postgres.database.azure.com \
-            --set database.user=admin \
-            --set database.existingSecret=cortex-secret-example
-          helm template "$dir" \
-            --set database.host=example.postgres.database.azure.com \
-            --set database.user=admin \
-            --set database.existingSecret=cortex-secret-example > /dev/null
+          # Values a chart needs to render come from wiring at deploy time, so
+          # they are not defaults — a chart that rendered without them would be
+          # one that could be deployed unwired. Each service supplies its own;
+          # CI has no business knowing one service's value names.
+          ci_values="$dir/ci-values.yaml"
+          if [ -f "$ci_values" ]; then
+            helm lint "$dir" --strict -f "$ci_values"
+            helm template "$dir" -f "$ci_values" > /dev/null
+          else
+            helm lint "$dir" --strict
+            helm template "$dir" > /dev/null
+          fi
 
       - name: Chart takes a secret by reference, not by value
         run: |

@@ -1,0 +1,8 @@
+# Values that let CI render this chart.
+#
+# Not defaults: these arrive from wiring at deploy time, and a chart that
+# rendered without them would be one that could be deployed unwired.
+database:
+  host: example.postgres.database.azure.com
+  user: admin
+  existingSecret: cortex-secret-example

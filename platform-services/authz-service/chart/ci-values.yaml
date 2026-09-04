@@ -1,0 +1,10 @@
+# Values that let CI render this chart.
+#
+# Not defaults: the datastore connection arrives from this service's own
+# infrastructure at deploy time, and the tenant is deliberately required so a
+# deployment cannot come up serving an unspecified one.
+routingDomain: example.test
+tenantId: t-ci
+postgres:
+  host: example.postgres.database.azure.com
+  user: authzadmin
