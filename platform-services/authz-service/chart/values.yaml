@@ -11,7 +11,15 @@ namespace: cortex-authz
 
 image: cortexcpacr6hy6uurw.azurecr.io/images/authz-service:0.1.0
 imagePullPolicy: IfNotPresent
-replicas: 1
+# Two, for the same reason as SpiceDB: this service is in the request path of
+# every application behind the gateway. It also keeps the PodDisruptionBudget
+# honest — minAvailable 1 against a single replica permits no disruption at
+# all, which blocks node drains and stalls cluster upgrades.
+replicas: 2
+# SpiceDB answers every authenticated request in the tenant. One replica makes
+# a node drain a tenant-wide outage; it is stateless (state lives in Postgres),
+# so a second costs nothing but scheduling.
+spicedbReplicas: 2
 
 images:
   spicedb: docker.io/authzed/spicedb:v1.29.0
@@ -84,3 +92,7 @@ resources:
   postgres:
     requests: { cpu: 50m, memory: 128Mi }
     limits:   { cpu: 500m, memory: 512Mi }
+
+# Keeps one replica of each serving through a node drain.
+podDisruptionBudgets:
+  enabled: true

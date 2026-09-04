@@ -22,6 +22,14 @@ spec:
       labels: { app: authz-service }
     spec:
       automountServiceAccountToken: false
+      # Two replicas on one node is one drain away from an outage that fails
+      # every request in every application behind the gateway.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: { app: authz-service }
       securityContext:
         seccompProfile: { type: RuntimeDefault }
       containers:

@@ -37,6 +37,10 @@ def _admin_app() -> str:
     return os.environ.get("AUTHZ_ADMIN_APP", "authz-admin").strip() or "authz-admin"
 
 
+def _admin_role() -> str:
+    return os.environ.get("AUTHZ_ADMIN_ROLE", "admin").strip() or "admin"
+
+
 def _normalize_subject(sub: str) -> str:
     return sub if ":" in sub else f"user:{sub}"
 
@@ -232,6 +236,27 @@ async def revoke(
     role_object = _role_object(body.app, body.role, TENANT_ID)
     assignment = _role_assignment_object(body.app, subject, TENANT_ID)
 
+    # Removing the last administrator locks everyone out of this UI
+    # permanently: the only route that can grant the role back requires you to
+    # already hold it. Recovering means editing SpiceDB by hand through the
+    # break-glass admin API. It has happened once already.
+    if body.app == _admin_app() and body.role == _admin_role():
+        remaining = await _other_administrators(authz, excluding=subject)
+        if not remaining:
+            AuditEvent(
+                tenant_id=TENANT_ID, subject=caller, action="ui.revoke",
+                resource=body.app, decision="deny", reason="last_administrator",
+                request_id=request_context_from(request).req_id,
+                metadata={"role": body.role, "revoked_from": subject},
+            ).emit()
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "This is the only administrator. Give someone else the "
+                    "administrator role before removing this one."
+                ),
+            )
+
     await authz.revoke_permissions(
         relationships=[
             {"resource": role_object, "relation": _MEMBER_RELATION, "subject": subject},
@@ -247,6 +272,31 @@ async def revoke(
         metadata={"role": body.role, "revoked_from": subject},
     ).emit()
     return {"revoked": True, "app": body.app, "role": body.role, "subject": subject}
+
+
+async def _other_administrators(authz: SpiceDBClient, excluding: str) -> list[str]:
+    """Administrators other than `excluding`.
+
+    Asked as a question about who remains rather than how many there are, so
+    that revoking someone who does not hold the role cannot be mistaken for
+    removing the last one.
+
+    Subjects are compared decoded: SpiceDB stores an address as
+    user:ben_at_msft_dot_ae, and comparing that to the caller's
+    user:ben@msft.ae would never match, so every revoke would look like the
+    last administrator leaving.
+    """
+    from routes.app_permissions import _MEMBER_RELATION, _decode_subject, _role_object
+
+    admin_object = _role_object(_admin_app(), _admin_role(), TENANT_ID)
+    result = await authz.list_relationships(
+        tenant_id=TENANT_ID, resource_type="app_role", relation=_MEMBER_RELATION
+    )
+    return [
+        _decode_subject(item.subject)
+        for item in result.relationships
+        if item.resource == admin_object and _decode_subject(item.subject) != excluding
+    ]
 
 
 @router.get("/access")

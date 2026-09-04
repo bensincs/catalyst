@@ -212,3 +212,99 @@ async def test_catalog_returns_roles_per_application(
         {"name": "insight", "roles": ["admin", "user"]},
         {"name": "todo", "roles": ["user"]},
     ]
+
+
+def _rel(resource: str, subject: str):
+    return type("R", (), {"resource": resource, "subject": subject})()
+
+
+def _admins(*subjects: str) -> AsyncMock:
+    """A SpiceDB listing in which `subjects` administer app access.
+
+    The role object is built with the same function the service uses rather
+    than written out here: an address is encoded on the way in, so a hand-written
+    "authz-admin" never matches the stored "authz_dash_admin" and the listing
+    silently looks empty.
+    """
+    from routes.app_permissions import _role_object
+    from tests.conftest import TENANT_A
+
+    admin_object = _role_object("authz-admin", "admin", TENANT_A)
+    return AsyncMock(
+        return_value=type("L", (), {"relationships": [
+            _rel(admin_object, s) for s in subjects
+        ]})()
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_last_administrator_cannot_be_removed(
+    client: AsyncClient, mock_spicedb_client: AsyncMock
+) -> None:
+    """Removing the only administrator locks everyone out for good.
+
+    The one route that grants the role back requires you to already hold it, so
+    there is no way back through the UI — recovery means editing SpiceDB by hand.
+    """
+    mock_spicedb_client.list_relationships = _admins("user:ben_at_msft_dot_ae")
+
+    resp = await client.post(
+        "/v1/ui/revoke",
+        json={"app": "authz-admin", "role": "admin", "subject": "ben@msft.ae"},
+        headers=_ADMIN,
+    )
+
+    assert resp.status_code == 409
+    mock_spicedb_client.revoke_permissions.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_an_administrator_can_be_removed_while_another_remains(
+    client: AsyncClient, mock_spicedb_client: AsyncMock
+) -> None:
+    mock_spicedb_client.list_relationships = _admins(
+        "user:ben_at_msft_dot_ae", "user:zoe_at_example_dot_com"
+    )
+
+    resp = await client.post(
+        "/v1/ui/revoke",
+        json={"app": "authz-admin", "role": "admin", "subject": "ben@msft.ae"},
+        headers=_ADMIN,
+    )
+
+    assert resp.status_code == 200
+    mock_spicedb_client.revoke_permissions.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_revoking_someone_who_is_not_an_administrator_is_not_the_last_one(
+    client: AsyncClient, mock_spicedb_client: AsyncMock
+) -> None:
+    """Counting members would call this the last administrator and refuse.
+
+    The real administrator still holds the role; the person being removed never
+    did. Asking who remains rather than how many distinguishes the two.
+    """
+    mock_spicedb_client.list_relationships = _admins("user:ben_at_msft_dot_ae")
+
+    resp = await client.post(
+        "/v1/ui/revoke",
+        json={"app": "authz-admin", "role": "admin", "subject": "stranger@example.com"},
+        headers=_ADMIN,
+    )
+
+    assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_the_guard_does_not_apply_to_ordinary_applications(
+    client: AsyncClient, mock_spicedb_client: AsyncMock
+) -> None:
+    """Insight's last org_admin is not a lockout: access can still be restored."""
+    resp = await client.post(
+        "/v1/ui/revoke",
+        json={"app": "insight", "role": "org_admin", "subject": "ben@msft.ae"},
+        headers=_ADMIN,
+    )
+
+    assert resp.status_code == 200

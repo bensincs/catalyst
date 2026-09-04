@@ -1,0 +1,25 @@
+{{- if .Values.podDisruptionBudgets.enabled }}
+# Replicas only survive a node drain if something tells Kubernetes to keep one
+# running. Without these, a routine upgrade can evict every replica at once and
+# take authorization down for the whole tenant — which fails every request in
+# every application behind the gateway, not just this service's own UI.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: authz-service
+  namespace: {{ .Values.namespace }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: { app: authz-service }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: spicedb
+  namespace: {{ .Values.namespace }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: { app: spicedb }
+{{- end }}
