@@ -260,6 +260,18 @@ func identityHeaders(sub, tenant, app string) map[string]any {
 	}
 }
 
+// jwksURLFor derives the signing-key endpoint from an OIDC issuer.
+//
+// Entra's issuer already ends in /v2.0 while its JWKS lives at
+// /discovery/v2.0/keys off the TENANT root — so appending the well-known suffix
+// to the issuer yields /v2.0/discovery/v2.0/keys, which 404s. Every request
+// would then fail to authenticate, with nothing in the proxy's logs naming a
+// malformed URL as the reason.
+func jwksURLFor(issuer string) string {
+	root := strings.TrimSuffix(strings.TrimSuffix(issuer, "/"), "/v2.0")
+	return root + "/discovery/v2.0/keys"
+}
+
 // authzHopConfig renders Oathkeeper's own configuration.
 //
 // A handler enabled here must also carry its required config block, even though
@@ -269,7 +281,7 @@ func identityHeaders(sub, tenant, app string) map[string]any {
 // out, and an incomplete global section fails the container at boot rather than
 // at the first request.
 func authzHopConfig(appName, tenantSlug string, ing *shared.IngressConfig) string {
-	jwks := strings.TrimSuffix(ing.OIDCIssuer, "/") + "/discovery/v2.0/keys"
+	jwks := jwksURLFor(ing.OIDCIssuer)
 	headers, _ := json.Marshal(identityHeaders("{{ print .Subject }}", tenantSlug, appName))
 	payload := `{"subject":"{{ print .Subject }}","app":"` + appName + `"}`
 
@@ -323,7 +335,7 @@ mutators:
 // rather than merely asserted. Trusting the upstream blindly would mean anything
 // that reached this port was whoever it claimed to be.
 func authzHopRules(appName, tenantSlug, upstream string, ing *shared.IngressConfig) string {
-	jwks := strings.TrimSuffix(ing.OIDCIssuer, "/") + "/discovery/v2.0/keys"
+	jwks := jwksURLFor(ing.OIDCIssuer)
 
 	rule := map[string]any{
 		"id": "cortex-" + appName,

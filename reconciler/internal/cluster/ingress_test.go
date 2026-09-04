@@ -573,3 +573,18 @@ func TestAuthzHopGlobalConfigCarriesRequiredProperties(t *testing.T) {
 		}
 	}
 }
+
+// Entra's issuer ends in /v2.0 but its JWKS hangs off the tenant root, so
+// appending the well-known suffix to the issuer produces
+// /v2.0/discovery/v2.0/keys — which 404s. Every request then fails to
+// authenticate, and nothing in the proxy's logs names a malformed URL.
+func TestJWKSURLIsNotDoubledForEntra(t *testing.T) {
+	got := jwksURLFor("https://login.microsoftonline.com/tid/v2.0")
+	want := "https://login.microsoftonline.com/tid/discovery/v2.0/keys"
+	if got != want {
+		t.Errorf("jwks url\n got: %s\nwant: %s", got, want)
+	}
+	if strings.Contains(got, "/v2.0/discovery") {
+		t.Error("issuer's /v2.0 must not be carried into the JWKS path")
+	}
+}
