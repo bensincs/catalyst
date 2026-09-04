@@ -5,8 +5,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"io"
+	"k8s.io/client-go/rest"
 	"net/http"
-	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -649,44 +650,49 @@ func TestAuthzAppNameIsTheHostnameLabel(t *testing.T) {
 	}
 }
 
-// A hook is fired without the reconciler understanding it.
+// A hook targets an in-cluster Service, not a URL.
 //
-// The point of the indirection: before this, the reconciler held one service's
-// namespace, secret name, DNS name and API shape. Substituting {{app}} and
-// sending the request is the whole of what it now knows.
-func TestApplicationHookSubstitutesTheAppName(t *testing.T) {
-	var gotPath, gotMethod, gotBody, gotAuth string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath, gotMethod = r.URL.Path, r.Method
-		gotAuth = r.Header.Get("Authorization")
-		b, _ := io.ReadAll(r.Body)
-		gotBody = string(b)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
+// The reconciler runs outside the cluster — as a Container App — so a cluster
+// DNS name does not resolve for it. The first version of this used a URL and
+// failed with "no such host" against Docker's resolver, which reads as the
+// service being down rather than unreachable by design. It goes through the API
+// server's proxy instead, which the reconciler can already reach and
+// authenticate to.
+func TestApplicationHookTargetsAServiceNotAURL(t *testing.T) {
+	var gotPath string
+	fake := &fakeRESTClient{record: func(p string) { gotPath = p }}
+	k := &kube{rest: fake}
 
-	k := &kube{}
 	err := k.runApplicationHook(context.Background(), shared.ApplicationHook{
-		Name:   "test subscriber",
-		Method: http.MethodPut,
-		URL:    srv.URL + "/v1/apps/{{app}}/roles/user",
-		Body:   `{"app":"{{app}}"}`,
+		Name:    "test subscriber",
+		Method:  http.MethodPut,
+		Service: shared.ServiceRef{Namespace: "cortex-authz", Name: "authz-service", Port: 8080},
+		Path:    "/v1/apps/{{app}}/roles/user",
+		Body:    `{"app":"{{app}}"}`,
 	}, "todo")
-
 	if err != nil {
 		t.Fatalf("hook failed: %v", err)
 	}
-	if gotPath != "/v1/apps/todo/roles/user" {
-		t.Errorf("path = %q, want the app substituted", gotPath)
+
+	for _, want := range []string{
+		"/namespaces/cortex-authz/services/authz-service:8080/proxy",
+		"/v1/apps/todo/roles/user", // {{app}} substituted
+	} {
+		if !strings.Contains(gotPath, want) {
+			t.Errorf("request path %q is missing %q", gotPath, want)
+		}
 	}
-	if gotMethod != http.MethodPut {
-		t.Errorf("method = %q", gotMethod)
-	}
-	if gotBody != `{"app":"todo"}` {
-		t.Errorf("body = %q, want the app substituted there too", gotBody)
-	}
-	if gotAuth != "" {
-		t.Errorf("no token was configured, so none should be sent, got %q", gotAuth)
+}
+
+// A hook with no service names nothing to call, and saying so is better than a
+// request to an empty host.
+func TestApplicationHookWithoutAServiceIsRejected(t *testing.T) {
+	k := &kube{rest: &fakeRESTClient{record: func(string) {}}}
+	err := k.runApplicationHook(context.Background(), shared.ApplicationHook{
+		Name: "misconfigured", Method: http.MethodPut, Path: "/x",
+	}, "todo")
+	if err == nil {
+		t.Fatal("want an error naming the missing service")
 	}
 }
 
@@ -694,19 +700,12 @@ func TestApplicationHookSubstitutesTheAppName(t *testing.T) {
 // that is simply not installed yet is the expected case, not an error worth
 // halting on — the sweep is level-triggered and will try again.
 func TestApplicationHooksReportEachFailureAndContinue(t *testing.T) {
-	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer ok.Close()
-	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "nope", http.StatusInternalServerError)
-	}))
-	defer bad.Close()
-
-	k := &kube{}
+	k := &kube{rest: &fakeRESTClient{record: func(string) {}}}
 	errs := k.runApplicationHooks(context.Background(), []shared.ApplicationHook{
-		{Name: "broken", Method: http.MethodPut, URL: bad.URL},
-		{Name: "working", Method: http.MethodPut, URL: ok.URL},
+		// No service: fails without reaching the network.
+		{Name: "broken", Method: http.MethodPut, Path: "/x"},
+		{Name: "working", Method: http.MethodPut, Path: "/x",
+			Service: shared.ServiceRef{Namespace: "ns", Name: "svc", Port: 80}},
 	}, "todo")
 
 	if len(errs) != 1 {
@@ -716,3 +715,31 @@ func TestApplicationHooksReportEachFailureAndContinue(t *testing.T) {
 		t.Errorf("the failure must name its subscriber, got %v", errs[0])
 	}
 }
+
+// fakeRESTClient records the request path the hook runner builds, so a test can
+// assert it goes through the API server's Service proxy rather than reaching
+// for a cluster DNS name the reconciler cannot resolve.
+type fakeRESTClient struct {
+	rest.Interface
+	record func(path string)
+}
+
+func (f *fakeRESTClient) Verb(verb string) *rest.Request {
+	return rest.NewRequestWithClient(
+		&url.URL{Scheme: "https", Host: "example"},
+		"",
+		rest.ClientContentConfig{},
+		&http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			f.record(r.URL.Path)
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader("{}")),
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+			}, nil
+		})},
+	).Verb(verb)
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

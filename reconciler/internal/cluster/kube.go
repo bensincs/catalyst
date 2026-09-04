@@ -20,6 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/restmapper"
 	"sigs.k8s.io/yaml"
 )
@@ -28,6 +29,9 @@ import (
 type kube struct {
 	dyn   dynamic.Interface
 	disco discovery.DiscoveryInterface
+	// rest reaches in-cluster Services through the API server's proxy. The
+	// reconciler runs outside the cluster and cannot resolve cluster DNS.
+	rest rest.Interface
 }
 
 // argoInstalled reports whether Argo CD's server is present (⇒ CRDs installed).

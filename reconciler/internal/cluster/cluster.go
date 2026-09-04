@@ -30,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
@@ -451,7 +452,14 @@ func (c *Client) kubeClient(ctx context.Context) (*kube, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &kube{dyn: dyn, disco: disco}, nil
+	// A typed core client, used only to reach in-cluster Services through the
+	// API server's proxy — the reconciler runs outside the cluster and cannot
+	// resolve their DNS names.
+	cs, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return &kube{dyn: dyn, disco: disco, rest: cs.CoreV1().RESTClient()}, nil
 }
 
 func (c *Client) armURL(suffix string) string {

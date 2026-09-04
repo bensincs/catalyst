@@ -16,10 +16,10 @@
       "description": "SpiceDB-backed authorization service for the data plane, with an admin UI for granting people access to hosted apps. Answers the gateway's access decisions and the role queries applications make.",
       "chart": "authz-service",
       "repoURL": "oci://cortexcpacr6hy6uurw.azurecr.io/charts",
-      "targetRevision": "0.5.0",
+      "targetRevision": "0.6.0",
       "namespace": "cortex-authz",
       "authRequired": true,
-      "values": "routingDomain: msft.ae\ntenantId: t-8f646aa4a8c3c71e\nadminApp: authz-admin\nimage: cortexcpacr6hy6uurw.azurecr.io/images/authz-service:0.4.0\nseed:\n  enabled: true\n  app: authz-admin\n  role: admin\n  members:\n  - user:bensinclair@msft.ae\n",
+      "values": "routingDomain: msft.ae\ntenantId: t-8f646aa4a8c3c71e\nadminApp: authz-admin\nimage: cortexcpacr6hy6uurw.azurecr.io/images/authz-service:0.5.0\nseed:\n  enabled: true\n  app: authz-admin\n  role: admin\n  members:\n  - user:bensinclair@msft.ae\n",
       "dependencies": [
         {
           "kind": "secret_set",
@@ -95,7 +95,12 @@
         {
           "name": "authz app registration",
           "method": "PUT",
-          "url": "http://authz-service.cortex-authz.svc.cluster.local:8080/v1/apps/{{app}}/roles/user",
+          "service": {
+            "namespace": "cortex-authz",
+            "name": "authz-service",
+            "port": 8080
+          },
+          "path": "/v1/apps/{{app}}/roles/user",
           "body": "{}",
           "tokenSecret": {
             "namespace": "cortex-authz",

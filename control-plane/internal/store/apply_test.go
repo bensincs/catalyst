@@ -84,10 +84,11 @@ func TestApplicationHooksRoundTrip(t *testing.T) {
 	defer st.pool.Exec(ctx, `DELETE FROM applications WHERE id = $1`, id)
 
 	hook := shared.ApplicationHook{
-		Name:   "authz app registration",
-		Method: "PUT",
-		URL:    "http://authz/v1/apps/{{app}}/roles/user",
-		Body:   "{}",
+		Name:    "authz app registration",
+		Method:  "PUT",
+		Service: shared.ServiceRef{Namespace: "cortex-authz", Name: "authz-service", Port: 8080},
+		Path:    "/v1/apps/{{app}}/roles/user",
+		Body:    "{}",
 		TokenSecret: &shared.SecretKeyRef{
 			Namespace: "cortex-authz", Name: "cortex-secret-authz-secrets", Key: "authz-admin-token",
 		},
@@ -108,7 +109,7 @@ func TestApplicationHooksRoundTrip(t *testing.T) {
 		t.Fatalf("want 1 hook, got %d", len(got.ApplicationHooks))
 	}
 	h := got.ApplicationHooks[0]
-	if h.URL != hook.URL || h.Method != hook.Method {
+	if h.Path != hook.Path || h.Method != hook.Method || h.Service != hook.Service {
 		t.Errorf("hook = %+v, want %+v", h, hook)
 	}
 	if h.TokenSecret == nil || h.TokenSecret.Key != "authz-admin-token" {

@@ -116,16 +116,30 @@ type ApplicationHook struct {
 	// Name identifies the subscriber in logs and errors. Without it a failing
 	// hook is an unattributed URL.
 	Name string `json:"name"`
-	// Method and URL to call. {{app}} is replaced with the application's name
-	// as an operator knows it — its hostname label.
+	// Method to call with.
 	Method string `json:"method"`
-	URL    string `json:"url"`
+	// Service is the in-cluster Service to call. Not a URL: the reconciler runs
+	// outside the cluster, so it cannot resolve cluster DNS — it reaches a
+	// Service through the API server's proxy, using the credentials it already
+	// holds. A subscriber therefore does not have to be publicly routable to be
+	// told about an application.
+	Service ServiceRef `json:"service"`
+	// Path on that service. {{app}} is replaced with the application's name as
+	// an operator knows it — its hostname label.
+	Path string `json:"path"`
 	// Body sent with the request, after the same substitution.
 	Body string `json:"body,omitempty"`
 	// TokenSecret names a Secret in the cluster whose value is sent as a bearer
 	// token. A hook that needs a credential reads it here rather than carrying
 	// one in the catalogue, where it would sit in plain sight.
 	TokenSecret *SecretKeyRef `json:"tokenSecret,omitempty"`
+}
+
+// ServiceRef points at one port of one Service.
+type ServiceRef struct {
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	Port      int    `json:"port"`
 }
 
 // SecretKeyRef points at one key of one Secret.

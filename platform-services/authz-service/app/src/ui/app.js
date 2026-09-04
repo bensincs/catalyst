@@ -38,52 +38,75 @@ const address = (s) => s.replace(/^user:/, "");
 
 function render() {
   const q = $("q").value.trim().toLowerCase();
-  const shown = q
-    ? grants.filter(
-        (g) =>
-          address(g.subject).toLowerCase().includes(q) ||
-          g.app.toLowerCase().includes(q) ||
-          g.role.toLowerCase().includes(q)
+
+  // One row per person, not per grant. A person with access to four
+  // applications is one fact about that person, and splitting it across four
+  // rows made the table longer than the thing it described and buried whether
+  // anyone appeared twice.
+  const byPerson = new Map();
+  for (const g of grants) {
+    const key = address(g.subject);
+    if (!byPerson.has(key)) byPerson.set(key, { subject: g.subject, access: [] });
+    byPerson.get(key).access.push(g);
+  }
+
+  // Match on the person OR anything they hold, so searching an app name still
+  // finds the people who can reach it.
+  const people = [...byPerson.entries()]
+    .filter(([name, p]) =>
+      !q ||
+      name.toLowerCase().includes(q) ||
+      p.access.some(
+        (g) => g.app.toLowerCase().includes(q) || g.role.toLowerCase().includes(q)
       )
-    : grants;
+    )
+    .sort((a, b) => a[0].localeCompare(b[0]));
 
   const body = $("rows");
   body.textContent = "";
 
-  for (const g of shown) {
+  for (const [name, p] of people) {
     const tr = document.createElement("tr");
 
     const person = document.createElement("td");
     person.className = "person";
-    person.textContent = address(g.subject);
+    person.textContent = name;
 
-    const app = document.createElement("td");
-    app.textContent = g.app;
+    const access = document.createElement("td");
+    access.className = "access";
+    for (const g of p.access.sort((a, b) => a.app.localeCompare(b.app))) {
+      const chip = document.createElement("span");
+      chip.className = "chip";
 
-    const role = document.createElement("td");
-    const tag = document.createElement("span");
-    tag.className = "tag";
-    tag.textContent = g.role;
-    role.append(tag);
+      const label = document.createElement("span");
+      label.textContent = g.role === "user" ? g.app : `${g.app} · ${g.role}`;
 
-    const action = document.createElement("td");
-    action.className = "right";
-    const btn = document.createElement("button");
-    btn.className = "btn quiet";
-    btn.textContent = "Remove";
-    btn.setAttribute("aria-label", `Remove ${address(g.subject)} from ${g.app}`);
-    btn.onclick = () => revoke(g, btn);
-    action.append(btn);
+      // Removal belongs on the thing being removed: one control per grant,
+      // rather than a row-level action that cannot say which access it means.
+      const x = document.createElement("button");
+      x.className = "chip-x";
+      x.type = "button";
+      x.innerHTML = "&times;";
+      x.setAttribute("aria-label", `Remove ${name} from ${g.app}`);
+      x.onclick = () => revoke(g, x);
 
-    tr.append(person, app, role, action);
+      chip.append(label, x);
+      access.append(chip);
+    }
+
+    const count = document.createElement("td");
+    count.className = "right muted";
+    count.textContent = p.access.length === 1 ? "1 app" : `${p.access.length} apps`;
+
+    tr.append(person, access, count);
     body.append(tr);
   }
 
   const empty = $("empty");
-  empty.hidden = shown.length > 0;
-  if (!shown.length) {
+  empty.hidden = people.length > 0;
+  if (!people.length) {
     empty.textContent = grants.length
-      ? `Nothing matches “${$("q").value.trim()}”.`
+      ? `Nothing matches \u201c${$("q").value.trim()}\u201d.`
       : "Nobody has been given access to anything yet.";
   }
 }

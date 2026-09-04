@@ -6,8 +6,8 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -493,33 +493,51 @@ func (k *kube) runApplicationHook(ctx context.Context, h shared.ApplicationHook,
 	if method == "" {
 		method = http.MethodPost
 	}
-	target := strings.ReplaceAll(h.URL, "{{app}}", url.PathEscape(appName))
+	if h.Service.Name == "" || h.Service.Namespace == "" {
+		return errors.New("hook names no service to call")
+	}
+
+	path := strings.ReplaceAll(h.Path, "{{app}}", url.PathEscape(appName))
 	body := strings.ReplaceAll(h.Body, "{{app}}", appName)
 
-	req, err := http.NewRequestWithContext(ctx, method, target, strings.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
+	headers := map[string]string{"Content-Type": "application/json"}
 	if h.TokenSecret != nil {
 		token, err := k.secretValue(ctx, *h.TokenSecret)
 		if err != nil {
 			return err
 		}
-		req.Header.Set("Authorization", "Bearer "+token)
+		headers["Authorization"] = "Bearer " + token
+	}
+
+	// Through the API server's proxy rather than the Service's cluster DNS
+	// name: this runs outside the cluster, where that name does not resolve,
+	// and the API server is the one thing it can already reach and authenticate
+	// to. A subscriber therefore does not have to be publicly routable.
+	port := h.Service.Port
+	if port == 0 {
+		port = 80
+	}
+	req := k.rest.Verb(method).
+		Namespace(h.Service.Namespace).
+		Resource("services").
+		Name(fmt.Sprintf("%s:%d", h.Service.Name, port)).
+		SubResource("proxy").
+		Suffix(path)
+	for name, value := range headers {
+		req = req.SetHeader(name, value)
+	}
+	if body != "" {
+		req = req.Body([]byte(body))
 	}
 
 	// A short timeout on purpose: this runs inside the reconcile sweep, and a
 	// subscriber that is slow or absent must not hold up every other app's
 	// reconciliation behind it.
-	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
-	if err != nil {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	if _, err := req.DoRaw(ctx); err != nil {
 		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode/100 != 2 {
-		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
-		return fmt.Errorf("%s %s: %s", method, resp.Status, strings.TrimSpace(string(msg)))
 	}
 	return nil
 }
