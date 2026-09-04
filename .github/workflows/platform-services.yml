@@ -58,14 +58,12 @@ jobs:
           [ -d "$dir" ] || { echo "no app/ — nothing to test"; exit 0; }
           pipx install uv >/dev/null 2>&1 || pip install uv
           cd "$dir"
-          # --extra dev, or the test runner itself is not installed and the step
-          # fails with "Failed to spawn: pytest", which reads as a broken service
-          # rather than a missing dependency group.
-          if grep -q '^dev = \[' pyproject.toml 2>/dev/null; then
-            uv sync --frozen --extra dev
-          else
-            uv sync --frozen
-          fi
+          # The test runner lives in a dev extra when a service declares one.
+          # Without it uv installs the runtime only and the step fails with
+          # "Failed to spawn: pytest", which reads as a broken service rather
+          # than a missing dependency group. Services differ in whether they
+          # declare the extra at all, so try it and fall back.
+          uv sync --frozen --extra dev || uv sync --frozen
           uv run pytest -q
 
       - name: Image builds
