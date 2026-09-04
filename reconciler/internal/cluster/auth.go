@@ -94,7 +94,12 @@ func authDeployment(name, namespace string, a shared.DesiredApplication, ing *sh
 	// openid is mandatory for OIDC; profile/email populate the identity the
 	// upstream sees. The app's own scope is appended so a token minted for one
 	// app is not automatically good for another.
-	scopes := []string{"openid", "profile", "email"}
+	// offline_access asks Entra for a refresh token. Without one oauth2-proxy
+	// cannot renew the ID token it forwards, and the session outlives it: the
+	// cookie stays valid while the token behind it expires after about an hour,
+	// so the proxy waves the request through and the hop behind it rejects a
+	// stale token. Every signed-in user hits that, an hour in.
+	scopes := []string{"openid", "profile", "email", "offline_access"}
 	if s := strings.TrimSpace(a.OIDCScope); s != "" {
 		scopes = append(scopes, s)
 	}
@@ -144,6 +149,10 @@ func authDeployment(name, namespace string, a shared.DesiredApplication, ing *sh
 		// does not merely fail to help — it occupies the one header a JWT-
 		// validating upstream reads, so the app sees a credential it cannot
 		// parse and reports the session as invalid.
+		// Renew the session well before the ID token expires, rather than
+		// discovering it has by being refused downstream.
+		"--cookie-refresh=15m",
+		"--cookie-expire=8h",
 		"--pass-authorization-header=true",
 		"--pass-basic-auth=false",
 		"--pass-user-headers=true",

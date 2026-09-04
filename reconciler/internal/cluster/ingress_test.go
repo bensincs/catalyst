@@ -743,3 +743,29 @@ func (f *fakeRESTClient) Verb(verb string) *rest.Request {
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// The session must not outlive the token it carries.
+//
+// oauth2-proxy's cookie is valid for hours; an Entra ID token is valid for
+// about one. Without a refresh the proxy keeps admitting the request and
+// forwards a stale token, which the hop behind it rejects as expired — so a
+// signed-in user is turned away an hour in, by a component that looks
+// unrelated to the login that succeeded.
+func TestSessionRefreshesBeforeTheTokenExpires(t *testing.T) {
+	ing := &shared.IngressConfig{
+		AppsDomain: "apps.example", OIDCIssuer: "https://issuer.example/v2.0",
+		OIDCClientID: "client", OIDCClientSecret: "secret",
+	}
+	app := shared.DesiredApplication{ID: "todo-app", Hostname: "todo", ExposeService: "todo", ExposePort: 80}
+	d := authDeployment("todo-auth", "todo-app", app, ing, "todo.apps.example")
+	raw, _ := json.Marshal(d.Object)
+	got := string(raw)
+
+	if !strings.Contains(got, "--cookie-refresh=") {
+		t.Error("without a refresh the session outlives the token it forwards")
+	}
+	// A refresh token is what makes renewal possible at all.
+	if !strings.Contains(got, "offline_access") {
+		t.Error("offline_access is required for Entra to issue a refresh token")
+	}
+}
