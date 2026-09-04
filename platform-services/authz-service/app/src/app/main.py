@@ -19,6 +19,7 @@ from routes.health import router as health_router
 from routes.ext_authz import router as ext_authz_router
 from routes.admin import router as admin_router
 from routes.app_permissions import router as app_permissions_router
+from routes.decide import router as decide_router
 
 # Bootstrap the OTel SDK once per process, before any FastAPI/grpc instrumentation
 # runs. cortex-otel is idempotent so build_app() re-entry under uvicorn --factory
@@ -113,5 +114,6 @@ def build_app() -> FastAPI:
     app.include_router(ext_authz_router)
     app.include_router(admin_router)
     app.include_router(app_permissions_router)
+    app.include_router(decide_router)
 
     return app
