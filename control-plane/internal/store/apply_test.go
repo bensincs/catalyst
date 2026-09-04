@@ -4,6 +4,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/inception42/cortex/shared"
+
 	"github.com/inception42/cortex/control-plane/internal/model"
 )
 
@@ -65,5 +67,51 @@ func TestApplyBatch(t *testing.T) {
 	}
 	if _, err := st.Apply(ctx, "oid-test", cyc); !errors.Is(err, ErrDependencyCycle) {
 		t.Fatalf("expected ErrDependencyCycle, got %v", err)
+	}
+}
+
+// A service declares the calls it wants made when an application is deployed,
+// and those survive a round trip through the store.
+//
+// The alternative was the reconciler calling one service directly, which meant
+// a generic component holding that service's namespace, secret name, DNS name
+// and API shape. This is where that knowledge belongs.
+func TestApplicationHooksRoundTrip(t *testing.T) {
+	st, ctx := testStore(t)
+	defer st.Close()
+	id := "zz-hooks-app"
+	st.pool.Exec(ctx, `DELETE FROM applications WHERE id = $1`, id)
+	defer st.pool.Exec(ctx, `DELETE FROM applications WHERE id = $1`, id)
+
+	hook := shared.ApplicationHook{
+		Name:   "authz app registration",
+		Method: "PUT",
+		URL:    "http://authz/v1/apps/{{app}}/roles/user",
+		Body:   "{}",
+		TokenSecret: &shared.SecretKeyRef{
+			Namespace: "cortex-authz", Name: "cortex-secret-authz-secrets", Key: "authz-admin-token",
+		},
+	}
+	if _, err := st.Apply(ctx, "oid-test", ApplyBatch{Applications: []model.Application{{
+		ID: id, Name: "App access", Namespace: "cortex-authz",
+		RepoURL: "oci://example/charts", Chart: "authz-service", TargetRevision: "0.1.0",
+		ApplicationHooks: []shared.ApplicationHook{hook},
+	}}}); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+
+	got, err := st.ApplicationByID(ctx, id)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if len(got.ApplicationHooks) != 1 {
+		t.Fatalf("want 1 hook, got %d", len(got.ApplicationHooks))
+	}
+	h := got.ApplicationHooks[0]
+	if h.URL != hook.URL || h.Method != hook.Method {
+		t.Errorf("hook = %+v, want %+v", h, hook)
+	}
+	if h.TokenSecret == nil || h.TokenSecret.Key != "authz-admin-token" {
+		t.Errorf("the credential reference must survive; got %+v", h.TokenSecret)
 	}
 }

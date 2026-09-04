@@ -90,7 +90,20 @@
       "exposePort": 8080,
       "hostname": "authz-admin",
       "embed": true,
-      "icon": "shield"
+      "icon": "shield",
+      "applicationHooks": [
+        {
+          "name": "authz app registration",
+          "method": "PUT",
+          "url": "http://authz-service.cortex-authz.svc.cluster.local:8080/v1/apps/{{app}}/roles/user",
+          "body": "{}",
+          "tokenSecret": {
+            "namespace": "cortex-authz",
+            "name": "cortex-secret-authz-secrets",
+            "key": "authz-admin-token"
+          }
+        }
+      ]
     }
   ],
   "infrastructure": [

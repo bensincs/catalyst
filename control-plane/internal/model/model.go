@@ -379,6 +379,9 @@ type Application struct {
 	Hostname     string `json:"hostname"`
 	OIDCScope    string `json:"oidcScope"`
 	AuthRequired bool   `json:"authRequired"`
+	// ApplicationHooks are calls this service wants made whenever ANY
+	// application in the tenant is deployed.
+	ApplicationHooks []shared.ApplicationHook `json:"applicationHooks,omitempty"`
 	// Embed offers the app as a destination in the console's own sidebar once a
 	// tenant enables it, rather than leaving them to find its URL. Icon is the
 	// lucide icon name the publisher picks so it is recognisable there. Only

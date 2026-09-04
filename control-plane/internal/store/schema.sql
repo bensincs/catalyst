@@ -235,6 +235,11 @@ ALTER TABLE applications ADD COLUMN IF NOT EXISTS arm_template  text    NOT NULL
 ALTER TABLE applications ADD COLUMN IF NOT EXISTS bicep_params  jsonb   NOT NULL DEFAULT '{}';
 ALTER TABLE applications ADD COLUMN IF NOT EXISTS bicep_outputs text[]  NOT NULL DEFAULT '{}';
 ALTER TABLE applications ADD COLUMN IF NOT EXISTS wiring        jsonb   NOT NULL DEFAULT '[]';
+-- Services that must hear about every application the tenant runs — the
+-- authorization service cannot offer access to an app it has never heard of.
+-- Declared by the service that needs it, so a generic reconciler does not carry
+-- one workload's namespace, secret and API shape.
+ALTER TABLE applications ADD COLUMN IF NOT EXISTS application_hooks jsonb NOT NULL DEFAULT '[]';
 ALTER TABLE applications ADD COLUMN IF NOT EXISTS depends_on    text[]  NOT NULL DEFAULT '{}';
 ALTER TABLE tenants      ADD COLUMN IF NOT EXISTS entitled_deployments text[] NOT NULL DEFAULT '{}';
 

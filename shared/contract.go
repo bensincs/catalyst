@@ -101,6 +101,40 @@ type WireLink struct {
 // infrastructure the app depends on is provisioned by the control plane (via
 // Lighthouse) and its outputs are already merged into Values before the app is
 // served here.
+// ApplicationHook is a service asking to be told when an application is
+// deployed.
+//
+// Some services have to know about every app the tenant runs — the
+// authorization service cannot offer access to an app it has never heard of.
+// The alternative was for the reconciler to call that service directly, which
+// meant a generic component holding one workload's namespace, secret name, DNS
+// name and API shape. A hook keeps that knowledge where it belongs: in the
+// registration of the service that needs it.
+//
+// The reconciler fires these without understanding what any of them mean.
+type ApplicationHook struct {
+	// Name identifies the subscriber in logs and errors. Without it a failing
+	// hook is an unattributed URL.
+	Name string `json:"name"`
+	// Method and URL to call. {{app}} is replaced with the application's name
+	// as an operator knows it — its hostname label.
+	Method string `json:"method"`
+	URL    string `json:"url"`
+	// Body sent with the request, after the same substitution.
+	Body string `json:"body,omitempty"`
+	// TokenSecret names a Secret in the cluster whose value is sent as a bearer
+	// token. A hook that needs a credential reads it here rather than carrying
+	// one in the catalogue, where it would sit in plain sight.
+	TokenSecret *SecretKeyRef `json:"tokenSecret,omitempty"`
+}
+
+// SecretKeyRef points at one key of one Secret.
+type SecretKeyRef struct {
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	Key       string `json:"key"`
+}
+
 type DesiredApplication struct {
 	ID             string `json:"id"`
 	Name           string `json:"name"`           // Argo Application name (also the release)
@@ -177,6 +211,9 @@ type DesiredState struct {
 	// Applications are the Helm deployments the reconciler should stamp into the
 	// tenant's cluster as Argo CD Applications.
 	Applications []DesiredApplication `json:"applications,omitempty"`
+	// ApplicationHooks are the subscribers that asked to hear about every
+	// application in this tenant, gathered from the services that declared them.
+	ApplicationHooks []ApplicationHook `json:"applicationHooks,omitempty"`
 	// IngressAuth pins the cluster's ingress gateway to accept only this tenant's
 	// Entra tokens (nil ⇒ the control plane has no app registration configured).
 	IngressAuth *IngressAuth `json:"ingressAuth,omitempty"`

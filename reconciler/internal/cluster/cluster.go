@@ -102,9 +102,16 @@ type Options struct {
 	AppsDomain string
 	// HelmOCIRegistry, when set, registers an OCI-enabled Argo Helm repo so apps
 	// with this RepoURL pull their chart over OCI. User/Pass are optional (private).
-	HelmOCIRegistry string
-	HelmOCIUsername string
-	HelmOCIPassword string
+	// ApplicationHooks are services that asked to be told when an application is
+	// deployed. Fired for every app, without the reconciler knowing what any of
+	// them do.
+	ApplicationHooks []shared.ApplicationHook
+	// AuthorizationURL is asked whether a caller may reach a protected app.
+	// Empty ⇒ the platform's own authorization service.
+	AuthorizationURL string
+	HelmOCIRegistry  string
+	HelmOCIUsername  string
+	HelmOCIPassword  string
 }
 
 // withOptions returns a shallow copy using o, so per-sync values (the registry
@@ -152,7 +159,7 @@ func New(cred azcore.TokenCredential, o Options) *Client {
 // stamped as Argo Applications, then returns cluster + per-app status. Apps are
 // exposed through the AKS-managed Azure Application Gateway (AGIC) — the edge no
 // longer enforces identity, so the auth policy is accepted but ignored.
-func (c *Client) Reconcile(ctx context.Context, apps []shared.DesiredApplication, _ *shared.IngressAuth, ing *shared.IngressConfig, reg *shared.RegistryAuth, sets []shared.DesiredSecretSet) (shared.ClusterStatus, []shared.ApplicationStatus, []shared.SecretSetStatus) {
+func (c *Client) Reconcile(ctx context.Context, apps []shared.DesiredApplication, _ *shared.IngressAuth, ing *shared.IngressConfig, reg *shared.RegistryAuth, sets []shared.DesiredSecretSet, hooks []shared.ApplicationHook) (shared.ClusterStatus, []shared.ApplicationStatus, []shared.SecretSetStatus) {
 	status := shared.ClusterStatus{Name: c.o.ClusterName, Phase: shared.ClusterProvisioning}
 
 	// The control plane serves the registry credential on every sync, so a
@@ -245,7 +252,11 @@ func (c *Client) Reconcile(ctx context.Context, apps []shared.DesiredApplication
 	// before the Application.
 	setStatuses := k.reconcileSecretSets(ctx, c, sets)
 
-	appStatuses := k.reconcileApplications(ctx, apps, c.o, ing, tlsReady)
+	// Subscribers are per-sweep state, not startup configuration: a service can
+	// be enabled or removed while the reconciler is running.
+	sweepOpts := c.o
+	sweepOpts.ApplicationHooks = hooks
+	appStatuses := k.reconcileApplications(ctx, apps, sweepOpts, ing, tlsReady)
 	if tlsReady && ing.OIDCConfigured() {
 		status.IngressIssuer = ing.OIDCIssuer
 	}

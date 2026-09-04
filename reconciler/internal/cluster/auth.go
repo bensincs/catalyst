@@ -233,9 +233,12 @@ const (
 	// Oathkeeper's proxy port. Only oauth2-proxy talks to it, over localhost,
 	// so the decision cannot be skipped by anything that can reach the Service.
 	authzHopPort = 4455
-	// Where the platform's authorization service lives.
-	authzDecideURL = "http://authz-service.cortex-authz.svc.cluster.local:8080/v1/authz/decide"
-	authzHopImage  = "docker.io/oryd/oathkeeper:v0.40.7"
+	// Where the platform's authorization service lives, when the tenant has not
+	// said otherwise. A default rather than a constant: which service decides
+	// access is the platform operator's choice, and a generic component should
+	// not have one service's address compiled into it.
+	defaultAuthzDecideURL = "http://authz-service.cortex-authz.svc.cluster.local:8080/v1/authz/decide"
+	authzHopImage         = "docker.io/oryd/oathkeeper:v0.40.7"
 )
 
 // subjectExpr is how the caller is identified, everywhere.
@@ -299,7 +302,7 @@ func jwksURLFor(issuer string) string {
 // missing. These values are therefore duplicated from the rule rather than left
 // out, and an incomplete global section fails the container at boot rather than
 // at the first request.
-func authzHopConfig(appName, tenantSlug string, ing *shared.IngressConfig) string {
+func authzHopConfig(appName, tenantSlug, decideURL string, ing *shared.IngressConfig) string {
 	jwks := jwksURLFor(ing.OIDCIssuer)
 	headers, _ := json.Marshal(identityHeaders(subjectExpr, tenantSlug, appName))
 	payload := `{"subject":"` + subjectExpr + `","app":"` + appName + `"}`
@@ -333,7 +336,7 @@ authorizers:
   remote_json:
     enabled: true
     config:
-      remote: ` + authzDecideURL + `
+      remote: ` + decideURL + `
       payload: '` + payload + `'
   allow:
     enabled: true
@@ -353,7 +356,7 @@ mutators:
 // exchange and forwards the ID token, so the caller's identity is provable here
 // rather than merely asserted. Trusting the upstream blindly would mean anything
 // that reached this port was whoever it claimed to be.
-func authzHopRules(appName, tenantSlug, upstream string, ing *shared.IngressConfig) string {
+func authzHopRules(appName, tenantSlug, upstream, decideURL string, ing *shared.IngressConfig) string {
 	jwks := jwksURLFor(ing.OIDCIssuer)
 
 	rule := map[string]any{
@@ -374,7 +377,7 @@ func authzHopRules(appName, tenantSlug, upstream string, ing *shared.IngressConf
 		"authorizer": map[string]any{
 			"handler": "remote_json",
 			"config": map[string]any{
-				"remote": authzDecideURL,
+				"remote": decideURL,
 				// Subject comes from the verified token, never from the request.
 				"payload": `{"subject":"` + subjectExpr + `","app":"` + appName + `"}`,
 			},
@@ -433,8 +436,11 @@ func shortHash(s string) string {
 
 // authzHopConfigMap carries Oathkeeper's configuration and its single access
 // rule into the pod.
-func authzHopConfigMap(name, namespace, appID, tenantSlug string, a shared.DesiredApplication, ing *shared.IngressConfig) *unstructured.Unstructured {
+func authzHopConfigMap(name, namespace, appID, tenantSlug, decideURL string, a shared.DesiredApplication, ing *shared.IngressConfig) *unstructured.Unstructured {
 	upstream := fmt.Sprintf("http://%s:%d", a.ExposeService, exposePortOr80(a.ExposePort))
+	if strings.TrimSpace(decideURL) == "" {
+		decideURL = defaultAuthzDecideURL
+	}
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "v1",
 		"kind":       "ConfigMap",
@@ -444,8 +450,8 @@ func authzHopConfigMap(name, namespace, appID, tenantSlug string, a shared.Desir
 			"labels":    map[string]any{labelManaged: "true", labelAppID: appID},
 		},
 		"data": map[string]any{
-			"config.yaml": authzHopConfig(appNameForAuthz(a), tenantSlug, ing),
-			"rules.json":  authzHopRules(appNameForAuthz(a), tenantSlug, upstream, ing),
+			"config.yaml": authzHopConfig(appNameForAuthz(a), tenantSlug, decideURL, ing),
+			"rules.json":  authzHopRules(appNameForAuthz(a), tenantSlug, upstream, decideURL, ing),
 		},
 	}}
 }
@@ -460,75 +466,79 @@ func appNameForAuthz(a shared.DesiredApplication) string {
 	return strings.ToLower(strings.TrimSpace(a.ID))
 }
 
-// ─── Registering an app with the authorization service ───────────────────────
+// ─── Application hooks ───────────────────────────────────────────────────────
 
-const (
-	// Namespace and Secret the authorization service's admin token lives in.
-	// Both are fixed by that service's own chart.
-	authzNamespace   = "cortex-authz"
-	authzTokenSecret = "cortex-secret-authz-secrets"
-	authzTokenKey    = "authz-admin-token"
-	// Role every protected app gets. Access to an application is derived from
-	// membership of one of its roles, so an app with no roles can never be
-	// granted to anyone — and does not appear in the admin UI at all, because
-	// that lists applications by their role edges.
-	authzDefaultRole = "user"
-	authzAPIBase     = "http://authz-service.cortex-authz.svc.cluster.local:8080"
-)
+// runApplicationHooks tells every subscriber that an application was deployed.
+//
+// The reconciler does not know what a hook does. That is the point: a service
+// which must hear about apps declares it in its own registration, instead of a
+// generic component carrying that service's namespace, secret name, DNS name
+// and API shape.
+//
+// Failures are reported per hook and do not stop the others, nor the app. The
+// subscriber may simply not be installed yet, and the sweep is level-triggered,
+// so the next one tries again.
+func (k *kube) runApplicationHooks(ctx context.Context, hooks []shared.ApplicationHook, appName string) []error {
+	var errs []error
+	for _, h := range hooks {
+		if err := k.runApplicationHook(ctx, h, appName); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", h.Name, err))
+		}
+	}
+	return errs
+}
 
-// registerAppWithAuthz makes an app grantable.
-//
-// Deploying a protected app is not enough on its own: until the app has a role,
-// nobody can be given access to it and it is invisible to the admin UI, so an
-// operator sees an app they cannot administer and no explanation. This runs on
-// every sweep and is idempotent — ensuring a role that exists changes nothing.
-//
-// Failures are returned rather than swallowed: the authorization service may
-// simply not be installed, and the next sweep will try again.
-func (k *kube) registerAppWithAuthz(ctx context.Context, appName string) error {
-	token, err := k.authzAdminToken(ctx)
+func (k *kube) runApplicationHook(ctx context.Context, h shared.ApplicationHook, appName string) error {
+	method := strings.TrimSpace(h.Method)
+	if method == "" {
+		method = http.MethodPost
+	}
+	target := strings.ReplaceAll(h.URL, "{{app}}", url.PathEscape(appName))
+	body := strings.ReplaceAll(h.Body, "{{app}}", appName)
+
+	req, err := http.NewRequestWithContext(ctx, method, target, strings.NewReader(body))
 	if err != nil {
 		return err
 	}
-	u := fmt.Sprintf("%s/v1/apps/%s/roles/%s", authzAPIBase, url.PathEscape(appName), url.PathEscape(authzDefaultRole))
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, u, strings.NewReader("{}"))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
+	if h.TokenSecret != nil {
+		token, err := k.secretValue(ctx, *h.TokenSecret)
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 
-	// A short timeout on purpose: this runs inside the reconcile sweep, and an
-	// authorization service that is slow or absent must not hold up every other
-	// app's reconciliation behind it.
+	// A short timeout on purpose: this runs inside the reconcile sweep, and a
+	// subscriber that is slow or absent must not hold up every other app's
+	// reconciliation behind it.
 	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
-		return fmt.Errorf("authz register %s: %s: %s", appName, resp.Status, strings.TrimSpace(string(body)))
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+		return fmt.Errorf("%s %s: %s", method, resp.Status, strings.TrimSpace(string(msg)))
 	}
 	return nil
 }
 
-// authzAdminToken reads the authorization service's admin token from the Secret
-// its own chart materialises.
-func (k *kube) authzAdminToken(ctx context.Context) (string, error) {
-	sec, err := k.dyn.Resource(secGVR).Namespace(authzNamespace).
-		Get(ctx, authzTokenSecret, metav1.GetOptions{})
+// secretValue reads one key of one Secret.
+func (k *kube) secretValue(ctx context.Context, ref shared.SecretKeyRef) (string, error) {
+	sec, err := k.dyn.Resource(secGVR).Namespace(ref.Namespace).
+		Get(ctx, ref.Name, metav1.GetOptions{})
 	if err != nil {
-		return "", fmt.Errorf("read authz admin token: %w", err)
+		return "", fmt.Errorf("read %s/%s: %w", ref.Namespace, ref.Name, err)
 	}
 	data, _, _ := unstructured.NestedStringMap(sec.Object, "data")
-	raw, ok := data[authzTokenKey]
+	raw, ok := data[ref.Key]
 	if !ok {
-		return "", fmt.Errorf("authz admin token secret has no %q", authzTokenKey)
+		return "", fmt.Errorf("secret %s/%s has no %q", ref.Namespace, ref.Name, ref.Key)
 	}
 	decoded, err := base64.StdEncoding.DecodeString(raw)
 	if err != nil {
-		return "", fmt.Errorf("decode authz admin token: %w", err)
+		return "", fmt.Errorf("decode %s/%s/%s: %w", ref.Namespace, ref.Name, ref.Key, err)
 	}
 	return string(decoded), nil
 }

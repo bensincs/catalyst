@@ -1,8 +1,12 @@
 package cluster
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -486,7 +490,7 @@ func TestAuthzHopOverwritesEveryIdentityHeader(t *testing.T) {
 		OIDCClientSecret: "secret",
 	}
 	app := shared.DesiredApplication{ID: "insight", Hostname: "insight", ExposeService: "frontend", ExposePort: 80}
-	cm := authzHopConfigMap("insight-auth-authz", "insight", "insight", "t-1", app, ing)
+	cm := authzHopConfigMap("insight-auth-authz", "insight", "insight", "t-1", "", app, ing)
 
 	data, _ := cm.Object["data"].(map[string]any)
 	rules, _ := data["rules.json"].(string)
@@ -519,7 +523,7 @@ func TestAuthzHopTakesSubjectFromTheVerifiedToken(t *testing.T) {
 		OIDCClientID: "client", OIDCClientSecret: "secret",
 	}
 	app := shared.DesiredApplication{ID: "insight", Hostname: "insight", ExposeService: "frontend", ExposePort: 80}
-	cm := authzHopConfigMap("insight-auth-authz", "insight", "insight", "t-1", app, ing)
+	cm := authzHopConfigMap("insight-auth-authz", "insight", "insight", "t-1", "", app, ing)
 	rules, _ := cm.Object["data"].(map[string]any)["rules.json"].(string)
 
 	if !strings.Contains(rules, `"handler":"jwt"`) {
@@ -560,7 +564,7 @@ func TestAuthzHopGlobalConfigCarriesRequiredProperties(t *testing.T) {
 		AppsDomain: "apps.example", OIDCIssuer: "https://issuer.example/v2.0",
 		OIDCClientID: "client", OIDCClientSecret: "secret",
 	}
-	cfg := authzHopConfig("insight", "t-1", ing)
+	cfg := authzHopConfig("insight", "t-1", defaultAuthzDecideURL, ing)
 
 	for _, required := range []string{
 		"jwks_urls", // authenticators.jwt
@@ -600,7 +604,7 @@ func TestAuthzHopIdentifiesUsersByAddressNotOpaqueSub(t *testing.T) {
 		OIDCClientID: "client", OIDCClientSecret: "secret",
 	}
 	app := shared.DesiredApplication{ID: "insight", Hostname: "insight", ExposeService: "frontend", ExposePort: 80}
-	rules, _ := authzHopConfigMap("a", "insight", "insight", "t-1", app, ing).
+	rules, _ := authzHopConfigMap("a", "insight", "insight", "t-1", "", app, ing).
 		Object["data"].(map[string]any)["rules.json"].(string)
 
 	var parsed []map[string]any
@@ -642,5 +646,73 @@ func TestAuthzAppNameIsTheHostnameLabel(t *testing.T) {
 	noHost := shared.DesiredApplication{ID: "Todo-App"}
 	if got := appNameForAuthz(noHost); got != "todo-app" {
 		t.Errorf("app name = %q, want the lowercased id", got)
+	}
+}
+
+// A hook is fired without the reconciler understanding it.
+//
+// The point of the indirection: before this, the reconciler held one service's
+// namespace, secret name, DNS name and API shape. Substituting {{app}} and
+// sending the request is the whole of what it now knows.
+func TestApplicationHookSubstitutesTheAppName(t *testing.T) {
+	var gotPath, gotMethod, gotBody, gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotMethod = r.URL.Path, r.Method
+		gotAuth = r.Header.Get("Authorization")
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	k := &kube{}
+	err := k.runApplicationHook(context.Background(), shared.ApplicationHook{
+		Name:   "test subscriber",
+		Method: http.MethodPut,
+		URL:    srv.URL + "/v1/apps/{{app}}/roles/user",
+		Body:   `{"app":"{{app}}"}`,
+	}, "todo")
+
+	if err != nil {
+		t.Fatalf("hook failed: %v", err)
+	}
+	if gotPath != "/v1/apps/todo/roles/user" {
+		t.Errorf("path = %q, want the app substituted", gotPath)
+	}
+	if gotMethod != http.MethodPut {
+		t.Errorf("method = %q", gotMethod)
+	}
+	if gotBody != `{"app":"todo"}` {
+		t.Errorf("body = %q, want the app substituted there too", gotBody)
+	}
+	if gotAuth != "" {
+		t.Errorf("no token was configured, so none should be sent, got %q", gotAuth)
+	}
+}
+
+// One subscriber failing must not stop the others, nor the deployment. A hook
+// that is simply not installed yet is the expected case, not an error worth
+// halting on — the sweep is level-triggered and will try again.
+func TestApplicationHooksReportEachFailureAndContinue(t *testing.T) {
+	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ok.Close()
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "nope", http.StatusInternalServerError)
+	}))
+	defer bad.Close()
+
+	k := &kube{}
+	errs := k.runApplicationHooks(context.Background(), []shared.ApplicationHook{
+		{Name: "broken", Method: http.MethodPut, URL: bad.URL},
+		{Name: "working", Method: http.MethodPut, URL: ok.URL},
+	}, "todo")
+
+	if len(errs) != 1 {
+		t.Fatalf("want exactly the one failure, got %d: %v", len(errs), errs)
+	}
+	if !strings.Contains(errs[0].Error(), "broken") {
+		t.Errorf("the failure must name its subscriber, got %v", errs[0])
 	}
 }

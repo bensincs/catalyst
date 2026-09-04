@@ -72,22 +72,25 @@ func (in infraInput) build(id, owner string) model.Infrastructure {
 }
 
 type appInput struct {
-	Name           string             `json:"name"`
-	Description    string             `json:"description"`
-	Namespace      string             `json:"namespace"`
-	RepoURL        string             `json:"repoURL"`
-	Chart          string             `json:"chart"`
-	TargetRevision string             `json:"targetRevision"`
-	Values         string             `json:"values"`
-	ExposeService  string             `json:"exposeService"`
-	ExposePort     int                `json:"exposePort"`
-	Hostname       string             `json:"hostname"`
-	OIDCScope      string             `json:"oidcScope"`
-	AuthRequired   bool               `json:"authRequired"`
-	Embed          bool               `json:"embed"`
-	Icon           string             `json:"icon"`
-	Wiring         []shared.WireLink  `json:"wiring"`
-	Dependencies   []model.Dependency `json:"dependencies"`
+	Name           string `json:"name"`
+	Description    string `json:"description"`
+	Namespace      string `json:"namespace"`
+	RepoURL        string `json:"repoURL"`
+	Chart          string `json:"chart"`
+	TargetRevision string `json:"targetRevision"`
+	Values         string `json:"values"`
+	ExposeService  string `json:"exposeService"`
+	ExposePort     int    `json:"exposePort"`
+	Hostname       string `json:"hostname"`
+	OIDCScope      string `json:"oidcScope"`
+	AuthRequired   bool   `json:"authRequired"`
+	// ApplicationHooks: calls this service wants made whenever ANY application
+	// in the tenant is deployed. Declared here so the reconciler stays generic.
+	ApplicationHooks []shared.ApplicationHook `json:"applicationHooks,omitempty"`
+	Embed            bool                     `json:"embed"`
+	Icon             string                   `json:"icon"`
+	Wiring           []shared.WireLink        `json:"wiring"`
+	Dependencies     []model.Dependency       `json:"dependencies"`
 }
 
 func (in appInput) validate() string {
@@ -127,9 +130,10 @@ func (in appInput) build(id, owner string) model.Application {
 		ExposeService:  strings.TrimSpace(in.ExposeService),
 		ExposePort:     port,
 		// Empty hostname ⇒ the app id, so the common case needs no decision.
-		Hostname:     strings.ToLower(strings.TrimSpace(in.Hostname)),
-		OIDCScope:    strings.TrimSpace(in.OIDCScope),
-		AuthRequired: in.AuthRequired,
+		Hostname:         strings.ToLower(strings.TrimSpace(in.Hostname)),
+		OIDCScope:        strings.TrimSpace(in.OIDCScope),
+		AuthRequired:     in.AuthRequired,
+		ApplicationHooks: in.ApplicationHooks,
 		// Offering an app in the sidebar only means anything when it publishes a
 		// Service: without one there is no URL, and the entry would open nothing.
 		Embed:        in.Embed && strings.TrimSpace(in.ExposeService) != "",

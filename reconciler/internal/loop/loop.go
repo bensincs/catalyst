@@ -63,7 +63,7 @@ func (r *Reconciler) once(ctx context.Context) {
 	// deployments into its cluster, and report cluster + app status.
 	clusterPhase := "disabled"
 	if r.cluster != nil {
-		cs, appStatuses, setStatuses := r.cluster.Reconcile(ctx, desired.Applications, desired.IngressAuth, desired.Ingress, desired.Registry, desired.SecretSets)
+		cs, appStatuses, setStatuses := r.cluster.Reconcile(ctx, desired.Applications, desired.IngressAuth, desired.Ingress, desired.Registry, desired.SecretSets, desired.ApplicationHooks)
 		hb.Cluster = &cs
 		hb.Applications = appStatuses
 		hb.SecretSets = setStatuses

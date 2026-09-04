@@ -191,6 +191,13 @@ func (k *kube) reconcileApplications(ctx context.Context, apps []shared.DesiredA
 			}
 		}
 
+		// Tell whoever asked that this application exists. Before the Argo
+		// Application is stamped, so a subscriber that gates access has heard of
+		// the app by the time anything can reach it.
+		for _, err := range k.runApplicationHooks(ctx, o.ApplicationHooks, appNameForAuthz(a)) {
+			note("application hook", err)
+		}
+
 		k.ensureWorkloadNamespace(ctx, a.Namespace) // make sure the target namespace exists
 		// Argo pulls the chart; the kubelet pulls the images it references, and
 		// has no credential of its own. Do this before the Application is
@@ -224,7 +231,7 @@ func (k *kube) reconcileApplications(ctx context.Context, apps []shared.DesiredA
 					// starts without it crash-loops on a missing config file
 					// rather than failing in a way that names the cause.
 					if _, err := k.dyn.Resource(cmGVR).Namespace(a.Namespace).
-						Apply(ctx, an+"-authz", authzHopConfigMap(an+"-authz", a.Namespace, a.ID, o.TenantSlug, a, ing), ssaOpts); err != nil {
+						Apply(ctx, an+"-authz", authzHopConfigMap(an+"-authz", a.Namespace, a.ID, o.TenantSlug, o.AuthorizationURL, a, ing), ssaOpts); err != nil {
 						note("apply authz hop config", err)
 					}
 					if _, err := k.dyn.Resource(depGVR).Namespace(a.Namespace).
@@ -234,14 +241,6 @@ func (k *kube) reconcileApplications(ctx context.Context, apps []shared.DesiredA
 					if _, err := k.dyn.Resource(svcGVR).Namespace(a.Namespace).
 						Apply(ctx, an, authService(an, a.Namespace, a.ID), ssaOpts); err != nil {
 						note("apply auth service", err)
-					}
-					// Make the app grantable. Until it has a role nobody can be
-					// given access to it, and it does not appear in the admin UI
-					// at all — the UI lists applications by their role edges — so
-					// an operator sees an app they cannot administer and nothing
-					// explaining why.
-					if err := k.registerAppWithAuthz(ctx, appNameForAuthz(a)); err != nil {
-						note("register app with authz", err)
 					}
 					backend, backendPort = an, 80
 					authed[an] = true

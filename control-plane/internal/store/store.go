@@ -1445,7 +1445,7 @@ func (s *Store) SyncDesired(ctx context.Context, t model.Tenant) (shared.Desired
 	arows, err := s.pool.Query(ctx,
 		`SELECT a.id, a.name, a.namespace, a.repo_url, a.chart, a.target_revision, a.values, a.expose_service, a.expose_port,
 		        coalesce(a.hostname,''), coalesce(a.oidc_scope,''), coalesce(a.auth_required,false),
-		        a.wiring, a.dependencies
+		        a.wiring, a.dependencies, coalesce(a.application_hooks,'[]')
 		 FROM applications a JOIN tenant_deployments td ON td.app_id = a.id AND td.tenant_slug = $1
 		 ORDER BY td.sort_order`, t.ID)
 	if err != nil {
@@ -1461,11 +1461,15 @@ func (s *Store) SyncDesired(ctx context.Context, t model.Tenant) (shared.Desired
 	enabledApp := map[string]bool{}
 	for arows.Next() {
 		var da shared.DesiredApplication
-		var wraw, draw []byte
+		var wraw, draw, hraw []byte
 		if err := arows.Scan(&da.ID, &da.Name, &da.Namespace, &da.RepoURL, &da.Chart, &da.TargetRevision, &da.Values, &da.ExposeService, &da.ExposePort,
-			&da.Hostname, &da.OIDCScope, &da.AuthRequired, &wraw, &draw); err != nil {
+			&da.Hostname, &da.OIDCScope, &da.AuthRequired, &wraw, &draw, &hraw); err != nil {
 			return out, err
 		}
+		// Hooks are gathered from every ENABLED service that declares them, and
+		// then fired for every app — a subscriber asked about applications, not
+		// about itself. A service the tenant has not enabled is not consulted.
+		out.ApplicationHooks = append(out.ApplicationHooks, hooksFromRaw(hraw)...)
 		apps = append(apps, appInfo{da: da, wiring: wiringFromRaw(wraw), deps: depsFromRaw(draw)})
 		enabledApp[da.ID] = true
 	}
@@ -2003,16 +2007,39 @@ const applicationCols = `a.id, a.name, a.description, a.owner_tenant, a.namespac
 	a.repo_url, a.chart, a.target_revision, a.values, a.expose_service, a.expose_port,
 	coalesce(a.hostname,''), coalesce(a.oidc_scope,''), coalesce(a.auth_required,false),
 	coalesce(a.embed,false), coalesce(a.icon,''),
-	a.wiring, a.dependencies, a.created_by, a.created_at`
+	a.wiring, a.dependencies, a.application_hooks, a.created_by, a.created_at`
 
 // appScanDest scans the fixed columns; wiring + dependencies (jsonb) are captured
 // raw and unmarshalled by the caller (wiringFromRaw / depsFromRaw).
-func appScanDest(a *model.Application, wiringRaw, depsRaw *[]byte) []any {
+func appScanDest(a *model.Application, wiringRaw, depsRaw, hooksRaw *[]byte) []any {
 	return []any{&a.ID, &a.Name, &a.Description, &a.Owner, &a.Namespace,
 		&a.RepoURL, &a.Chart, &a.TargetRevision, &a.Values, &a.ExposeService, &a.ExposePort,
 		&a.Hostname, &a.OIDCScope, &a.AuthRequired,
 		&a.Embed, &a.Icon,
-		wiringRaw, depsRaw, &a.CreatedBy, &a.CreatedAt}
+		wiringRaw, depsRaw, hooksRaw, &a.CreatedBy, &a.CreatedAt}
+}
+
+// hooksJSON / hooksFromRaw round-trip an application's declared hooks.
+func hooksJSON(h []shared.ApplicationHook) []byte {
+	if len(h) == 0 {
+		return []byte("[]")
+	}
+	b, err := json.Marshal(h)
+	if err != nil {
+		return []byte("[]")
+	}
+	return b
+}
+
+func hooksFromRaw(raw []byte) []shared.ApplicationHook {
+	if len(raw) == 0 {
+		return nil
+	}
+	var out []shared.ApplicationHook
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil
+	}
+	return out
 }
 
 func paramsFromRaw(raw []byte) map[string]any {
@@ -2156,11 +2183,12 @@ func (s *Store) ApplicationList(ctx context.Context) ([]model.Application, error
 	out := []model.Application{}
 	for rows.Next() {
 		var a model.Application
-		var wraw, draw []byte
-		if err := rows.Scan(append(appScanDest(&a, &wraw, &draw), &a.OwnerName)...); err != nil {
+		var wraw, draw, hraw []byte
+		if err := rows.Scan(append(appScanDest(&a, &wraw, &draw, &hraw), &a.OwnerName)...); err != nil {
 			return nil, err
 		}
 		a.Wiring = wiringFromRaw(wraw)
+		a.ApplicationHooks = hooksFromRaw(hraw)
 		a.Dependencies = depsFromRaw(draw)
 		a.Platform = a.Owner == ""
 		out = append(out, a)
@@ -2198,14 +2226,15 @@ func (s *Store) ApplicationsForTenant(ctx context.Context, slug string) ([]model
 	out := []model.Application{}
 	for rows.Next() {
 		var a model.Application
-		var wraw, draw []byte
+		var wraw, draw, hraw []byte
 		var enabled bool
 		var sync, health, deployDetail string
 		var waiting bool
-		if err := rows.Scan(append(appScanDest(&a, &wraw, &draw), &enabled, &sync, &health, &waiting, &deployDetail)...); err != nil {
+		if err := rows.Scan(append(appScanDest(&a, &wraw, &draw, &hraw), &enabled, &sync, &health, &waiting, &deployDetail)...); err != nil {
 			return nil, err
 		}
 		a.Wiring = wiringFromRaw(wraw)
+		a.ApplicationHooks = hooksFromRaw(hraw)
 		a.Dependencies = depsFromRaw(draw)
 		a.Platform = a.Owner == ""
 		a.Owned = a.Owner == slug
@@ -2224,12 +2253,13 @@ func (s *Store) ApplicationsForTenant(ctx context.Context, slug string) ([]model
 
 func (s *Store) ApplicationByID(ctx context.Context, id string) (model.Application, error) {
 	var a model.Application
-	var wraw, draw []byte
-	err := s.pool.QueryRow(ctx, `SELECT `+applicationCols+` FROM applications a WHERE a.id = $1`, id).Scan(appScanDest(&a, &wraw, &draw)...)
+	var wraw, draw, hraw []byte
+	err := s.pool.QueryRow(ctx, `SELECT `+applicationCols+` FROM applications a WHERE a.id = $1`, id).Scan(appScanDest(&a, &wraw, &draw, &hraw)...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return a, ErrNotFound
 	}
 	a.Wiring = wiringFromRaw(wraw)
+	a.ApplicationHooks = hooksFromRaw(hraw)
 	a.Dependencies = depsFromRaw(draw)
 	a.Platform = a.Owner == ""
 	return a, err
@@ -2243,12 +2273,12 @@ func (s *Store) UpdateApplication(ctx context.Context, a model.Application) erro
 		   chart = $6, target_revision = $7, values = $8, expose_service = $9, expose_port = $10,
 		   hostname = $11, oidc_scope = $12, auth_required = $13,
 		   embed = $14, icon = $15,
-		   wiring = $16, dependencies = $17
+		   wiring = $16, dependencies = $17, application_hooks = $18
 		 WHERE id = $1`,
 		a.ID, a.Name, a.Description, a.Namespace, a.RepoURL, a.Chart, a.TargetRevision, a.Values,
 		a.ExposeService, a.ExposePort, a.Hostname, a.OIDCScope, a.AuthRequired,
 		a.Embed, a.Icon,
-		wiringJSON(a.Wiring), depsJSON(a.Dependencies))
+		wiringJSON(a.Wiring), depsJSON(a.Dependencies), hooksJSON(a.ApplicationHooks))
 	if err != nil {
 		return err
 	}
