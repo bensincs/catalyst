@@ -214,6 +214,19 @@ export interface Infrastructure {
  *  tenant — then realized as an Argo CD Application in that tenant's cluster.
  *  It wires the outputs of its infrastructure dependencies into the Helm values,
  *  and may depend on other infrastructure, applications, or agents. */
+export interface ApplicationHook {
+  /** Identifies the subscriber in logs; without it a failing hook is an
+   *  unattributed URL. */
+  name: string;
+  method: string;
+  /** {{app}} is replaced with the application's name as an operator knows it. */
+  url: string;
+  body?: string;
+  /** A Secret to read a bearer token from, so no credential sits in the
+   *  catalogue in plain sight. */
+  tokenSecret?: { namespace: string; name: string; key: string };
+}
+
 export interface Application {
   id: string;
   name: string;
@@ -235,6 +248,11 @@ export interface Application {
   embed?: boolean;
   /** Icon name the publisher picked, so it is recognisable in the sidebar. */
   icon?: string;
+  /** Calls this service wants made whenever ANY application in the tenant is
+   *  deployed — how a service that must know about apps (an authorization
+   *  service cannot offer access to an app it has never heard of) says so
+   *  without the reconciler carrying its address and API shape. */
+  applicationHooks?: ApplicationHook[];
   wiring: WireLink[]; // infrastructure output → Helm values path
   dependencies: Dependency[]; // typed dependencies that must converge first
   createdAt: string;

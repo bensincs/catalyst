@@ -106,3 +106,59 @@ select:focus-visible, input:focus-visible {
 .msg.ok  { display: block; background: var(--success-bg); color: var(--success-ink); }
 
 @media (max-width: 640px) { .grid { grid-template-columns: 1fr; } }
+
+/* ─── Toolbar ─────────────────────────────────────────────────────────────── */
+.toolbar { display: flex; gap: var(--space-md); align-items: center; }
+.search { position: relative; flex: 1; }
+.search svg { position: absolute; left: 10px; top: 50%; transform: translateY(-50%);
+  width: 16px; height: 16px; color: var(--text-muted); pointer-events: none; }
+.search input { padding-left: 32px; }
+.search input::-webkit-search-cancel-button { cursor: pointer; }
+
+/* ─── Table ───────────────────────────────────────────────────────────────── */
+.panel { padding: 0; overflow: hidden; }
+.grants { width: 100%; border-collapse: collapse; }
+.grants th, .grants td { text-align: left; padding: 11px var(--space-base); }
+.grants th {
+  font-size: 12px; font-weight: 600; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 0.04em;
+  border-bottom: 1px solid var(--border); background: var(--canvas);
+}
+.grants td { border-bottom: 1px solid var(--border); }
+.grants tr:last-child td { border-bottom: 0; }
+.grants tbody tr:hover { background: var(--surface-hover); }
+.right { text-align: right; }
+.grants td.right { text-align: right; }
+.person { font-weight: 500; }
+
+/* A role reads as a property of the grant, not a heading. */
+.tag {
+  display: inline-block; padding: 2px 8px; border-radius: 999px;
+  background: var(--neutral-bg, rgb(41 41 41 / 0.08)); color: var(--text-secondary);
+  font-size: 12px; font-weight: 500;
+}
+
+.empty { padding: var(--space-xl); text-align: center; color: var(--text-muted); margin: 0; }
+
+/* ─── Dialog ──────────────────────────────────────────────────────────────── */
+dialog {
+  border: 1px solid var(--border); border-radius: var(--radius-lg);
+  padding: var(--space-lg); width: min(440px, calc(100vw - 32px));
+  background: var(--surface); color: var(--text); box-shadow: var(--shadow-lg, 0 12px 24px -3px rgb(0 0 0 / 0.12));
+}
+dialog::backdrop { background: rgb(0 0 0 / 0.4); }
+dialog h2 { margin: 0 0 var(--space-base); font-size: 15px; font-weight: 600; }
+dialog .field { margin-bottom: var(--space-base); }
+.dlg-actions { display: flex; justify-content: flex-end; gap: var(--space-sm); margin-top: var(--space-lg); }
+
+.checks { display: flex; flex-wrap: wrap; gap: var(--space-sm); }
+.checks label {
+  display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+  padding: 6px 10px; border: 1px solid var(--field-border);
+  border-radius: var(--radius-sm); font-weight: 400; color: var(--text);
+}
+.checks label:has(input:checked) {
+  border-color: var(--primary); background: var(--surface-hover);
+}
+.checks label:has(input:focus-visible) { box-shadow: 0 0 0 3px var(--focus-glow); }
+.checks input { width: auto; margin: 0; }

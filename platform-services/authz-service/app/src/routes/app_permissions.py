@@ -144,6 +144,27 @@ def _role_assignment_object(app: str, subject: str, tenant_id: str) -> str:
     )
 
 
+def _split_role_object(resource: str, tenant_id: str) -> tuple[str, str] | None:
+    """Recover (app, role) from an ``app_role`` object.
+
+    The object id encodes both, so a single listing of every member edge can be
+    turned back into "who has what, where" without knowing the applications in
+    advance — which is what lets the admin UI show every grant in one query.
+    """
+    prefix = "app_role:"
+    if not resource.startswith(prefix):
+        return None
+    tenant_suffix = f"_{_tenant_suffix(tenant_id)}"
+    object_id = resource.removeprefix(prefix)
+    if not object_id.endswith(tenant_suffix):
+        return None
+    scoped_id = object_id[: -len(tenant_suffix)]
+    encoded_app, separator, encoded_role = scoped_id.partition("|")
+    if separator != "|":
+        return None
+    return _decode_fragment(encoded_app), _decode_fragment(encoded_role)
+
+
 def _role_from_resource(resource: str, app: str, tenant_id: str) -> str | None:
     prefix = "app_role:"
     if not resource.startswith(prefix):

@@ -12,6 +12,7 @@ import type {
   Dependency,
   MemoryStoreDefinition,
   WireLink,
+  ApplicationHook,
 } from "@/lib/types";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
@@ -414,6 +415,7 @@ export async function createApplication(input: {
   exposeService: string;
   exposePort: number;
   wiring: WireLink[];
+  applicationHooks?: ApplicationHook[];
   dependencies: Dependency[];
 }): Promise<ActionResult> {
   return run(() => apiSend("POST", "/api/resources", { applications: [input] }), ["/deployments"]);
@@ -432,6 +434,7 @@ export async function updateApplication(
     exposeService: string;
     exposePort: number;
     wiring: WireLink[];
+    applicationHooks?: ApplicationHook[];
     dependencies: Dependency[];
   },
 ): Promise<ActionResult> {

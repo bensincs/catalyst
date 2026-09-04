@@ -231,3 +231,42 @@ async def revoke(
         metadata={"role": body.role, "revoked_from": subject},
     ).emit()
     return {"revoked": True, "app": body.app, "role": body.role, "subject": subject}
+
+
+@router.get("/access")
+async def list_access(
+    _: str = Depends(require_admin),
+    authz: SpiceDBClient = Depends(get_authz_client),
+) -> dict:
+    """Every grant in the tenant, in one query.
+
+    The UI shows people rather than pivoting on an application, so it needs the
+    whole picture at once. Reading it per app would be a call per app per role;
+    a role object encodes both, so listing every `member` edge answers it in
+    one — and keeps the table honest, because it cannot show a stale app it
+    forgot to re-query.
+    """
+    from routes.app_permissions import (
+        _MEMBER_RELATION,
+        _decode_subject,
+        _split_role_object,
+    )
+
+    result = await authz.list_relationships(
+        tenant_id=TENANT_ID, resource_type="app_role", relation=_MEMBER_RELATION
+    )
+    grants = []
+    for item in result.relationships:
+        parts = _split_role_object(item.resource, TENANT_ID)
+        if parts is None:
+            continue
+        app, role = parts
+        grants.append(
+            {
+                "subject": _decode_subject(item.subject),
+                "app": app,
+                "role": role,
+            }
+        )
+    grants.sort(key=lambda g: (g["subject"], g["app"], g["role"]))
+    return {"grants": grants}

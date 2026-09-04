@@ -93,3 +93,36 @@ async def test_revoke_removes_both_edges(
     assert resp.status_code == 200
     rels = mock_spicedb_client.revoke_permissions.await_args.kwargs["relationships"]
     assert len(rels) == 2
+
+
+@pytest.mark.asyncio
+async def test_access_lists_every_grant_in_one_query(
+    client: AsyncClient, mock_spicedb_client: AsyncMock
+) -> None:
+    """The table shows people, not one application at a time.
+
+    Reading it per app would be a call per app per role; the role object encodes
+    both, so one listing of every member edge answers the whole question.
+    """
+    from tests.conftest import TENANT_A
+
+    sfx = TENANT_A.replace("-", "_")
+    rel = lambda res, sub: type("R", (), {"resource": res, "subject": sub})()
+    mock_spicedb_client.list_relationships = AsyncMock(
+        return_value=type("L", (), {"relationships": [
+            rel(f"app_role:insight|admin_{sfx}", "user:zoe_at_example_dot_com"),
+            rel(f"app_role:todo|user_{sfx}", "user:alice_at_example_dot_com"),
+        ]})()
+    )
+
+    resp = await client.get("/v1/ui/access", headers=_ADMIN)
+
+    assert resp.status_code == 200
+    assert mock_spicedb_client.list_relationships.await_count == 1
+    grants = resp.json()["grants"]
+    assert {(g["subject"], g["app"], g["role"]) for g in grants} == {
+        ("user:zoe@example.com", "insight", "admin"),
+        ("user:alice@example.com", "todo", "user"),
+    }
+    # Sorted, so the table does not reshuffle between refreshes.
+    assert grants == sorted(grants, key=lambda g: (g["subject"], g["app"], g["role"]))

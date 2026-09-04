@@ -260,6 +260,10 @@ export function DeploymentForm({
       icon,
       oidcScope: oidcScope.trim(),
       wiring: cleanWiring,
+      // Carried through untouched. This form does not edit hooks, and omitting
+      // them would silently unregister a service from application events the
+      // next time anyone saved an unrelated change here.
+      applicationHooks: app?.applicationHooks,
       dependencies,
     };
     start(async () => {
