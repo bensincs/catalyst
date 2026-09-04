@@ -1,13 +1,19 @@
 package cluster
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"strings"
+	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/inception42/cortex/shared"
@@ -452,4 +458,77 @@ func appNameForAuthz(a shared.DesiredApplication) string {
 		return strings.ToLower(h)
 	}
 	return strings.ToLower(strings.TrimSpace(a.ID))
+}
+
+// ─── Registering an app with the authorization service ───────────────────────
+
+const (
+	// Namespace and Secret the authorization service's admin token lives in.
+	// Both are fixed by that service's own chart.
+	authzNamespace   = "cortex-authz"
+	authzTokenSecret = "cortex-secret-authz-secrets"
+	authzTokenKey    = "authz-admin-token"
+	// Role every protected app gets. Access to an application is derived from
+	// membership of one of its roles, so an app with no roles can never be
+	// granted to anyone — and does not appear in the admin UI at all, because
+	// that lists applications by their role edges.
+	authzDefaultRole = "user"
+	authzAPIBase     = "http://authz-service.cortex-authz.svc.cluster.local:8080"
+)
+
+// registerAppWithAuthz makes an app grantable.
+//
+// Deploying a protected app is not enough on its own: until the app has a role,
+// nobody can be given access to it and it is invisible to the admin UI, so an
+// operator sees an app they cannot administer and no explanation. This runs on
+// every sweep and is idempotent — ensuring a role that exists changes nothing.
+//
+// Failures are returned rather than swallowed: the authorization service may
+// simply not be installed, and the next sweep will try again.
+func (k *kube) registerAppWithAuthz(ctx context.Context, appName string) error {
+	token, err := k.authzAdminToken(ctx)
+	if err != nil {
+		return err
+	}
+	u := fmt.Sprintf("%s/v1/apps/%s/roles/%s", authzAPIBase, url.PathEscape(appName), url.PathEscape(authzDefaultRole))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, u, strings.NewReader("{}"))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+
+	// A short timeout on purpose: this runs inside the reconcile sweep, and an
+	// authorization service that is slow or absent must not hold up every other
+	// app's reconciliation behind it.
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+		return fmt.Errorf("authz register %s: %s: %s", appName, resp.Status, strings.TrimSpace(string(body)))
+	}
+	return nil
+}
+
+// authzAdminToken reads the authorization service's admin token from the Secret
+// its own chart materialises.
+func (k *kube) authzAdminToken(ctx context.Context) (string, error) {
+	sec, err := k.dyn.Resource(secGVR).Namespace(authzNamespace).
+		Get(ctx, authzTokenSecret, metav1.GetOptions{})
+	if err != nil {
+		return "", fmt.Errorf("read authz admin token: %w", err)
+	}
+	data, _, _ := unstructured.NestedStringMap(sec.Object, "data")
+	raw, ok := data[authzTokenKey]
+	if !ok {
+		return "", fmt.Errorf("authz admin token secret has no %q", authzTokenKey)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(raw)
+	if err != nil {
+		return "", fmt.Errorf("decode authz admin token: %w", err)
+	}
+	return string(decoded), nil
 }

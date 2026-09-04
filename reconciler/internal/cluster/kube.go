@@ -235,6 +235,14 @@ func (k *kube) reconcileApplications(ctx context.Context, apps []shared.DesiredA
 						Apply(ctx, an, authService(an, a.Namespace, a.ID), ssaOpts); err != nil {
 						note("apply auth service", err)
 					}
+					// Make the app grantable. Until it has a role nobody can be
+					// given access to it, and it does not appear in the admin UI
+					// at all — the UI lists applications by their role edges — so
+					// an operator sees an app they cannot administer and nothing
+					// explaining why.
+					if err := k.registerAppWithAuthz(ctx, appNameForAuthz(a)); err != nil {
+						note("register app with authz", err)
+					}
 					backend, backendPort = an, 80
 					authed[an] = true
 				}

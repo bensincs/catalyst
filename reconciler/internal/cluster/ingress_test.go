@@ -626,3 +626,21 @@ func TestAuthzHopIdentifiesUsersByAddressNotOpaqueSub(t *testing.T) {
 		t.Error("`sub` is an opaque pairwise identifier in Entra and matches nothing that was granted")
 	}
 }
+
+// An app is known to the authorization service by its hostname label — what an
+// operator sees and what grants are written against — not the control plane's
+// internal id. If these disagreed, the UI would offer one name while the
+// gateway asked about another and every grant would appear to do nothing.
+func TestAuthzAppNameIsTheHostnameLabel(t *testing.T) {
+	withHost := shared.DesiredApplication{ID: "todo-app", Hostname: "todo"}
+	if got := appNameForAuthz(withHost); got != "todo" {
+		t.Errorf("app name = %q, want the hostname label %q", got, "todo")
+	}
+
+	// Falling back to the id keeps an app addressable when it declares no
+	// hostname, rather than registering it under an empty name.
+	noHost := shared.DesiredApplication{ID: "Todo-App"}
+	if got := appNameForAuthz(noHost); got != "todo-app" {
+		t.Errorf("app name = %q, want the lowercased id", got)
+	}
+}

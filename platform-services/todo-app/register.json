@@ -63,7 +63,7 @@
       "exposeService": "todo-app",
       "exposePort": 80,
       "hostname": "todo",
-      "authRequired": false,
+      "authRequired": true,
       "dependencies": [
         {
           "kind": "infrastructure",
