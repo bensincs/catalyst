@@ -71,3 +71,37 @@ becoming invisible to whoever manages access.
 Left over: every application registered before this carries a `user` role that
 its code may never refer to — Insight has one. There is no route that deletes a
 role, so these cannot be tidied up through the API.
+
+## Production posture
+
+Verified against the running tenant rather than assumed:
+
+- **Fails closed.** When SpiceDB is unreachable `/v1/authz/decide` answers 503
+  with `allowed: false`. Answering "allow" would hand out access precisely when
+  the service knows nothing about the caller.
+- **The data plane does not depend on Entra.** `decide` verifies no tokens, so
+  an identity-provider outage stops new logins but does not fail requests
+  already in flight. Only `/v1/ui/*` verifies OIDC.
+- **Resources are adequate.** Measured 62Mi against a 512Mi limit with no
+  restarts and no OOM kills — roughly eight times headroom. Left alone.
+- **Both workloads survive a drain.** Two replicas each, spread across nodes,
+  with a PodDisruptionBudget keeping one serving. SpiceDB previously ran as a
+  single replica while answering every authenticated request in the tenant.
+
+### Known gaps
+
+- **NetworkPolicy is not enforced anywhere on this cluster.** AKS reports
+  `networkPolicy: none`, so no policy object has any effect. The policies
+  already shipped in the Insight chart are decorative. Enabling an engine on an
+  existing cluster is disruptive, so this is a deliberate decision to take
+  rather than something to quietly add. Until then, treat every in-cluster
+  caller as able to reach this Service directly — which is why identity comes
+  from a verified token and never from the gateway's headers.
+- **There is one administrator.** The last-administrator guard now prevents
+  removing them, but a single account is still fragile. Add a second.
+- **The database is a single point of failure.** `authz-3760de3866` is
+  Burstable with high availability disabled and seven days of backups. Zone
+  redundancy needs the General Purpose tier — a cost decision.
+- Every application registered before roles were declarable still carries a
+  `user` role. Insight's has been removed; `authz-admin` keeps its own, left
+  alone deliberately because the sole administrator's access runs through it.
