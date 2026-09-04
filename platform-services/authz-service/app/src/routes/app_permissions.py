@@ -652,6 +652,73 @@ async def ensure_role(
     return result
 
 
+@router.delete(
+    "/{app}/roles/{role}",
+    response_model=RevokePermissionResponse,
+    dependencies=[Depends(_verify_admin_token)],
+)
+async def delete_role(
+    app: str,
+    role: str,
+    body: EnsureRoleRequest,
+    x_cortex_tenant: str = Header(default=""),
+    client: SpiceDBClient = Depends(get_authz_client),
+) -> RevokePermissionResponse:
+    """Remove a role an application no longer defines.
+
+    Applications declare their own roles, and those declarations change: a role
+    created by an earlier deployment otherwise lingers forever, offering whoever
+    manages access a name the application never uses. Without this there was no
+    way to withdraw one.
+
+    Removes the same two edges ensure_role writes, in one call, so the role
+    cannot be left enumerable but unresolvable.
+
+    Refuses while the role still has members. Deleting it out from under them
+    would silently strip access without ever saying whose, and the grants would
+    be left pointing at a role that no longer exists.
+    """
+    tenant = _resolve_tenant(x_cortex_tenant, body.tenant_id)
+    role_object = _role_object(app, role, tenant)
+
+    members = await client.list_relationships(
+        tenant_id=tenant,
+        resource_type="app_role",
+        resource_id=role_object.split(":", 1)[1],
+        relation=_MEMBER_RELATION,
+    )
+    if members.relationships:
+        who = sorted({_decode_subject(i.subject) for i in members.relationships})
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{role} still has {len(who)} member(s): {', '.join(who[:5])}"
+                f"{' and others' if len(who) > 5 else ''}. Remove them first."
+            ),
+        )
+
+    result = await client.revoke_permissions(
+        tenant_id=tenant,
+        relationships=[
+            {
+                "resource": _permission_object(app, _ROLE_EXISTS_PERMISSION, tenant),
+                "relation": _GRANT_RELATION,
+                "subject": role_object,
+            },
+            {
+                "resource": f"application:{app}@{tenant}",
+                "relation": "role",
+                "subject": role_object,
+            },
+        ],
+    )
+    logger.info(
+        "app role deleted",
+        extra={"app": app, "role": role, "tenant_id": tenant},
+    )
+    return result
+
+
 @router.get(
     "/{app}/roles",
     response_model=ListRolesResponse,

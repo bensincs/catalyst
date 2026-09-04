@@ -934,3 +934,60 @@ async def test_a_wrong_hook_token_is_still_refused(apps_client: AsyncClient) -> 
         headers={"X-Cortex-Hook-Token": "not-the-token"},
     )
     assert resp.status_code == 403
+
+
+class TestDeleteRole:
+    """Withdrawing a role an application no longer defines.
+
+    Applications declare their own roles and those declarations change. Before
+    this there was no way to remove one, so a role created by an earlier
+    deployment lingered forever — offering whoever manages access a name the
+    application never uses.
+    """
+
+    @pytest.mark.asyncio
+    async def test_removes_both_edges_ensure_role_wrote(
+        self, apps_client: AsyncClient, mock_spicedb_client: AsyncMock
+    ) -> None:
+        mock_spicedb_client.list_relationships = AsyncMock(
+            return_value=type("L", (), {"relationships": []})()
+        )
+
+        resp = await apps_client.request(
+            "DELETE", "/v1/apps/insight/roles/mg_admin", json={}, headers=HEADERS
+        )
+
+        assert resp.status_code == 200
+        rels = mock_spicedb_client.revoke_permissions.await_args.kwargs["relationships"]
+        # Both in one call: a role left enumerable but unresolvable is worse
+        # than one that is still there.
+        assert len(rels) == 2
+        assert {r["relation"] for r in rels} == {"granted_to", "role"}
+
+    @pytest.mark.asyncio
+    async def test_refuses_while_the_role_still_has_members(
+        self, apps_client: AsyncClient, mock_spicedb_client: AsyncMock
+    ) -> None:
+        """Deleting it would strip access without ever saying whose."""
+        rel = lambda sub: type("R", (), {"subject": sub})()
+        mock_spicedb_client.list_relationships = AsyncMock(
+            return_value=type("L", (), {"relationships": [
+                rel("user:ben_at_msft_dot_ae"), rel("user:zoe_at_example_dot_com"),
+            ]})()
+        )
+
+        resp = await apps_client.request(
+            "DELETE", "/v1/apps/insight/roles/member", json={}, headers=HEADERS
+        )
+
+        assert resp.status_code == 409
+        # Names them, so the operator knows who to deal with first.
+        assert "ben@msft.ae" in resp.json()["detail"]
+        mock_spicedb_client.revoke_permissions.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_requires_the_admin_token(self, apps_client: AsyncClient) -> None:
+        resp = await apps_client.request(
+            "DELETE", "/v1/apps/insight/roles/member", json={}
+        )
+        assert resp.status_code in (401, 403)
