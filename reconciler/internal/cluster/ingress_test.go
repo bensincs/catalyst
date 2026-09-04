@@ -549,3 +549,27 @@ func TestAuthzHopTakesSubjectFromTheVerifiedToken(t *testing.T) {
 		t.Errorf("subject must come from the session, got %q", body["subject"])
 	}
 }
+
+// Oathkeeper validates its global handler config at startup and exits if a
+// required property is missing — even when every access rule overrides it. The
+// first version of this config enabled the handlers with no config block, and
+// the container died at boot with a schema error rather than failing on a
+// request, so nothing about the running system pointed at the cause.
+func TestAuthzHopGlobalConfigCarriesRequiredProperties(t *testing.T) {
+	ing := &shared.IngressConfig{
+		AppsDomain: "apps.example", OIDCIssuer: "https://issuer.example/v2.0",
+		OIDCClientID: "client", OIDCClientSecret: "secret",
+	}
+	cfg := authzHopConfig("insight", "t-1", ing)
+
+	for _, required := range []string{
+		"jwks_urls", // authenticators.jwt
+		"remote:",   // authorizers.remote_json
+		"payload:",  // authorizers.remote_json
+		"headers:",  // mutators.header
+	} {
+		if !strings.Contains(cfg, required) {
+			t.Errorf("global config is missing %q — Oathkeeper exits at boot without it", required)
+		}
+	}
+}

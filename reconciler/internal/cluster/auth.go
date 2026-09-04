@@ -261,7 +261,18 @@ func identityHeaders(sub, tenant, app string) map[string]any {
 }
 
 // authzHopConfig renders Oathkeeper's own configuration.
-func authzHopConfig() string {
+//
+// A handler enabled here must also carry its required config block, even though
+// the access rule overrides every value — Oathkeeper validates the global
+// section against its schema at startup and exits if a required property is
+// missing. These values are therefore duplicated from the rule rather than left
+// out, and an incomplete global section fails the container at boot rather than
+// at the first request.
+func authzHopConfig(appName, tenantSlug string, ing *shared.IngressConfig) string {
+	jwks := strings.TrimSuffix(ing.OIDCIssuer, "/") + "/discovery/v2.0/keys"
+	headers, _ := json.Marshal(identityHeaders("{{ print .Subject }}", tenantSlug, appName))
+	payload := `{"subject":"{{ print .Subject }}","app":"` + appName + `"}`
+
 	return `log:
   level: warn
   format: json
@@ -280,6 +291,9 @@ errors:
 authenticators:
   jwt:
     enabled: true
+    config:
+      jwks_urls:
+        - ` + jwks + `
   noop:
     enabled: true
   anonymous:
@@ -287,11 +301,16 @@ authenticators:
 authorizers:
   remote_json:
     enabled: true
+    config:
+      remote: ` + authzDecideURL + `
+      payload: '` + payload + `'
   allow:
     enabled: true
 mutators:
   header:
     enabled: true
+    config:
+      headers: ` + string(headers) + `
   noop:
     enabled: true
 `
@@ -394,7 +413,7 @@ func authzHopConfigMap(name, namespace, appID, tenantSlug string, a shared.Desir
 			"labels":    map[string]any{labelManaged: "true", labelAppID: appID},
 		},
 		"data": map[string]any{
-			"config.yaml": authzHopConfig(),
+			"config.yaml": authzHopConfig(appNameForAuthz(a), tenantSlug, ing),
 			"rules.json":  authzHopRules(appNameForAuthz(a), tenantSlug, upstream, ing),
 		},
 	}}
