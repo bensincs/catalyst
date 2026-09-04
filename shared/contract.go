@@ -125,7 +125,8 @@ type ApplicationHook struct {
 	// told about an application.
 	Service ServiceRef `json:"service"`
 	// Path on that service. {{app}} is replaced with the application's name as
-	// an operator knows it — its hostname label.
+	// an operator knows it — its hostname label. {{role}} is replaced with each
+	// role the application declares, and the hook is called once per role.
 	Path string `json:"path"`
 	// Body sent with the request, after the same substitution.
 	Body string `json:"body,omitempty"`
@@ -201,6 +202,11 @@ type DesiredApplication struct {
 	// HoldReason says which dependency is unsatisfied, so the operator is not
 	// left guessing why a deployment stopped moving.
 	HoldReason string `json:"holdReason,omitempty"`
+	// Roles this application defines — the names it will describe a person by,
+	// such as "org_admin" or "member". A property of the application itself: it
+	// says nothing about who enforces them, and an application declaring them
+	// does not have to know an authorization service exists.
+	Roles []string `json:"roles,omitempty"`
 }
 
 // IngressJWTRule is one accepted token issuer for the cluster's ingress gateway:

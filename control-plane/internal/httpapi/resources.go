@@ -84,6 +84,9 @@ type appInput struct {
 	Hostname       string `json:"hostname"`
 	OIDCScope      string `json:"oidcScope"`
 	AuthRequired   bool   `json:"authRequired"`
+	// Roles this application defines — its own vocabulary for describing a
+	// person, declared without reference to whatever enforces them.
+	Roles []string `json:"roles,omitempty"`
 	// ApplicationHooks: calls this service wants made whenever ANY application
 	// in the tenant is deployed. Declared here so the reconciler stays generic.
 	ApplicationHooks []shared.ApplicationHook `json:"applicationHooks,omitempty"`
@@ -134,6 +137,7 @@ func (in appInput) build(id, owner string) model.Application {
 		OIDCScope:        strings.TrimSpace(in.OIDCScope),
 		AuthRequired:     in.AuthRequired,
 		ApplicationHooks: in.ApplicationHooks,
+		Roles:            in.Roles,
 		// Offering an app in the sidebar only means anything when it publishes a
 		// Service: without one there is no URL, and the entry would open nothing.
 		Embed:        in.Embed && strings.TrimSpace(in.ExposeService) != "",

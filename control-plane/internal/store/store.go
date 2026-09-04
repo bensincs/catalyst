@@ -1445,7 +1445,7 @@ func (s *Store) SyncDesired(ctx context.Context, t model.Tenant) (shared.Desired
 	arows, err := s.pool.Query(ctx,
 		`SELECT a.id, a.name, a.namespace, a.repo_url, a.chart, a.target_revision, a.values, a.expose_service, a.expose_port,
 		        coalesce(a.hostname,''), coalesce(a.oidc_scope,''), coalesce(a.auth_required,false),
-		        a.wiring, a.dependencies, coalesce(a.application_hooks,'[]')
+		        a.wiring, a.dependencies, coalesce(a.application_hooks,'[]'), coalesce(a.roles,'{}')
 		 FROM applications a JOIN tenant_deployments td ON td.app_id = a.id AND td.tenant_slug = $1
 		 ORDER BY td.sort_order`, t.ID)
 	if err != nil {
@@ -1463,7 +1463,7 @@ func (s *Store) SyncDesired(ctx context.Context, t model.Tenant) (shared.Desired
 		var da shared.DesiredApplication
 		var wraw, draw, hraw []byte
 		if err := arows.Scan(&da.ID, &da.Name, &da.Namespace, &da.RepoURL, &da.Chart, &da.TargetRevision, &da.Values, &da.ExposeService, &da.ExposePort,
-			&da.Hostname, &da.OIDCScope, &da.AuthRequired, &wraw, &draw, &hraw); err != nil {
+			&da.Hostname, &da.OIDCScope, &da.AuthRequired, &wraw, &draw, &hraw, &da.Roles); err != nil {
 			return out, err
 		}
 		// Hooks are gathered from every ENABLED service that declares them, and
@@ -2007,7 +2007,7 @@ const applicationCols = `a.id, a.name, a.description, a.owner_tenant, a.namespac
 	a.repo_url, a.chart, a.target_revision, a.values, a.expose_service, a.expose_port,
 	coalesce(a.hostname,''), coalesce(a.oidc_scope,''), coalesce(a.auth_required,false),
 	coalesce(a.embed,false), coalesce(a.icon,''),
-	a.wiring, a.dependencies, a.application_hooks, a.created_by, a.created_at`
+	a.wiring, a.dependencies, a.application_hooks, coalesce(a.roles,'{}'), a.created_by, a.created_at`
 
 // appScanDest scans the fixed columns; wiring + dependencies (jsonb) are captured
 // raw and unmarshalled by the caller (wiringFromRaw / depsFromRaw).
@@ -2016,7 +2016,7 @@ func appScanDest(a *model.Application, wiringRaw, depsRaw, hooksRaw *[]byte) []a
 		&a.RepoURL, &a.Chart, &a.TargetRevision, &a.Values, &a.ExposeService, &a.ExposePort,
 		&a.Hostname, &a.OIDCScope, &a.AuthRequired,
 		&a.Embed, &a.Icon,
-		wiringRaw, depsRaw, hooksRaw, &a.CreatedBy, &a.CreatedAt}
+		wiringRaw, depsRaw, hooksRaw, &a.Roles, &a.CreatedBy, &a.CreatedAt}
 }
 
 // hooksJSON / hooksFromRaw round-trip an application's declared hooks.
@@ -2273,12 +2273,12 @@ func (s *Store) UpdateApplication(ctx context.Context, a model.Application) erro
 		   chart = $6, target_revision = $7, values = $8, expose_service = $9, expose_port = $10,
 		   hostname = $11, oidc_scope = $12, auth_required = $13,
 		   embed = $14, icon = $15,
-		   wiring = $16, dependencies = $17, application_hooks = $18
+		   wiring = $16, dependencies = $17, application_hooks = $18, roles = $19
 		 WHERE id = $1`,
 		a.ID, a.Name, a.Description, a.Namespace, a.RepoURL, a.Chart, a.TargetRevision, a.Values,
 		a.ExposeService, a.ExposePort, a.Hostname, a.OIDCScope, a.AuthRequired,
 		a.Embed, a.Icon,
-		wiringJSON(a.Wiring), depsJSON(a.Dependencies), hooksJSON(a.ApplicationHooks))
+		wiringJSON(a.Wiring), depsJSON(a.Dependencies), hooksJSON(a.ApplicationHooks), depsArray(a.Roles))
 	if err != nil {
 		return err
 	}

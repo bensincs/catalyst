@@ -379,6 +379,9 @@ type Application struct {
 	Hostname     string `json:"hostname"`
 	OIDCScope    string `json:"oidcScope"`
 	AuthRequired bool   `json:"authRequired"`
+	// Roles this application defines — the names it describes a person by. A
+	// property of the application: it says nothing about who enforces them.
+	Roles []string `json:"roles,omitempty"`
 	// ApplicationHooks are calls this service wants made whenever ANY
 	// application in the tenant is deployed.
 	ApplicationHooks []shared.ApplicationHook `json:"applicationHooks,omitempty"`

@@ -100,7 +100,7 @@
             "name": "authz-service",
             "port": 8080
           },
-          "path": "/v1/apps/{{app}}/roles/user",
+          "path": "/v1/apps/{{app}}/roles/{{role}}",
           "body": "{}",
           "tokenSecret": {
             "namespace": "cortex-authz",
@@ -109,6 +109,9 @@
           },
           "tokenHeader": "X-Cortex-Hook-Token"
         }
+      ],
+      "roles": [
+        "admin"
       ]
     }
   ],

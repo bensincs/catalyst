@@ -108,6 +108,12 @@
           "output": "appInfra",
           "helmPath": "appInfra"
         }
+      ],
+      "roles": [
+        "org_admin",
+        "mg_admin",
+        "member",
+        "guest"
       ]
     }
   ]

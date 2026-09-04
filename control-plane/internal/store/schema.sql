@@ -240,6 +240,9 @@ ALTER TABLE applications ADD COLUMN IF NOT EXISTS wiring        jsonb   NOT NULL
 -- Declared by the service that needs it, so a generic reconciler does not carry
 -- one workload's namespace, secret and API shape.
 ALTER TABLE applications ADD COLUMN IF NOT EXISTS application_hooks jsonb NOT NULL DEFAULT '[]';
+-- Roles an application defines. Its own vocabulary, not the platform's: an app
+-- declaring "org_admin" and "member" says nothing about who enforces them.
+ALTER TABLE applications ADD COLUMN IF NOT EXISTS roles text[] NOT NULL DEFAULT '{}';
 ALTER TABLE applications ADD COLUMN IF NOT EXISTS depends_on    text[]  NOT NULL DEFAULT '{}';
 ALTER TABLE tenants      ADD COLUMN IF NOT EXISTS entitled_deployments text[] NOT NULL DEFAULT '{}';
 

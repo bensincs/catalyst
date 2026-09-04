@@ -198,7 +198,7 @@ func (k *kube) reconcileApplications(ctx context.Context, apps []shared.DesiredA
 		// Tell whoever asked that this application exists. Before the Argo
 		// Application is stamped, so a subscriber that gates access has heard of
 		// the app by the time anything can reach it.
-		for _, err := range k.runApplicationHooks(ctx, o.ApplicationHooks, appNameForAuthz(a)) {
+		for _, err := range k.runApplicationHooks(ctx, o.ApplicationHooks, appNameForAuthz(a), a.Roles) {
 			note("application hook", err)
 		}
 

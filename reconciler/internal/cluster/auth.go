@@ -253,6 +253,11 @@ const (
 	// authentication and never forwards it, so a subscriber would see no
 	// credential at all and answer 401.
 	defaultHookTokenHeader = "X-Cortex-Hook-Token"
+	// Placeholder a hook uses to ask about each of an application's roles.
+	roleToken = "{{role}}"
+	// Used when an application declares no roles of its own, so it is still
+	// grantable rather than invisible to whoever manages access.
+	defaultRole = "user"
 )
 
 // subjectExpr is how the caller is identified, everywhere.
@@ -492,17 +497,44 @@ func appNameForAuthz(a shared.DesiredApplication) string {
 // Failures are reported per hook and do not stop the others, nor the app. The
 // subscriber may simply not be installed yet, and the sweep is level-triggered,
 // so the next one tries again.
-func (k *kube) runApplicationHooks(ctx context.Context, hooks []shared.ApplicationHook, appName string) []error {
+func (k *kube) runApplicationHooks(ctx context.Context, hooks []shared.ApplicationHook, appName string, roles []string) []error {
 	var errs []error
 	for _, h := range hooks {
-		if err := k.runApplicationHook(ctx, h, appName); err != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", h.Name, err))
+		// A hook that mentions {{role}} is asking about the application's
+		// vocabulary, so it is called once per role. The application declares
+		// those names itself and says nothing about who consumes them.
+		for _, role := range hookRoles(h, roles) {
+			if err := k.runApplicationHook(ctx, h, appName, role); err != nil {
+				errs = append(errs, fmt.Errorf("%s (%s): %w", h.Name, role, err))
+			}
 		}
 	}
 	return errs
 }
 
-func (k *kube) runApplicationHook(ctx context.Context, h shared.ApplicationHook, appName string) error {
+// hookRoles is what a hook should be called for.
+//
+// One empty entry when the hook does not mention a role — it is about the
+// application, not its vocabulary. Otherwise the roles the application
+// declares, falling back to a single default so an application that declares
+// none is still reachable rather than silently ungrantable.
+func hookRoles(h shared.ApplicationHook, declared []string) []string {
+	if !strings.Contains(h.Path, roleToken) && !strings.Contains(h.Body, roleToken) {
+		return []string{""}
+	}
+	var out []string
+	for _, r := range declared {
+		if r = strings.TrimSpace(r); r != "" {
+			out = append(out, r)
+		}
+	}
+	if len(out) == 0 {
+		return []string{defaultRole}
+	}
+	return out
+}
+
+func (k *kube) runApplicationHook(ctx context.Context, h shared.ApplicationHook, appName, role string) error {
 	method := strings.TrimSpace(h.Method)
 	if method == "" {
 		method = http.MethodPost
@@ -512,7 +544,9 @@ func (k *kube) runApplicationHook(ctx context.Context, h shared.ApplicationHook,
 	}
 
 	path := strings.ReplaceAll(h.Path, "{{app}}", url.PathEscape(appName))
+	path = strings.ReplaceAll(path, roleToken, url.PathEscape(role))
 	body := strings.ReplaceAll(h.Body, "{{app}}", appName)
+	body = strings.ReplaceAll(body, roleToken, role)
 
 	headers := map[string]string{"Content-Type": "application/json"}
 	if h.TokenSecret != nil {

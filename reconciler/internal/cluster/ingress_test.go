@@ -669,7 +669,7 @@ func TestApplicationHookTargetsAServiceNotAURL(t *testing.T) {
 		Service: shared.ServiceRef{Namespace: "cortex-authz", Name: "authz-service", Port: 8080},
 		Path:    "/v1/apps/{{app}}/roles/user",
 		Body:    `{"app":"{{app}}"}`,
-	}, "todo")
+	}, "todo", "")
 	if err != nil {
 		t.Fatalf("hook failed: %v", err)
 	}
@@ -690,7 +690,7 @@ func TestApplicationHookWithoutAServiceIsRejected(t *testing.T) {
 	k := &kube{rest: &fakeRESTClient{record: func(string) {}}}
 	err := k.runApplicationHook(context.Background(), shared.ApplicationHook{
 		Name: "misconfigured", Method: http.MethodPut, Path: "/x",
-	}, "todo")
+	}, "todo", "")
 	if err == nil {
 		t.Fatal("want an error naming the missing service")
 	}
@@ -706,7 +706,7 @@ func TestApplicationHooksReportEachFailureAndContinue(t *testing.T) {
 		{Name: "broken", Method: http.MethodPut, Path: "/x"},
 		{Name: "working", Method: http.MethodPut, Path: "/x",
 			Service: shared.ServiceRef{Namespace: "ns", Name: "svc", Port: 80}},
-	}, "todo")
+	}, "todo", nil)
 
 	if len(errs) != 1 {
 		t.Fatalf("want exactly the one failure, got %d: %v", len(errs), errs)
@@ -767,5 +767,71 @@ func TestSessionRefreshesBeforeTheTokenExpires(t *testing.T) {
 	// A refresh token is what makes renewal possible at all.
 	if !strings.Contains(got, "offline_access") {
 		t.Error("offline_access is required for Entra to issue a refresh token")
+	}
+}
+
+// An application brings its own roles, and a hook that asks about them is
+// called once for each.
+//
+// Insight's vocabulary is org_admin / mg_admin / member / guest. Registering it
+// with a single role called "user" would have offered whoever manages access a
+// name the application never uses.
+func TestHookIsCalledForEachRoleTheApplicationDeclares(t *testing.T) {
+	var paths []string
+	fake := &fakeRESTClient{record: func(p string) { paths = append(paths, p) }}
+	k := &kube{rest: fake}
+
+	hook := shared.ApplicationHook{
+		Name:    "registration",
+		Method:  http.MethodPut,
+		Service: shared.ServiceRef{Namespace: "ns", Name: "svc", Port: 80},
+		Path:    "/v1/apps/{{app}}/roles/{{role}}",
+	}
+	if errs := k.runApplicationHooks(context.Background(), []shared.ApplicationHook{hook},
+		"insight", []string{"org_admin", "member"}); len(errs) != 0 {
+		t.Fatalf("hooks failed: %v", errs)
+	}
+
+	if len(paths) != 2 {
+		t.Fatalf("want one call per role, got %d: %v", len(paths), paths)
+	}
+	for _, want := range []string{"/roles/org_admin", "/roles/member"} {
+		if !strings.Contains(strings.Join(paths, " "), want) {
+			t.Errorf("no call for %q; got %v", want, paths)
+		}
+	}
+}
+
+// A hook that says nothing about roles is about the application itself, and
+// must not be multiplied by a vocabulary it never mentioned.
+func TestHookWithoutARoleTokenIsCalledOnce(t *testing.T) {
+	var calls int
+	k := &kube{rest: &fakeRESTClient{record: func(string) { calls++ }}}
+
+	if errs := k.runApplicationHooks(context.Background(), []shared.ApplicationHook{{
+		Name: "ping", Method: http.MethodPost, Path: "/v1/apps/{{app}}",
+		Service: shared.ServiceRef{Namespace: "ns", Name: "svc", Port: 80},
+	}}, "insight", []string{"org_admin", "member", "guest"}); len(errs) != 0 {
+		t.Fatalf("hooks failed: %v", errs)
+	}
+	if calls != 1 {
+		t.Errorf("want one call, got %d", calls)
+	}
+}
+
+// An application that declares no roles is still grantable, rather than
+// invisible to whoever manages access.
+func TestAnApplicationWithNoRolesStillGetsOne(t *testing.T) {
+	var paths []string
+	k := &kube{rest: &fakeRESTClient{record: func(p string) { paths = append(paths, p) }}}
+
+	if errs := k.runApplicationHooks(context.Background(), []shared.ApplicationHook{{
+		Name: "registration", Method: http.MethodPut, Path: "/v1/apps/{{app}}/roles/{{role}}",
+		Service: shared.ServiceRef{Namespace: "ns", Name: "svc", Port: 80},
+	}}, "todo", nil); len(errs) != 0 {
+		t.Fatalf("hooks failed: %v", errs)
+	}
+	if len(paths) != 1 || !strings.Contains(paths[0], "/roles/user") {
+		t.Errorf("want a single default role, got %v", paths)
 	}
 }
