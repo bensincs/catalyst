@@ -4,6 +4,7 @@ import json
 import logging
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import AsyncIterator
 
 from cortex_otel import (
@@ -12,6 +13,7 @@ from cortex_otel import (
     setup_telemetry,
 )
 from fastapi import FastAPI, Request
+from fastapi.staticfiles import StaticFiles
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
@@ -20,6 +22,7 @@ from routes.ext_authz import router as ext_authz_router
 from routes.admin import router as admin_router
 from routes.app_permissions import router as app_permissions_router
 from routes.decide import router as decide_router
+from routes.ui_api import router as ui_router
 
 # Bootstrap the OTel SDK once per process, before any FastAPI/grpc instrumentation
 # runs. cortex-otel is idempotent so build_app() re-entry under uvicorn --factory
@@ -115,5 +118,14 @@ def build_app() -> FastAPI:
     app.include_router(admin_router)
     app.include_router(app_permissions_router)
     app.include_router(decide_router)
+    app.include_router(ui_router)
+
+    # The admin UI. Served by this service rather than shipped separately: it is
+    # useless without this API, and giving it its own origin would mean its own
+    # deployment, its own route and a cross-origin story for no gain. Mounted
+    # last so it cannot shadow an API path.
+    ui_dir = Path(__file__).resolve().parent.parent / "ui"
+    if ui_dir.is_dir():
+        app.mount("/", StaticFiles(directory=str(ui_dir), html=True), name="ui")
 
     return app
