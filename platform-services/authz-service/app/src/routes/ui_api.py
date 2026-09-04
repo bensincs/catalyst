@@ -20,6 +20,7 @@ import os
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
+from common import gateway_identity
 from common.audit import AuditEvent, elapsed_ms, request_context_from
 from common.dependencies import get_authz_client
 from common.tenant import TENANT_ID
@@ -42,21 +43,36 @@ def _normalize_subject(sub: str) -> str:
 
 async def require_admin(
     request: Request,
-    x_cortex_sub: str = Header(default=""),
+    authorization: str = Header(default=""),
     authz: SpiceDBClient = Depends(get_authz_client),
 ) -> str:
-    """Resolve the caller and require that they administer app access.
+    """Establish who is calling, and require that they administer app access.
 
-    The subject is taken from the gateway header rather than anything the
-    browser sends directly: the proxy in front overwrites that header on every
-    request, so it cannot be forged by the caller.
+    The caller's identity is taken from a VERIFIED OIDC token, not from the
+    X-Cortex-* headers the gateway stamps. Those headers are only meaningful
+    when the gateway set them, and this Service's ClusterIP is reachable
+    without going through the gateway at all — so any pod in the cluster could
+    send them itself and be believed. That was demonstrated with a plain curl
+    from another namespace, which returned administrator: true.
+
+    A token cannot be forged the same way: only a caller who actually completed
+    the login holds one this tenant's identity provider will sign.
     """
-    sub = x_cortex_sub.strip()
-    if not sub:
-        # No identity means the request did not come through the gateway.
-        raise HTTPException(status_code=401, detail="No gateway identity on this request")
+    if not gateway_identity.configured():
+        # Refusing is the only safe answer. Falling back to the headers would
+        # reinstate exactly the hole this exists to close.
+        raise HTTPException(
+            status_code=503,
+            detail="Token verification is not configured; refusing to trust request headers",
+        )
 
-    subject = _normalize_subject(sub)
+    try:
+        caller = gateway_identity.subject_from_token(authorization)
+    except gateway_identity.InvalidToken as exc:
+        logger.info("ui: rejected an unverified caller: %s", exc)
+        raise HTTPException(status_code=401, detail="Sign in to continue") from exc
+
+    subject = _normalize_subject(caller)
     resource = f"application:{_admin_app()}@{sanitize_tenant_id(TENANT_ID)}"
     try:
         result = await authz.check_permission(

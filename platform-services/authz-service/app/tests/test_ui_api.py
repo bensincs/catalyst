@@ -13,14 +13,63 @@ from unittest.mock import AsyncMock
 import pytest
 from httpx import AsyncClient
 
-_ADMIN = {"x-cortex-sub": "user:admin@example.com"}
+# Identity now comes from a verified token, so the tests stand in for the
+# verification rather than sending a header the service would refuse.
+_ADMIN = {"authorization": "Bearer test-token"}
+
+
+@pytest.fixture(autouse=True)
+def _verifiable_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    from common import gateway_identity
+
+    monkeypatch.setattr(gateway_identity, "configured", lambda: True)
+    monkeypatch.setattr(
+        gateway_identity,
+        "subject_from_token",
+        lambda auth: (
+            "admin@example.com"
+            if auth == "Bearer test-token"
+            else (_ for _ in ()).throw(gateway_identity.InvalidToken("bad token"))
+        ),
+    )
 
 
 @pytest.mark.asyncio
-async def test_rejects_a_request_with_no_gateway_identity(client: AsyncClient) -> None:
-    """No identity header means the request did not come through the gateway."""
+async def test_rejects_a_request_with_no_token(client: AsyncClient) -> None:
     resp = await client.get("/v1/ui/apps")
     assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_a_forged_identity_header_proves_nothing(client: AsyncClient) -> None:
+    """This is the hole the token verification exists to close.
+
+    The Service's ClusterIP is reachable without going through the gateway, so
+    any pod could send the header the gateway stamps. A plain curl from another
+    namespace did exactly that and was told it was an administrator.
+    """
+    resp = await client.get(
+        "/v1/ui/me", headers={"x-cortex-sub": "user:attacker@example.com"}
+    )
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_an_unverifiable_token_is_refused(client: AsyncClient) -> None:
+    resp = await client.get("/v1/ui/me", headers={"authorization": "Bearer forged"})
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_refuses_rather_than_trusting_headers_when_unconfigured(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Falling back to headers would reinstate the hole."""
+    from common import gateway_identity
+
+    monkeypatch.setattr(gateway_identity, "configured", lambda: False)
+    resp = await client.get("/v1/ui/me", headers={"x-cortex-sub": "user:a@b.c"})
+    assert resp.status_code == 503
 
 
 @pytest.mark.asyncio
@@ -35,7 +84,7 @@ async def test_rejects_a_caller_who_is_not_an_administrator(
     mock_spicedb_client.check_permission = AsyncMock(
         return_value=type("R", (), {"allowed": False})()
     )
-    resp = await client.get("/v1/ui/apps", headers={"x-cortex-sub": "user:nobody@example.com"})
+    resp = await client.get("/v1/ui/apps", headers=_ADMIN)
     assert resp.status_code == 403
 
 

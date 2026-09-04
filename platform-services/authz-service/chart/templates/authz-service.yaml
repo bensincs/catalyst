@@ -47,6 +47,10 @@ spec:
               value: {{ required "tenantId is required" (.Values.tenantId | trim) | quote }}
             - name: AUTHZ_ADMIN_APP
               value: {{ .Values.adminApp | quote }}
+            - name: AUTHZ_OIDC_ISSUER
+              value: {{ .Values.oidc.issuer | quote }}
+            - name: AUTHZ_OIDC_AUDIENCE
+              value: {{ .Values.oidc.audience | quote }}
             - name: SPICEDB_PRESHARED_KEY
               valueFrom:
                 secretKeyRef:

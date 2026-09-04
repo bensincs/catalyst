@@ -8,3 +8,6 @@ tenantId: t-ci
 postgres:
   host: example.postgres.database.azure.com
   user: authzadmin
+oidc:
+  issuer: https://login.microsoftonline.com/tid/v2.0
+  audience: 00000000-0000-0000-0000-000000000000

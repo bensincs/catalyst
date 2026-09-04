@@ -32,6 +32,16 @@ tenantId: ""
 # what makes someone an administrator of app access.
 adminApp: authz-admin
 
+# The admin UI establishes who is calling from a VERIFIED OIDC token, because
+# the X-Cortex-* headers the gateway stamps mean nothing when this Service is
+# reached directly — which anything in the cluster can do. Without these the
+# UI refuses every request rather than falling back to trusting headers.
+oidc:
+  issuer: ""
+  # The application the token must be issued for: a token minted for something
+  # else is not proof of anything here.
+  audience: ""
+
 # Secrets are supplied by the platform's secret store, which materialises them
 # as a Kubernetes Secret in this namespace. Nothing here holds a credential.
 secrets:
