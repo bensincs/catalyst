@@ -469,3 +469,83 @@ func TestAuthProxyPassesBearerTokenNotBasic(t *testing.T) {
 		t.Error("--pass-basic-auth overwrites Authorization with Basic and hides the JWT from the app")
 	}
 }
+
+// A caller must not be able to assert their own identity.
+//
+// Insight — and any app behind this proxy — treats X-Cortex-Sub as proof of who
+// is calling; a probe with a hand-written header returned authenticated:true
+// from its BFF. Oathkeeper forwards request headers it is not told about, so
+// every header in that family must be overwritten on the way through, including
+// the ones this hop has no value for. Overwriting with an empty string removes
+// them.
+func TestAuthzHopOverwritesEveryIdentityHeader(t *testing.T) {
+	ing := &shared.IngressConfig{
+		AppsDomain:       "apps.example",
+		OIDCIssuer:       "https://login.microsoftonline.com/tid/v2.0",
+		OIDCClientID:     "client",
+		OIDCClientSecret: "secret",
+	}
+	app := shared.DesiredApplication{ID: "insight", Hostname: "insight", ExposeService: "frontend", ExposePort: 80}
+	cm := authzHopConfigMap("insight-auth-authz", "insight", "insight", "t-1", app, ing)
+
+	data, _ := cm.Object["data"].(map[string]any)
+	rules, _ := data["rules.json"].(string)
+
+	var parsed []map[string]any
+	if err := json.Unmarshal([]byte(rules), &parsed); err != nil {
+		t.Fatalf("rules are not valid JSON: %v", err)
+	}
+	mutators, _ := parsed[0]["mutators"].([]any)
+	cfg, _ := mutators[0].(map[string]any)["config"].(map[string]any)
+	headers, _ := cfg["headers"].(map[string]any)
+
+	// Every header an app in this platform trusts for identity.
+	for _, h := range []string{
+		"X-Cortex-Sub", "X-Cortex-Subject", "X-Cortex-Tenant", "X-Cortex-App",
+		"X-Cortex-Email", "X-Cortex-Name", "X-Cortex-Roles",
+		"X-Cortex-Claim-Preferred-Username", "X-Cortex-Claim-Given-Name",
+		"X-Cortex-Claim-Family-Name",
+	} {
+		if _, ok := headers[h]; !ok {
+			t.Errorf("%s is not overwritten, so a caller can send their own and be believed", h)
+		}
+	}
+}
+
+// The subject must come from the verified token, not from the request.
+func TestAuthzHopTakesSubjectFromTheVerifiedToken(t *testing.T) {
+	ing := &shared.IngressConfig{
+		AppsDomain: "apps.example", OIDCIssuer: "https://issuer.example/v2.0",
+		OIDCClientID: "client", OIDCClientSecret: "secret",
+	}
+	app := shared.DesiredApplication{ID: "insight", Hostname: "insight", ExposeService: "frontend", ExposePort: 80}
+	cm := authzHopConfigMap("insight-auth-authz", "insight", "insight", "t-1", app, ing)
+	rules, _ := cm.Object["data"].(map[string]any)["rules.json"].(string)
+
+	if !strings.Contains(rules, `"handler":"jwt"`) {
+		t.Error("the token must be verified here; trusting the upstream makes anything reaching this port whoever it claims to be")
+	}
+	if !strings.Contains(rules, "{{ print .Subject }}") {
+		t.Error("subject must come from the authenticated session, not the request")
+	}
+	// The payload is itself a JSON document carried as a string, so assert on
+	// the parsed value rather than the escaped text.
+	var parsed []map[string]any
+	if err := json.Unmarshal([]byte(rules), &parsed); err != nil {
+		t.Fatalf("rules are not valid JSON: %v", err)
+	}
+	authorizer, _ := parsed[0]["authorizer"].(map[string]any)
+	cfg, _ := authorizer["config"].(map[string]any)
+	payload, _ := cfg["payload"].(string)
+
+	var body map[string]string
+	if err := json.Unmarshal([]byte(payload), &body); err != nil {
+		t.Fatalf("authorizer payload is not valid JSON: %q", payload)
+	}
+	if body["app"] != "insight" {
+		t.Errorf("the app must be named explicitly, got %q — the authorizer's Host names the authz service, not the app", body["app"])
+	}
+	if body["subject"] != "{{ print .Subject }}" {
+		t.Errorf("subject must come from the session, got %q", body["subject"])
+	}
+}

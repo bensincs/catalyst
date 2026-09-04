@@ -75,6 +75,7 @@ var (
 	depGVR   = schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
 	secGVR   = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "secrets"}
 	svcGVR   = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "services"}
+	cmGVR    = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "configmaps"}
 	saGVR    = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "serviceaccounts"}
 	ingGVR   = schema.GroupVersionResource{Group: "networking.k8s.io", Version: "v1", Resource: "ingresses"}                     // legacy AGIC cleanup
 	albGVR   = schema.GroupVersionResource{Group: "alb.networking.azure.io", Version: "v1", Resource: "applicationloadbalancer"} // CRD plural is non-standard (no trailing s)

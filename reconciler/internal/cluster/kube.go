@@ -220,6 +220,13 @@ func (k *kube) reconcileApplications(ctx context.Context, apps []shared.DesiredA
 					if _, err := si.Apply(ctx, an, authSecret(an, a.Namespace, a.ID, ing.OIDCClientSecret, cookie), ssaOpts); err != nil {
 						note("apply auth secret", err)
 					}
+					// Before the Deployment: the pod mounts this, and a pod that
+					// starts without it crash-loops on a missing config file
+					// rather than failing in a way that names the cause.
+					if _, err := k.dyn.Resource(cmGVR).Namespace(a.Namespace).
+						Apply(ctx, an+"-authz", authzHopConfigMap(an+"-authz", a.Namespace, a.ID, o.TenantSlug, a, ing), ssaOpts); err != nil {
+						note("apply authz hop config", err)
+					}
 					if _, err := k.dyn.Resource(depGVR).Namespace(a.Namespace).
 						Apply(ctx, an, authDeployment(an, a.Namespace, a, ing, host), ssaOpts); err != nil {
 						note("apply oauth2-proxy", err)

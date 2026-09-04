@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -78,7 +79,11 @@ func authSecret(name, namespace, appID, clientSecret, cookieSecret string) *unst
 
 // authDeployment renders the oauth2-proxy that fronts one app.
 func authDeployment(name, namespace string, a shared.DesiredApplication, ing *shared.IngressConfig, host string) *unstructured.Unstructured {
-	upstream := fmt.Sprintf("http://%s:%d", a.ExposeService, exposePortOr80(a.ExposePort))
+	// Not the app: the authorization hop in this same pod, which decides whether
+	// this caller may reach the app and stamps the identity headers the app
+	// trusts. Over localhost, so the decision cannot be skipped by anything that
+	// can reach the pod's Service.
+	upstream := fmt.Sprintf("http://127.0.0.1:%d", authzHopPort)
 
 	// openid is mandatory for OIDC; profile/email populate the identity the
 	// upstream sees. The app's own scope is appended so a token minted for one
@@ -178,11 +183,160 @@ func authDeployment(name, namespace string, a shared.DesiredApplication, ing *sh
 							"requests": map[string]any{"cpu": "20m", "memory": "64Mi"},
 							"limits":   map[string]any{"memory": "128Mi"},
 						},
+					}, map[string]any{
+						"name":  "authz-hop",
+						"image": authzHopImage,
+						"args":  []any{"serve", "proxy", "--config", "/etc/oathkeeper/config.yaml"},
+						"ports": []any{map[string]any{"name": "authz", "containerPort": int64(authzHopPort)}},
+						"volumeMounts": []any{map[string]any{
+							"name":      "authz-hop-config",
+							"mountPath": "/etc/oathkeeper",
+							"readOnly":  true,
+						}},
+						"resources": map[string]any{
+							"requests": map[string]any{"cpu": "20m", "memory": "64Mi"},
+							"limits":   map[string]any{"memory": "128Mi"},
+						},
+					}},
+					"volumes": []any{map[string]any{
+						"name":      "authz-hop-config",
+						"configMap": map[string]any{"name": name + "-authz"},
 					}},
 				},
 			},
 		},
 	}}
+}
+
+// ─── Authorization hop ───────────────────────────────────────────────────────
+//
+// oauth2-proxy establishes WHO the caller is. It cannot decide WHETHER they may
+// reach this app — it has no external-authorization hook — and Application
+// Gateway for Containers has none either. So Ory Oathkeeper sits between the
+// two, in the same pod, and asks the platform's authorization service per
+// request:
+//
+//	AGC ──▶ oauth2-proxy ──localhost──▶ Oathkeeper ──▶ app Service
+//	                                        │
+//	                                        └── /v1/authz/decide
+//
+// It also STAMPS the identity headers the app trusts. That is the part nothing
+// else in this path can do, and the reason an identity-aware proxy is here at
+// all rather than a plain reverse proxy.
+const (
+	// Oathkeeper's proxy port. Only oauth2-proxy talks to it, over localhost,
+	// so the decision cannot be skipped by anything that can reach the Service.
+	authzHopPort = 4455
+	// Where the platform's authorization service lives.
+	authzDecideURL = "http://authz-service.cortex-authz.svc.cluster.local:8080/v1/authz/decide"
+	authzHopImage  = "docker.io/oryd/oathkeeper:v0.40.7"
+)
+
+// identityHeaders are the headers a downstream application trusts to say who
+// the caller is.
+//
+// Every one is overwritten on the way through, whether or not there is a value
+// for it. They are a trust boundary, and an application reading them cannot
+// tell a header the platform set from one the caller typed — Insight, for
+// instance, treats X-Cortex-Sub as proof of identity. A proxy that only ADDS
+// the headers it knows about forwards the rest verbatim, so a caller could
+// assert any identity they liked. Envoy's ext_authz replaces same-named headers
+// for exactly this reason; here it has to be deliberate.
+//
+// The value is the empty string for headers this hop does not populate, which
+// removes them.
+func identityHeaders(sub, tenant, app string) map[string]any {
+	return map[string]any{
+		"X-Cortex-Sub":                      sub,
+		"X-Cortex-Subject":                  sub,
+		"X-Cortex-Tenant":                   tenant,
+		"X-Cortex-App":                      app,
+		"X-Cortex-Email":                    "",
+		"X-Cortex-Name":                     "",
+		"X-Cortex-Roles":                    "",
+		"X-Cortex-Claim-Preferred-Username": "",
+		"X-Cortex-Claim-Given-Name":         "",
+		"X-Cortex-Claim-Family-Name":        "",
+	}
+}
+
+// authzHopConfig renders Oathkeeper's own configuration.
+func authzHopConfig() string {
+	return `log:
+  level: warn
+  format: json
+serve:
+  proxy:
+    port: ` + fmt.Sprint(authzHopPort) + `
+access_rules:
+  repositories:
+    - file:///etc/oathkeeper/rules.json
+errors:
+  fallback:
+    - json
+  handlers:
+    json:
+      enabled: true
+authenticators:
+  jwt:
+    enabled: true
+  noop:
+    enabled: true
+  anonymous:
+    enabled: true
+authorizers:
+  remote_json:
+    enabled: true
+  allow:
+    enabled: true
+mutators:
+  header:
+    enabled: true
+  noop:
+    enabled: true
+`
+}
+
+// authzHopRules renders the single access rule that fronts one app.
+//
+// The authenticator is `jwt`: oauth2-proxy has already completed the OIDC
+// exchange and forwards the ID token, so the caller's identity is provable here
+// rather than merely asserted. Trusting the upstream blindly would mean anything
+// that reached this port was whoever it claimed to be.
+func authzHopRules(appName, tenantSlug, upstream string, ing *shared.IngressConfig) string {
+	jwks := strings.TrimSuffix(ing.OIDCIssuer, "/") + "/discovery/v2.0/keys"
+
+	rule := map[string]any{
+		"id": "cortex-" + appName,
+		"match": map[string]any{
+			"url":     "<http|https>://<.*>/<.*>",
+			"methods": []any{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"},
+		},
+		"authenticators": []any{map[string]any{
+			"handler": "jwt",
+			"config": map[string]any{
+				"jwks_urls":          []any{jwks},
+				"trusted_issuers":    []any{ing.OIDCIssuer},
+				"target_audience":    []any{ing.OIDCClientID},
+				"allowed_algorithms": []any{"RS256"},
+			},
+		}},
+		"authorizer": map[string]any{
+			"handler": "remote_json",
+			"config": map[string]any{
+				"remote": authzDecideURL,
+				// Subject comes from the verified token, never from the request.
+				"payload": `{"subject":"{{ print .Subject }}","app":"` + appName + `"}`,
+			},
+		},
+		"mutators": []any{map[string]any{
+			"handler": "header",
+			"config":  map[string]any{"headers": identityHeaders("{{ print .Subject }}", tenantSlug, appName)},
+		}},
+		"upstream": map[string]any{"url": upstream},
+	}
+	b, _ := json.Marshal([]any{rule})
+	return string(b)
 }
 
 // authService is what the app's HTTPRoute targets instead of the app itself.
@@ -225,4 +379,33 @@ func exposePortOr80(p int) int {
 func shortHash(s string) string {
 	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:])[:12]
+}
+
+// authzHopConfigMap carries Oathkeeper's configuration and its single access
+// rule into the pod.
+func authzHopConfigMap(name, namespace, appID, tenantSlug string, a shared.DesiredApplication, ing *shared.IngressConfig) *unstructured.Unstructured {
+	upstream := fmt.Sprintf("http://%s:%d", a.ExposeService, exposePortOr80(a.ExposePort))
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "v1",
+		"kind":       "ConfigMap",
+		"metadata": map[string]any{
+			"name":      name,
+			"namespace": namespace,
+			"labels":    map[string]any{labelManaged: "true", labelAppID: appID},
+		},
+		"data": map[string]any{
+			"config.yaml": authzHopConfig(),
+			"rules.json":  authzHopRules(appNameForAuthz(a), tenantSlug, upstream, ing),
+		},
+	}}
+}
+
+// appNameForAuthz is the name this app is known by to the authorization
+// service. It is the app's hostname label, which is what an operator sees and
+// what role grants are written against — not the control plane's internal id.
+func appNameForAuthz(a shared.DesiredApplication) string {
+	if h := strings.TrimSpace(a.Hostname); h != "" {
+		return strings.ToLower(h)
+	}
+	return strings.ToLower(strings.TrimSpace(a.ID))
 }
