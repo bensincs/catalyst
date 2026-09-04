@@ -24,6 +24,14 @@ images:
 # request is denied with 403.
 routingDomain: ""
 
+# The single tenant this deployment serves. Identity and every relationship are
+# scoped to it, and it is configuration precisely so no request can change it.
+tenantId: ""
+
+# The application the admin UI itself is protected by. Holding a role on it is
+# what makes someone an administrator of app access.
+adminApp: authz-admin
+
 # Secrets are supplied by the platform's secret store, which materialises them
 # as a Kubernetes Secret in this namespace. Nothing here holds a credential.
 secrets:

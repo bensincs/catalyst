@@ -43,6 +43,10 @@ spec:
               value: {{ required "routingDomain is required" (.Values.routingDomain | trim) | quote }}
             - name: SPICEDB_INSECURE
               value: "true"
+            - name: AUTHZ_TENANT_ID
+              value: {{ required "tenantId is required" (.Values.tenantId | trim) | quote }}
+            - name: AUTHZ_ADMIN_APP
+              value: {{ .Values.adminApp | quote }}
             - name: SPICEDB_PRESHARED_KEY
               valueFrom:
                 secretKeyRef:

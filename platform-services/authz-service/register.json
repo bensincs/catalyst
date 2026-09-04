@@ -13,13 +13,13 @@
   "applications": [
     {
       "name": "authz service",
-      "description": "SpiceDB-backed authorization service. Answers gateway access decisions (/v1/ext-authz) and application-scoped role and permission queries (/v1/apps/...). Extracted from the Cortex platform chart.",
+      "description": "SpiceDB-backed authorization service for the data plane, with an admin UI for granting people access to hosted apps. Answers the gateway's access decisions and the role queries applications make.",
       "chart": "authz-service",
       "repoURL": "oci://cortexcpacr6hy6uurw.azurecr.io/charts",
-      "targetRevision": "0.2.2",
+      "targetRevision": "0.3.0",
       "namespace": "cortex-authz",
-      "authRequired": false,
-      "values": "routingDomain: msft.ae\nimage: cortexcpacr6hy6uurw.azurecr.io/images/authz-service:0.1.1\n",
+      "authRequired": true,
+      "values": "routingDomain: msft.ae\ntenantId: t-8f646aa4a8c3c71e\nadminApp: authz-admin\nimage: cortexcpacr6hy6uurw.azurecr.io/images/authz-service:0.2.0\nseed:\n  enabled: true\n  app: authz-admin\n  role: admin\n  members:\n  - user:bensinclair@msft.ae\n",
       "dependencies": [
         {
           "kind": "secret_set",
@@ -85,7 +85,10 @@
           "output": "sslMode",
           "helmPath": "postgres.sslMode"
         }
-      ]
+      ],
+      "exposeService": "authz-service",
+      "exposePort": 8080,
+      "hostname": "authz-admin"
     }
   ],
   "infrastructure": [

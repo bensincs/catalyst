@@ -228,7 +228,7 @@ class TestCheckBootstrapRejections:
         import routes.ext_authz as _mod
         _mod._BOOTSTRAP_SIGNING_KEY = _TEST_SIGNING_KEY
 
-        token = _make_bootstrap_jwt(tenant=TENANT_A)
+        token = _make_bootstrap_jwt(tenant=TENANT_B)
         response = await client.post(
             _BOOTSTRAP_PATH_B,
             headers={"host": _UI_HOST_B},
@@ -262,7 +262,7 @@ class TestCheckBootstrapRejections:
         import routes.ext_authz as _mod
         _mod._BOOTSTRAP_SIGNING_KEY = _TEST_SIGNING_KEY
 
-        token = _make_bootstrap_jwt(tenant=TENANT_A)
+        token = _make_bootstrap_jwt(tenant=TENANT_B)
         response = await client.post(
             _BOOTSTRAP_PATH,
             headers={"host": f"cortex-tenant-ui.{TENANT_A}.cortex.ai:notaport"},
@@ -612,12 +612,12 @@ class TestCheckOIDCRejections:
     async def test_cross_tenant_bootstrap_without_bearer_returns_403(
         self, client: AsyncClient
     ) -> None:
-        """Foreign bootstrap JWT on an OIDC tenant must be rejected even
-        when no Bearer token is present yet."""
+        """A bootstrap token for a tenant this deployment does not serve is
+        rejected, even before any Bearer token is presented."""
         import routes.ext_authz as _mod
         _mod._BOOTSTRAP_SIGNING_KEY = _TEST_SIGNING_KEY
 
-        token = _make_bootstrap_jwt(tenant=TENANT_A)
+        token = _make_bootstrap_jwt(tenant=TENANT_B)
         response = await client.post(
             _OIDC_PATH_B,
             headers={"host": _UI_HOST_B},
@@ -638,7 +638,7 @@ class TestCheckOIDCRejections:
         mock_spicedb_client.check_permission.return_value = _CheckResp(
             allowed=True, checked_at=ZEDTOKEN_READ
         )
-        token = _make_bootstrap_jwt(tenant=TENANT_A)
+        token = _make_bootstrap_jwt(tenant=TENANT_B)
         response = await client.post(
             _OIDC_PATH_B,
             headers={
@@ -727,7 +727,7 @@ class TestCheckOIDCRejections:
         mock_spicedb_client.check_permission.return_value = _CheckResp(
             allowed=True, checked_at=ZEDTOKEN_READ
         )
-        token = _make_bootstrap_jwt(tenant=TENANT_A)
+        token = _make_bootstrap_jwt(tenant=TENANT_B)
         response = await client.post(
             _OIDC_PATH_B,
             headers={

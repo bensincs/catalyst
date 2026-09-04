@@ -228,7 +228,14 @@ class TestCrossTenantHostname:
     async def test_cross_tenant_calls_spicedb_with_hostname_tenant(
         self, client: AsyncClient, mock_spicedb_client: _AsyncMock
     ) -> None:
-        """SpiceDB is called using the hostname tenant, not the JWT tenant."""
+        """SpiceDB is called for the tenant this deployment serves.
+
+        It used to be whichever tenant the HOSTNAME named, which is how a
+        multi-tenant gateway routes. Here the tenant is configuration, so a
+        request arriving on another tenant's hostname is checked against — and
+        refused for — the tenant actually being served, rather than quietly
+        being answered on that other tenant's behalf.
+        """
         mock_spicedb_client.check_permission = _AsyncMock(
             return_value=_CheckResp(allowed=False, checked_at=ZEDTOKEN_READ)
         )
@@ -238,7 +245,7 @@ class TestCrossTenantHostname:
         )
         mock_spicedb_client.check_permission.assert_called_once()
         call_kwargs = mock_spicedb_client.check_permission.call_args.kwargs
-        assert call_kwargs["tenant_id"] == TENANT_B
+        assert call_kwargs["tenant_id"] == TENANT_A
 
     @pytest.mark.asyncio
     async def test_matching_tenant_is_allowed(

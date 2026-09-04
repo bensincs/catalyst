@@ -20,15 +20,19 @@ ADMIN_TOKEN = "test-admin-token"
 # configured with (conftest sets AUTHZ_TENANT_ID): a single-tenant deployment
 # refuses a request naming any other tenant rather than serving it.
 TENANT = "tenant-alpha"
+# SpiceDB object ids carry the tenant, sanitised. Derived rather than written
+# out, so the expectations follow the tenant the suite runs as instead of
+# silently describing a different one.
+TSFX = TENANT.replace("-", "_")
 AUTH = {"authorization": f"Bearer {ADMIN_TOKEN}"}
 TENANT_HEADER = {"x-cortex-tenant": TENANT}
 HEADERS = {**AUTH, **TENANT_HEADER}
 
-ROLE_OBJ = "app_role:insight|admin_tenant_a"
-PERM_OBJ = "app_permission:insight|report_dot_manage_tenant_a"
-APP_ACCESS_OBJ = "application:insight@tenant-a"
+ROLE_OBJ = "app_role:insight|admin_" + TSFX
+PERM_OBJ = "app_permission:insight|report_dot_manage_" + TSFX
+APP_ACCESS_OBJ = f"application:insight@{TENANT}"
 SUBJECT = "user:alice@example.com"
-ASSIGNMENT_OBJ = "app_role_assignment:insight|user_colon_alice_at_example_dot_com_tenant_a"
+ASSIGNMENT_OBJ = "app_role_assignment:insight|user_colon_alice_at_example_dot_com_" + TSFX
 
 
 @pytest_asyncio.fixture
@@ -199,13 +203,33 @@ async def test_tenant_mismatch_rejected(apps_client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_missing_tenant_header_rejected(apps_client: AsyncClient) -> None:
+async def test_tenant_header_may_be_omitted(apps_client: AsyncClient) -> None:
+    """This deployment serves one tenant, so the header selects nothing.
+
+    It used to be required. Keeping that would mean a caller with no reason to
+    know the tenant's id — the admin UI — could not call the API at all.
+    """
     resp = await apps_client.post(
         "/v1/apps/insight/roles/admin/members",
-        json={"tenant_id": TENANT, "subject": SUBJECT},
+        json={"subject": SUBJECT},
         headers=AUTH,
     )
-    assert resp.status_code == 401
+    assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_a_different_tenant_is_refused(apps_client: AsyncClient) -> None:
+    """Supplying a tenant still has to agree with the one served.
+
+    The header no longer SELECTS a tenant, so the risk is not that it picks the
+    wrong one but that a caller believes it did.
+    """
+    resp = await apps_client.post(
+        "/v1/apps/insight/roles/admin/members",
+        json={"tenant_id": "tenant-beta", "subject": SUBJECT},
+        headers=AUTH,
+    )
+    assert resp.status_code == 403
 
 
 @pytest.mark.asyncio
@@ -230,9 +254,9 @@ async def test_hyphen_and_dot_encoding(
     assert resp.status_code == 200
     mock_spicedb_client.grant_permission.assert_awaited_once_with(
         tenant_id=TENANT,
-        resource="app_permission:my_dash_app|data_dot_write_tenant_a",
+        resource="app_permission:my_dash_app|data_dot_write_" + TSFX,
         relation="granted_to",
-        subject="app_role:my_dash_app|power_dot_user_tenant_a",
+        subject="app_role:my_dash_app|power_dot_user_" + TSFX,
     )
 
 
@@ -273,9 +297,9 @@ async def test_list_roles_for_subject_returns_readable_app_roles(
     mock_spicedb_client.lookup_subjects = AsyncMock(
         return_value=LookupSubjectsResponse(
             subjects=[
-                "app_role:insight|viewer_tenant_a",
-                "app_role:insight|power_dot_user_tenant_a",
-                "app_role:analytics|admin_tenant_a",
+                "app_role:insight|viewer_" + TSFX,
+                "app_role:insight|power_dot_user_" + TSFX,
+                "app_role:analytics|admin_" + TSFX,
                 "app_role:insight|admin_tenant_b",
             ],
             looked_up_at=ZEDTOKEN_READ,
@@ -326,7 +350,7 @@ def test_schema_defines_app_role_and_app_permission() -> None:
 
 
 SENTINEL_PERM_OBJ = (
-    "app_permission:insight|cortex_dot_role_dot_defined_tenant_a"
+    "app_permission:insight|cortex_dot_role_dot_defined_" + TSFX
 )
 
 
@@ -354,7 +378,7 @@ async def test_ensure_role_writes_sentinel_grant(
                 "subject": ROLE_OBJ,
             },
             {
-                "resource": "application:insight@tenant-a",
+                "resource": f"application:insight@{TENANT}",
                 "relation": "role",
                 "subject": ROLE_OBJ,
             },
@@ -384,12 +408,12 @@ async def test_list_roles_enumerates_via_sentinel(
                 RelationshipItem(
                     resource=SENTINEL_PERM_OBJ,
                     relation="granted_to",
-                    subject="app_role:insight|viewer_tenant_a",
+                    subject="app_role:insight|viewer_" + TSFX,
                 ),
                 RelationshipItem(
                     resource=SENTINEL_PERM_OBJ,
                     relation="granted_to",
-                    subject="app_role:insight|admin_tenant_a",
+                    subject="app_role:insight|admin_" + TSFX,
                 ),
             ],
             read_at=ZEDTOKEN_READ,
@@ -403,7 +427,7 @@ async def test_list_roles_enumerates_via_sentinel(
     mock_spicedb_client.list_relationships.assert_awaited_once_with(
         tenant_id=TENANT,
         resource_type="app_permission",
-        resource_id="insight|cortex_dot_role_dot_defined_tenant_a",
+        resource_id="insight|cortex_dot_role_dot_defined_" + TSFX,
         relation="granted_to",
     )
 
@@ -418,12 +442,12 @@ async def test_list_roles_filters_other_apps_and_tenants(
                 RelationshipItem(
                     resource=SENTINEL_PERM_OBJ,
                     relation="granted_to",
-                    subject="app_role:insight|viewer_tenant_a",
+                    subject="app_role:insight|viewer_" + TSFX,
                 ),
                 RelationshipItem(
                     resource=SENTINEL_PERM_OBJ,
                     relation="granted_to",
-                    subject="app_role:analytics|admin_tenant_a",
+                    subject="app_role:analytics|admin_" + TSFX,
                 ),
                 RelationshipItem(
                     resource=SENTINEL_PERM_OBJ,
@@ -465,9 +489,9 @@ async def test_list_roles_requires_admin_token(apps_client: AsyncClient) -> None
 
 
 @pytest.mark.asyncio
-async def test_list_roles_requires_tenant_header(apps_client: AsyncClient) -> None:
+async def test_list_roles_without_a_tenant_header(apps_client: AsyncClient) -> None:
     resp = await apps_client.get("/v1/apps/insight/roles", headers=AUTH)
-    assert resp.status_code == 401
+    assert resp.status_code == 200
 
 
 @pytest.mark.asyncio
@@ -503,7 +527,7 @@ async def test_list_role_members_decodes_subjects(
     mock_spicedb_client.list_relationships.assert_awaited_once_with(
         tenant_id=TENANT,
         resource_type="app_role",
-        resource_id="insight|admin_tenant_a",
+        resource_id="insight|admin_" + TSFX,
         relation="member",
     )
 
@@ -528,20 +552,20 @@ async def test_list_apps_enumerates_apps_with_roles(
             relationships=[
                 # sentinels for two apps in this tenant
                 RelationshipItem(
-                    resource="app_permission:insight|cortex_dot_role_dot_defined_tenant_a",
+                    resource="app_permission:insight|cortex_dot_role_dot_defined_" + TSFX,
                     relation="granted_to",
-                    subject="app_role:insight|admin_tenant_a",
+                    subject="app_role:insight|admin_" + TSFX,
                 ),
                 RelationshipItem(
-                    resource="app_permission:analytics|cortex_dot_role_dot_defined_tenant_a",
+                    resource="app_permission:analytics|cortex_dot_role_dot_defined_" + TSFX,
                     relation="granted_to",
-                    subject="app_role:analytics|viewer_tenant_a",
+                    subject="app_role:analytics|viewer_" + TSFX,
                 ),
                 # a real (non-sentinel) permission — must NOT count as an app
                 RelationshipItem(
-                    resource="app_permission:insight|report_dot_manage_tenant_a",
+                    resource="app_permission:insight|report_dot_manage_" + TSFX,
                     relation="granted_to",
-                    subject="app_role:insight|admin_tenant_a",
+                    subject="app_role:insight|admin_" + TSFX,
                 ),
                 # another tenant's sentinel — must be filtered out
                 RelationshipItem(
@@ -580,12 +604,12 @@ async def test_list_role_permissions_decodes_and_skips_sentinel(
         return_value=ListRelationshipsResponse(
             relationships=[
                 RelationshipItem(
-                    resource="app_permission:insight|dashboard_dot_view_tenant_a",
+                    resource="app_permission:insight|dashboard_dot_view_" + TSFX,
                     relation="granted_to",
                     subject=ROLE_OBJ,
                 ),
                 RelationshipItem(
-                    resource="app_permission:insight|report_dot_manage_tenant_a",
+                    resource="app_permission:insight|report_dot_manage_" + TSFX,
                     relation="granted_to",
                     subject=ROLE_OBJ,
                 ),
@@ -637,20 +661,20 @@ async def test_list_all_apps_decodes_application_objects(
         return_value=ListRelationshipsResponse(
             relationships=[
                 RelationshipItem(
-                    resource="application:example_app_deployment_tenant_a",
+                    resource="application:example_app_deployment_" + TSFX,
                     relation="role",
-                    subject="app_role:example_app_deployment|admin_tenant_a",
+                    subject="app_role:example_app_deployment|admin_" + TSFX,
                 ),
                 RelationshipItem(
-                    resource="application:cortex_tenant_ui_tenant_a",
+                    resource="application:cortex_tenant_ui_" + TSFX,
                     relation="role",
-                    subject="app_role:cortex_tenant_ui|admin_tenant_a",
+                    subject="app_role:cortex_tenant_ui|admin_" + TSFX,
                 ),
                 # a second role on an already-seen app must not duplicate it
                 RelationshipItem(
-                    resource="application:example_app_deployment_tenant_a",
+                    resource="application:example_app_deployment_" + TSFX,
                     relation="role",
-                    subject="app_role:example_app_deployment|viewer_tenant_a",
+                    subject="app_role:example_app_deployment|viewer_" + TSFX,
                 ),
             ],
             read_at=ZEDTOKEN_READ,
@@ -676,9 +700,9 @@ async def test_list_all_apps_filters_other_tenant_suffixes(
         return_value=ListRelationshipsResponse(
             relationships=[
                 RelationshipItem(
-                    resource="application:insight_tenant_a",
+                    resource="application:insight_" + TSFX,
                     relation="role",
-                    subject="app_role:insight|admin_tenant_a",
+                    subject="app_role:insight|admin_" + TSFX,
                 ),
                 # belongs to a different tenant — must be excluded
                 RelationshipItem(
@@ -715,9 +739,9 @@ async def test_list_all_apps_requires_admin_token(apps_client: AsyncClient) -> N
 
 
 @pytest.mark.asyncio
-async def test_list_all_apps_requires_tenant_header(apps_client: AsyncClient) -> None:
+async def test_list_all_apps_without_a_tenant_header(apps_client: AsyncClient) -> None:
     resp = await apps_client.get("/v1/apps/all", headers=AUTH)
-    assert resp.status_code == 401
+    assert resp.status_code == 200
 
 
 # ---------------------------------------------------------------------------
@@ -730,18 +754,18 @@ def _purge_list_relationships_side_effect(*, tenant_id, resource_type, **kwargs)
     rows = {
         "app_role": [
             RelationshipItem(
-                resource="app_role:insight|admin_tenant_a",
+                resource="app_role:insight|admin_" + TSFX,
                 relation="member",
                 subject=SUBJECT,
             ),
             RelationshipItem(
-                resource="app_role:insight|viewer_tenant_a",
+                resource="app_role:insight|viewer_" + TSFX,
                 relation="member",
                 subject="user:bob@example.com",
             ),
             # different app — must NOT be purged
             RelationshipItem(
-                resource="app_role:analytics|admin_tenant_a",
+                resource="app_role:analytics|admin_" + TSFX,
                 relation="member",
                 subject=SUBJECT,
             ),
@@ -754,21 +778,21 @@ def _purge_list_relationships_side_effect(*, tenant_id, resource_type, **kwargs)
         ],
         "app_permission": [
             RelationshipItem(
-                resource="app_permission:insight|report_dot_manage_tenant_a",
+                resource="app_permission:insight|report_dot_manage_" + TSFX,
                 relation="granted_to",
-                subject="app_role:insight|admin_tenant_a",
+                subject="app_role:insight|admin_" + TSFX,
             ),
             RelationshipItem(
-                resource="app_permission:insight|cortex_dot_role_dot_defined_tenant_a",
+                resource="app_permission:insight|cortex_dot_role_dot_defined_" + TSFX,
                 relation="granted_to",
-                subject="app_role:insight|admin_tenant_a",
+                subject="app_role:insight|admin_" + TSFX,
             ),
         ],
         "app_role_assignment": [
             RelationshipItem(
-                resource="app_role_assignment:insight|user_colon_alice_at_example_dot_com_tenant_a",
+                resource="app_role_assignment:insight|user_colon_alice_at_example_dot_com_" + TSFX,
                 relation="role",
-                subject="app_role:insight|admin_tenant_a",
+                subject="app_role:insight|admin_" + TSFX,
             ),
         ],
     }
@@ -800,24 +824,24 @@ async def test_purge_app_deletes_full_footprint_and_accessor(
         for c in mock_spicedb_client.delete_object.await_args_list
     }
     # app-scoped objects for THIS app+tenant, deleted by exact id (no relation filter)
-    assert ("app_role", "insight|admin_tenant_a", None) in deleted
-    assert ("app_role", "insight|viewer_tenant_a", None) in deleted
-    assert ("app_permission", "insight|report_dot_manage_tenant_a", None) in deleted
+    assert ("app_role", "insight|admin_" + TSFX, None) in deleted
+    assert ("app_role", "insight|viewer_" + TSFX, None) in deleted
+    assert ("app_permission", "insight|report_dot_manage_" + TSFX, None) in deleted
     assert (
         "app_permission",
-        "insight|cortex_dot_role_dot_defined_tenant_a",
+        "insight|cortex_dot_role_dot_defined_" + TSFX,
         None,
     ) in deleted
     assert (
         "app_role_assignment",
-        "insight|user_colon_alice_at_example_dot_com_tenant_a",
+        "insight|user_colon_alice_at_example_dot_com_" + TSFX,
         None,
     ) in deleted
     # legacy accessor and bootstrap access edges removed
-    assert ("application", "insight_tenant_a", "accessor") in deleted
-    assert ("application", "insight_tenant_a", "bootstrap_access") in deleted
+    assert ("application", "insight_" + TSFX, "accessor") in deleted
+    assert ("application", "insight_" + TSFX, "bootstrap_access") in deleted
     # application#role links removed
-    assert ("application", "insight_tenant_a", "role") in deleted
+    assert ("application", "insight_" + TSFX, "role") in deleted
     # other app / other tenant objects were NOT deleted
     assert not any("analytics" in oid for (_, oid, _) in deleted)
     assert not any(oid.endswith("_tenant_b") for (_, oid, _) in deleted)
@@ -839,9 +863,9 @@ async def test_purge_app_is_idempotent_noop_when_nothing_seeded(
         (c.kwargs["resource_type"], c.kwargs["object_id"], c.kwargs.get("relation"))
         for c in mock_spicedb_client.delete_object.await_args_list
     }
-    assert ("application", "insight_tenant_a", "accessor") in deleted
-    assert ("application", "insight_tenant_a", "bootstrap_access") in deleted
-    assert ("application", "insight_tenant_a", "role") in deleted
+    assert ("application", "insight_" + TSFX, "accessor") in deleted
+    assert ("application", "insight_" + TSFX, "bootstrap_access") in deleted
+    assert ("application", "insight_" + TSFX, "role") in deleted
 
 
 @pytest.mark.asyncio
@@ -858,13 +882,13 @@ async def test_purge_app_encodes_hyphenated_app_and_tenant(
         (c.kwargs["resource_type"], c.kwargs["object_id"], c.kwargs.get("relation"))
         for c in mock_spicedb_client.delete_object.await_args_list
     }
-    assert ("application", "example_app_deployment_tenant_a", "accessor") in deleted
+    assert ("application", "example_app_deployment_" + TSFX, "accessor") in deleted
     assert (
         "application",
-        "example_app_deployment_tenant_a",
+        "example_app_deployment_" + TSFX,
         "bootstrap_access",
     ) in deleted
-    assert ("application", "example_app_deployment_tenant_a", "role") in deleted
+    assert ("application", "example_app_deployment_" + TSFX, "role") in deleted
 
 
 @pytest.mark.asyncio
@@ -878,6 +902,6 @@ async def test_purge_app_requires_admin_token(apps_client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_purge_app_requires_tenant_header(apps_client: AsyncClient) -> None:
+async def test_purge_app_without_a_tenant_header(apps_client: AsyncClient) -> None:
     resp = await apps_client.request("DELETE", "/v1/apps/insight", headers=AUTH)
-    assert resp.status_code == 401
+    assert resp.status_code == 200
