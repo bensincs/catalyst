@@ -350,6 +350,12 @@ func authzHopRules(appName, tenantSlug, upstream string, ing *shared.IngressConf
 				"trusted_issuers":    []any{ing.OIDCIssuer},
 				"target_audience":    []any{ing.OIDCClientID},
 				"allowed_algorithms": []any{"RS256"},
+				// Entra's `sub` is an opaque pairwise identifier, different per
+				// application and meaningless to a human. Grants are written
+				// against the address an operator actually types into the admin
+				// UI, so the subject has to be that same address or nothing
+				// would ever match what was granted.
+				"subject_from": "preferred_username",
 			},
 		}},
 		"authorizer": map[string]any{

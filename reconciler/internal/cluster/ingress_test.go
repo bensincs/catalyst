@@ -588,3 +588,29 @@ func TestJWKSURLIsNotDoubledForEntra(t *testing.T) {
 		t.Error("issuer's /v2.0 must not be carried into the JWKS path")
 	}
 }
+
+// Grants are written against the address an operator types into the admin UI.
+// Entra's `sub` claim is an opaque pairwise identifier — different per
+// application and meaningless to a human — so taking the subject from it would
+// mean no login ever matched anything that had been granted, and every user
+// would be denied with nothing obviously wrong.
+func TestAuthzHopIdentifiesUsersByAddressNotOpaqueSub(t *testing.T) {
+	ing := &shared.IngressConfig{
+		AppsDomain: "apps.example", OIDCIssuer: "https://issuer.example/v2.0",
+		OIDCClientID: "client", OIDCClientSecret: "secret",
+	}
+	app := shared.DesiredApplication{ID: "insight", Hostname: "insight", ExposeService: "frontend", ExposePort: 80}
+	rules, _ := authzHopConfigMap("a", "insight", "insight", "t-1", app, ing).
+		Object["data"].(map[string]any)["rules.json"].(string)
+
+	var parsed []map[string]any
+	if err := json.Unmarshal([]byte(rules), &parsed); err != nil {
+		t.Fatalf("rules are not valid JSON: %v", err)
+	}
+	auth, _ := parsed[0]["authenticators"].([]any)
+	cfg, _ := auth[0].(map[string]any)["config"].(map[string]any)
+
+	if cfg["subject_from"] != "preferred_username" {
+		t.Errorf("subject must be the user's address, got %v", cfg["subject_from"])
+	}
+}
