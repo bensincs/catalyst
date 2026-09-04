@@ -2,6 +2,18 @@
 // the gateway set, and the identity headers the proxy stamps on the way
 // through — which is also what the API authorises on.
 const $ = (id) => document.getElementById(id);
+
+// The console tells an embedded app it is embedded, and which theme to match,
+// by postMessage rather than a query parameter — so a theme toggle does not
+// reload the frame and throw away whatever the person was part-way through.
+// Only messages from the console are honoured; anything can postMessage into a
+// frame, and acting on an arbitrary sender would let any page restyle this one.
+window.addEventListener("message", (e) => {
+  const d = e.data;
+  if (!d || d.source !== "cortex") return;
+  document.body.classList.toggle("embedded", !!d.embedded);
+  if (d.theme) document.documentElement.dataset.theme = d.theme;
+});
 const api = (path, opts) =>
   fetch(`/v1/ui${path}`, { credentials: "same-origin", ...opts });
 
@@ -29,8 +41,13 @@ async function loadMembers() {
   const { members } = await json(
     await api(`/apps/${encodeURIComponent(app)}/roles/${encodeURIComponent(role)}/members`)
   );
+  $("count").textContent = members.length
+    ? `${members.length} ${members.length === 1 ? "person" : "people"}`
+    : "";
   if (!members.length) {
-    list.innerHTML = `<li class="empty">Nobody has this role yet.</li>`;
+    const li = document.createElement("li");
+    li.innerHTML = `<span class="empty">Nobody has this role yet.</span>`;
+    list.append(li);
     return;
   }
   for (const m of members) {
@@ -39,7 +56,7 @@ async function loadMembers() {
     // Subjects are stored as user:<address>; show the address.
     name.textContent = m.replace(/^user:/, "");
     const btn = document.createElement("button");
-    btn.className = "remove";
+    btn.className = "btn quiet";
     btn.textContent = "Remove";
     btn.setAttribute("aria-label", `Remove ${name.textContent}`);
     btn.onclick = async () => {
@@ -75,7 +92,7 @@ async function loadRoles() {
 async function start() {
   try {
     const me = await json(await api("/me"));
-    $("who").textContent = `${me.subject.replace(/^user:/, "")} · ${me.tenant}`;
+    $("who").textContent = me.subject.replace(/^user:/, "");
 
     const { apps } = await json(await api("/apps"));
     if (!apps.length) {

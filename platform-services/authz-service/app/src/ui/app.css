@@ -1,0 +1,108 @@
+/* Mirrors the control plane console's tokens so an operator moving between
+   them is not asked to learn a second visual language. Values are copied
+   rather than imported: this is served from a different origin and must render
+   standalone, including when the console is not running at all. */
+:root {
+  --canvas: #f6f6f7;
+  --surface: #ffffff;
+  --surface-hover: rgb(41 41 41 / 0.05);
+  --text: #292929;
+  --text-secondary: rgb(41 41 41 / 0.74);
+  --text-muted: rgb(41 41 41 / 0.68);
+  --border: rgb(41 41 41 / 0.08);
+  --border-strong: rgb(41 41 41 / 0.16);
+  --field-border: rgb(41 41 41 / 0.24);
+  --primary: #292929;
+  --primary-hover: #1f1f1f;
+  --on-primary: #ffffff;
+  --focus: #a964f7;
+  --focus-glow: rgb(169 100 247 / 0.3);
+  --success-ink: #126e40;
+  --success-bg: rgb(18 110 64 / 0.1);
+  --danger-ink: #b5231b;
+  --danger-bg: rgb(181 35 27 / 0.1);
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.05);
+  --space-sm: 8px; --space-md: 12px; --space-base: 16px;
+  --space-lg: 24px; --space-xl: 32px;
+  --radius-sm: 6px; --radius-md: 8px; --radius-lg: 12px;
+  --topbar-h: 60px;
+  --content-max: 880px;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0; background: var(--canvas); color: var(--text);
+  font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Embedded in the console: it supplies the chrome, so drop ours and let the
+   content sit flush in the frame. */
+body.embedded .topbar { display: none; }
+body.embedded main { padding-top: var(--space-lg); }
+
+.topbar {
+  height: var(--topbar-h); padding: 0 var(--space-lg);
+  background: var(--surface); border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: var(--space-md);
+}
+.topbar h1 { font-size: 15px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+.who { margin-left: auto; color: var(--text-muted); font-size: 13px; }
+
+main {
+  max-width: var(--content-max); margin: 0 auto;
+  padding: var(--space-xl) var(--space-lg);
+  display: flex; flex-direction: column; gap: var(--space-lg);
+}
+
+.panel {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); box-shadow: var(--shadow-sm);
+  padding: var(--space-lg);
+}
+.panel-head { display: flex; align-items: baseline; gap: var(--space-md); margin-bottom: var(--space-base); }
+.panel-head h2 { font-size: 14px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+.hint, .count { color: var(--text-muted); font-size: 13px; margin: 0; }
+.count { margin-left: auto; }
+
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-base); margin-bottom: var(--space-base); }
+.field { display: flex; flex-direction: column; gap: 6px; }
+label { font-size: 13px; font-weight: 500; color: var(--text-secondary); }
+
+select, input {
+  width: 100%; padding: 8px 10px; font: inherit; color: inherit;
+  background: var(--surface); border: 1px solid var(--field-border);
+  border-radius: var(--radius-sm);
+}
+select:focus-visible, input:focus-visible {
+  outline: none; border-color: var(--focus); box-shadow: 0 0 0 3px var(--focus-glow);
+}
+.inline { display: flex; gap: var(--space-sm); }
+.inline input { flex: 1; }
+
+.btn {
+  padding: 8px 14px; font: inherit; font-weight: 500; cursor: pointer;
+  border-radius: var(--radius-sm); border: 1px solid var(--border-strong);
+  background: var(--surface); color: var(--text); white-space: nowrap;
+}
+.btn:hover:not(:disabled) { background: var(--surface-hover); }
+.btn:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--focus-glow); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn.primary { background: var(--primary); border-color: var(--primary); color: var(--on-primary); }
+.btn.primary:hover:not(:disabled) { background: var(--primary-hover); }
+.btn.quiet { color: var(--danger-ink); border-color: var(--border); padding: 5px 10px; font-size: 13px; }
+
+.members { list-style: none; margin: 0; padding: 0; }
+.members li {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--space-md);
+  padding: 10px 0; border-bottom: 1px solid var(--border);
+}
+.members li:last-child { border-bottom: 0; }
+.members .empty { color: var(--text-muted); padding: 10px 0; display: block; }
+
+.msg { margin: var(--space-base) 0 0; padding: 9px 12px; border-radius: var(--radius-md); font-size: 13px; display: none; }
+.msg.err { display: block; background: var(--danger-bg); color: var(--danger-ink); }
+.msg.ok  { display: block; background: var(--success-bg); color: var(--success-ink); }
+
+@media (max-width: 640px) { .grid { grid-template-columns: 1fr; } }
