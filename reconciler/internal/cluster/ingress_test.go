@@ -525,8 +525,8 @@ func TestAuthzHopTakesSubjectFromTheVerifiedToken(t *testing.T) {
 	if !strings.Contains(rules, `"handler":"jwt"`) {
 		t.Error("the token must be verified here; trusting the upstream makes anything reaching this port whoever it claims to be")
 	}
-	if !strings.Contains(rules, "{{ print .Subject }}") {
-		t.Error("subject must come from the authenticated session, not the request")
+	if !strings.Contains(rules, ".Extra.preferred_username") {
+		t.Error("subject must come from the verified token's claims, not the request")
 	}
 	// The payload is itself a JSON document carried as a string, so assert on
 	// the parsed value rather than the escaped text.
@@ -545,8 +545,8 @@ func TestAuthzHopTakesSubjectFromTheVerifiedToken(t *testing.T) {
 	if body["app"] != "insight" {
 		t.Errorf("the app must be named explicitly, got %q — the authorizer's Host names the authz service, not the app", body["app"])
 	}
-	if body["subject"] != "{{ print .Subject }}" {
-		t.Errorf("subject must come from the session, got %q", body["subject"])
+	if body["subject"] != "{{ print .Extra.preferred_username }}" {
+		t.Errorf("subject must come from the verified token's claims, got %q", body["subject"])
 	}
 }
 
@@ -610,7 +610,19 @@ func TestAuthzHopIdentifiesUsersByAddressNotOpaqueSub(t *testing.T) {
 	auth, _ := parsed[0]["authenticators"].([]any)
 	cfg, _ := auth[0].(map[string]any)["config"].(map[string]any)
 
-	if cfg["subject_from"] != "preferred_username" {
-		t.Errorf("subject must be the user's address, got %v", cfg["subject_from"])
+	// subject_from is not a property of the jwt authenticator: setting it makes
+	// Oathkeeper reject the whole rule and answer every request with a 500.
+	if _, present := cfg["subject_from"]; present {
+		t.Error("jwt authenticator has no subject_from; it invalidates the rule")
+	}
+
+	authorizer, _ := parsed[0]["authorizer"].(map[string]any)
+	acfg, _ := authorizer["config"].(map[string]any)
+	payload, _ := acfg["payload"].(string)
+	if !strings.Contains(payload, ".Extra.preferred_username") {
+		t.Errorf("subject must be the user's address from the token claims, got %q", payload)
+	}
+	if strings.Contains(payload, ".Subject") {
+		t.Error("`sub` is an opaque pairwise identifier in Entra and matches nothing that was granted")
 	}
 }

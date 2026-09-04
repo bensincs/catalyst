@@ -232,6 +232,19 @@ const (
 	authzHopImage  = "docker.io/oryd/oathkeeper:v0.40.7"
 )
 
+// subjectExpr is how the caller is identified, everywhere.
+//
+// Not .Subject: for the jwt authenticator that is the token's `sub`, and
+// Entra's `sub` is an opaque pairwise identifier — different per application
+// and meaningless to a human — while grants are written against the address an
+// operator types into the admin UI. Nothing would ever match what was granted.
+//
+// The authenticator exposes the token's claims on .Extra, and preferred_username
+// is the address the token carries. (`subject_from` is not a property of this
+// authenticator; setting it makes Oathkeeper reject the entire rule and answer
+// every request with a 500.)
+const subjectExpr = `{{ print .Extra.preferred_username }}`
+
 // identityHeaders are the headers a downstream application trusts to say who
 // the caller is.
 //
@@ -282,8 +295,8 @@ func jwksURLFor(issuer string) string {
 // at the first request.
 func authzHopConfig(appName, tenantSlug string, ing *shared.IngressConfig) string {
 	jwks := jwksURLFor(ing.OIDCIssuer)
-	headers, _ := json.Marshal(identityHeaders("{{ print .Subject }}", tenantSlug, appName))
-	payload := `{"subject":"{{ print .Subject }}","app":"` + appName + `"}`
+	headers, _ := json.Marshal(identityHeaders(subjectExpr, tenantSlug, appName))
+	payload := `{"subject":"` + subjectExpr + `","app":"` + appName + `"}`
 
 	return `log:
   level: warn
@@ -350,12 +363,6 @@ func authzHopRules(appName, tenantSlug, upstream string, ing *shared.IngressConf
 				"trusted_issuers":    []any{ing.OIDCIssuer},
 				"target_audience":    []any{ing.OIDCClientID},
 				"allowed_algorithms": []any{"RS256"},
-				// Entra's `sub` is an opaque pairwise identifier, different per
-				// application and meaningless to a human. Grants are written
-				// against the address an operator actually types into the admin
-				// UI, so the subject has to be that same address or nothing
-				// would ever match what was granted.
-				"subject_from": "preferred_username",
 			},
 		}},
 		"authorizer": map[string]any{
@@ -363,12 +370,12 @@ func authzHopRules(appName, tenantSlug, upstream string, ing *shared.IngressConf
 			"config": map[string]any{
 				"remote": authzDecideURL,
 				// Subject comes from the verified token, never from the request.
-				"payload": `{"subject":"{{ print .Subject }}","app":"` + appName + `"}`,
+				"payload": `{"subject":"` + subjectExpr + `","app":"` + appName + `"}`,
 			},
 		},
 		"mutators": []any{map[string]any{
 			"handler": "header",
-			"config":  map[string]any{"headers": identityHeaders("{{ print .Subject }}", tenantSlug, appName)},
+			"config":  map[string]any{"headers": identityHeaders(subjectExpr, tenantSlug, appName)},
 		}},
 		"upstream": map[string]any{"url": upstream},
 	}
