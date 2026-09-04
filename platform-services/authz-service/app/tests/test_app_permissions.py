@@ -905,3 +905,32 @@ async def test_purge_app_requires_admin_token(apps_client: AsyncClient) -> None:
 async def test_purge_app_without_a_tenant_header(apps_client: AsyncClient) -> None:
     resp = await apps_client.request("DELETE", "/v1/apps/insight", headers=AUTH)
     assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_admin_token_accepted_from_the_hook_header(
+    apps_client: AsyncClient, mock_spicedb_client: AsyncMock
+) -> None:
+    """The reconciler cannot use Authorization, so it uses another header.
+
+    It reaches this service through the Kubernetes API server's proxy — it runs
+    outside the cluster and cannot resolve cluster DNS — and that proxy consumes
+    Authorization for its OWN authentication and never forwards it. A call
+    arriving that way would look unauthenticated no matter what it sent.
+    """
+    resp = await apps_client.put(
+        "/v1/apps/insight/roles/admin",
+        json={},
+        headers={"X-Cortex-Hook-Token": ADMIN_TOKEN},
+    )
+    assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_a_wrong_hook_token_is_still_refused(apps_client: AsyncClient) -> None:
+    resp = await apps_client.put(
+        "/v1/apps/insight/roles/admin",
+        json={},
+        headers={"X-Cortex-Hook-Token": "not-the-token"},
+    )
+    assert resp.status_code == 403

@@ -49,6 +49,13 @@ _TENANT_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 _BEARER_PREFIX = "bearer "
 
 
+# The platform's reconciler reaches this service through the Kubernetes API
+# server's proxy, which consumes the Authorization header for its own
+# authentication and never forwards it. A call arriving that way carries its
+# credential here instead. Same secret, same check — only a different envelope.
+_HOOK_TOKEN_HEADER = "x-cortex-hook-token"
+
+
 def _verify_check_token(authorization: str = Header(default="")) -> None:
     """Verify the lower-privilege runtime check token."""
     expected = os.environ.get("AUTHZ_CHECK_TOKEN") or os.environ.get(

@@ -239,6 +239,11 @@ const (
 	// not have one service's address compiled into it.
 	defaultAuthzDecideURL = "http://authz-service.cortex-authz.svc.cluster.local:8080/v1/authz/decide"
 	authzHopImage         = "docker.io/oryd/oathkeeper:v0.40.7"
+	// Where a hook's credential goes when it does not say. Deliberately not
+	// Authorization: the API server's proxy consumes that header for its own
+	// authentication and never forwards it, so a subscriber would see no
+	// credential at all and answer 401.
+	defaultHookTokenHeader = "X-Cortex-Hook-Token"
 )
 
 // subjectExpr is how the caller is identified, everywhere.
@@ -506,7 +511,11 @@ func (k *kube) runApplicationHook(ctx context.Context, h shared.ApplicationHook,
 		if err != nil {
 			return err
 		}
-		headers["Authorization"] = "Bearer " + token
+		name := strings.TrimSpace(h.TokenHeader)
+		if name == "" {
+			name = defaultHookTokenHeader
+		}
+		headers[name] = token
 	}
 
 	// Through the API server's proxy rather than the Service's cluster DNS

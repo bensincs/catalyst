@@ -16,10 +16,10 @@
       "description": "SpiceDB-backed authorization service for the data plane, with an admin UI for granting people access to hosted apps. Answers the gateway's access decisions and the role queries applications make.",
       "chart": "authz-service",
       "repoURL": "oci://cortexcpacr6hy6uurw.azurecr.io/charts",
-      "targetRevision": "0.7.0",
+      "targetRevision": "0.8.0",
       "namespace": "cortex-authz",
       "authRequired": true,
-      "values": "routingDomain: msft.ae\ntenantId: t-8f646aa4a8c3c71e\nadminApp: authz-admin\nimage: cortexcpacr6hy6uurw.azurecr.io/images/authz-service:0.6.0\nseed:\n  enabled: true\n  app: authz-admin\n  role: admin\n  members:\n  - user:bensinclair@msft.ae\n",
+      "values": "routingDomain: msft.ae\ntenantId: t-8f646aa4a8c3c71e\nadminApp: authz-admin\nimage: cortexcpacr6hy6uurw.azurecr.io/images/authz-service:0.7.0\nseed:\n  enabled: true\n  app: authz-admin\n  role: admin\n  members:\n  - user:bensinclair@msft.ae\n",
       "dependencies": [
         {
           "kind": "secret_set",
@@ -106,7 +106,8 @@
             "namespace": "cortex-authz",
             "name": "cortex-secret-authz-secrets",
             "key": "authz-admin-token"
-          }
+          },
+          "tokenHeader": "X-Cortex-Hook-Token"
         }
       ]
     }

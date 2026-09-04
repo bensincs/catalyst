@@ -129,10 +129,17 @@ type ApplicationHook struct {
 	Path string `json:"path"`
 	// Body sent with the request, after the same substitution.
 	Body string `json:"body,omitempty"`
-	// TokenSecret names a Secret in the cluster whose value is sent as a bearer
-	// token. A hook that needs a credential reads it here rather than carrying
-	// one in the catalogue, where it would sit in plain sight.
+	// TokenSecret names a Secret in the cluster whose value is sent as the
+	// caller's credential. A hook that needs one reads it here rather than
+	// carrying it in the catalogue, where it would sit in plain sight.
 	TokenSecret *SecretKeyRef `json:"tokenSecret,omitempty"`
+	// TokenHeader is which header carries that credential. It is not
+	// Authorization by default and cannot be: the call goes through the API
+	// server's proxy, which consumes Authorization for its OWN authentication
+	// and does not pass it on — the subscriber would see no credential at all
+	// and answer 401, which reads as the reconciler being unauthenticated
+	// rather than the header having been eaten in transit.
+	TokenHeader string `json:"tokenHeader,omitempty"`
 }
 
 // ServiceRef points at one port of one Service.

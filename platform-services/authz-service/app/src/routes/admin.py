@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import logging
 import os
+import secrets
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Security
+from fastapi import Header, APIRouter, Depends, HTTPException, Query, Security
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from common.dependencies import get_authz_client
@@ -15,16 +16,30 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1/admin")
 
-_bearer = HTTPBearer()
+_bearer_optional = HTTPBearer(auto_error=False)
 
 
 def _verify_admin_token(
-    credentials: HTTPAuthorizationCredentials = Security(_bearer),
+    credentials: HTTPAuthorizationCredentials | None = Security(_bearer_optional),
+    hook_token: str = Header(default="", alias="X-Cortex-Hook-Token"),
 ) -> None:
+    """Accept the admin token from Authorization, or from the hook header.
+
+    The platform's reconciler reaches this service through the Kubernetes API
+    server's proxy, because it runs outside the cluster and cannot resolve
+    cluster DNS. That proxy consumes Authorization for its OWN authentication
+    and never forwards it, so a call arriving that way would look
+    unauthenticated no matter what it sent. Same secret and same comparison —
+    only a different envelope.
+    """
     expected = os.environ.get("AUTHZ_ADMIN_TOKEN", "")
     if not expected:
         raise HTTPException(status_code=503, detail="Admin token not configured")
-    if credentials.credentials != expected:
+
+    supplied = hook_token.strip() or (credentials.credentials if credentials else "")
+    if not supplied:
+        raise HTTPException(status_code=401, detail="No credential")
+    if not secrets.compare_digest(supplied, expected):
         raise HTTPException(status_code=403, detail="Forbidden")
 
 
