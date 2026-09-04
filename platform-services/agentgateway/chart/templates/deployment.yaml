@@ -1,0 +1,94 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "agentgateway.fullname" . }}
+  labels: {{- include "agentgateway.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicas }}
+  selector:
+    matchLabels: {{- include "agentgateway.selectorLabels" . | nindent 6 }}
+  # The configuration lives in the pod, so two of them must never overlap: a
+  # rolling update would briefly serve two different configurations behind one
+  # Service. Recreate accepts a gap instead.
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels: {{- include "agentgateway.selectorLabels" . | nindent 8 }}
+      annotations:
+        # Restarts the pod when the configuration changes. Without this the
+        # ConfigMap is updated and nothing reads it, so a config change appears
+        # to do nothing at all.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      # The configuration is copied out of the ConfigMap rather than mounted
+      # from it. A ConfigMap mounts read-only, and the UI writes changes back to
+      # the configuration file — mounted directly, every edit in the UI would
+      # fail. Copying keeps the UI usable; the cost is that those edits live in
+      # the pod and are lost when it restarts. See NOTES.md.
+      #
+      # A separate image does the copying because the agentgateway image is
+      # distroless: it has no shell and no cp.
+      initContainers:
+        - name: seed-config
+          image: "{{ .Values.initImage.repository }}:{{ .Values.initImage.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext: {{- toYaml .Values.securityContext | nindent 12 }}
+          command: ["/bin/sh", "-c", "cp /seed/config.yaml /config/config.yaml"]
+          volumeMounts:
+            - { name: seed, mountPath: /seed }
+            - { name: config, mountPath: /config }
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+      containers:
+        - name: agentgateway
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext: {{- toYaml .Values.securityContext | nindent 12 }}
+          args: ["--file", "/config/config.yaml"]
+          ports:
+            - name: http
+              containerPort: {{ .Values.port }}
+            - name: readiness
+              containerPort: {{ .Values.readinessPort }}
+            - name: stats
+              containerPort: {{ .Values.statsPort }}
+          env:
+            # The root filesystem is read-only, so anything the process writes
+            # relative to HOME has to land on the writable volume.
+            - name: HOME
+              value: /config
+          volumeMounts:
+            - name: config
+              mountPath: /config
+            - name: tmp
+              mountPath: /tmp
+          # agentgateway publishes a readiness endpoint of its own, so neither
+          # probe has to guess from a socket being open.
+          readinessProbe:
+            httpGet: { path: /healthz/ready, port: readiness }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz/ready, port: readiness }
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            failureThreshold: 3
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        # Deliberately not a PersistentVolumeClaim and deliberately not a
+        # ConfigMap. A ConfigMap mounts read-only, so the UI could not save;
+        # a claim would make this stateful before anyone has decided what the
+        # configuration should say. Configuration made through the UI is lost
+        # when the pod restarts — see NOTES.md.
+        - name: config
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+        - name: seed
+          configMap:
+            name: {{ include "agentgateway.fullname" . }}

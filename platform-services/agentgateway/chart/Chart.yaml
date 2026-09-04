@@ -1,0 +1,8 @@
+apiVersion: v2
+name: agentgateway
+description: agentgateway in standalone mode — one gateway for LLM, MCP and A2A traffic
+type: application
+version: 0.1.0
+# The agentgateway release this deploys. Upstream ships its own Helm chart for
+# the Kubernetes controller; this is deliberately not that chart. See NOTES.md.
+appVersion: v1.4.1

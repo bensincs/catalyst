@@ -1,0 +1,5 @@
+# Values that let `helm lint` and `helm template` run in CI, where none of the
+# platform's wiring exists. Nothing here is used at deploy time.
+image:
+  repository: example.invalid/agentgateway
+  tag: v1.4.1

@@ -1,0 +1,41 @@
+{{/*
+agentgateway's configuration.
+
+Seeded from here, then copied into a writable volume at startup — see the
+deployment. The binary refuses to start in Kubernetes without a configuration
+file: outside Kubernetes it writes itself a default one, but in a cluster it
+exits with "configuration is required when running in Kubernetes".
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "agentgateway.fullname" . }}
+  labels: {{- include "agentgateway.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    # yaml-language-server: $schema=https://agentgateway.dev/schema/config
+    config:
+      # Bound to all interfaces so the kubelet can reach them. These default to
+      # localhost, where a probe from outside the container cannot see them.
+      readinessAddr: 0.0.0.0:{{ .Values.readinessPort }}
+      statsAddr: 0.0.0.0:{{ .Values.statsPort }}
+      # Left on localhost deliberately. The admin interface has no
+      # authentication of its own, and this pod is reachable from anywhere in
+      # the cluster.
+      adminAddr: 127.0.0.1:15000
+
+    gateways:
+      {{ .Values.uiGatewayName }}:
+        port: {{ .Values.port }}
+
+    # By default the UI is served only on the admin interface, which is not
+    # reachable from outside the pod. Attaching it to a gateway is what puts it
+    # on the port the platform routes to.
+    #
+    # Upstream strongly recommends OIDC in front of the UI when it is exposed
+    # this way. That is what authRequired does in register.json: the platform
+    # puts oauth2-proxy and Oathkeeper in front, so the UI is never reachable
+    # without a completed login. Removing authRequired publishes an unauthenticated
+    # admin interface.
+    ui:
+      gateways: {{ .Values.uiGatewayName }}

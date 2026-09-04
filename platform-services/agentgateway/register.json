@@ -1,0 +1,49 @@
+{
+  "_comment": [
+    "Registers agentgateway in the platform catalog. Apply with:",
+    "    cortexctl create -f platform-services/agentgateway/register.json",
+    "",
+    "This runs agentgateway in STANDALONE mode — a single binary that serves its",
+    "own UI. Upstream also ships a Kubernetes mode built on the Gateway API, with",
+    "a controller and four CRDs. That mode is not used here, and NOTES.md records",
+    "why: three of those CRDs are larger than the annotation Argo writes when it",
+    "applies a resource, so they cannot be installed through the platform as it",
+    "is configured today.",
+    "",
+    "No infrastructure is declared. Standalone agentgateway keeps its",
+    "configuration in a file and needs no database, cache or object store. It",
+    "gains dependencies only when something is configured that has them — a",
+    "global rate limit needs Redis, for instance — so there is nothing to",
+    "provision until then.",
+    "",
+    "No roles are declared either. agentgateway has no role vocabulary of its",
+    "own, so the platform grants the default 'user' role and access is simply",
+    "whether you may reach it at all.",
+    "",
+    "authRequired puts it behind the platform's login. The Entra redirect URI is",
+    "NOT automated: add https://agentgateway.apps.msft.ae/oauth2/callback to app",
+    "6eb003c0-169c-4b12-bc5e-aa5d6af04f2b by hand, or sign-in fails with a",
+    "redirect-mismatch error that says nothing about this file.",
+    "",
+    "exposeService must match the Service the chart actually creates. This",
+    "chart's fullname helper collapses to the chart name, so it is",
+    "'agentgateway'. Guessing wrong gives a gateway 500 with healthy pods."
+  ],
+  "applications": [
+    {
+      "name": "agentgateway",
+      "description": "One gateway for LLM, MCP and agent-to-agent traffic, with routing, policy, cost controls and an admin UI.",
+      "namespace": "agentgateway",
+      "repoURL": "oci://cortexcpacr6hy6uurw.azurecr.io/charts",
+      "chart": "agentgateway",
+      "targetRevision": "0.1.0",
+      "values": "image:\n  repository: cortexcpacr6hy6uurw.azurecr.io/images/agentgateway\n  tag: v1.4.1\n",
+      "exposeService": "agentgateway",
+      "exposePort": 4000,
+      "hostname": "agentgateway",
+      "authRequired": true,
+      "embed": true,
+      "icon": "git-branch"
+    }
+  ]
+}

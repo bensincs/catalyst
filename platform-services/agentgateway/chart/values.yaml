@@ -1,0 +1,64 @@
+# agentgateway, run as a standalone binary.
+#
+# Upstream also ships a Kubernetes mode built on the Gateway API, with its own
+# controller and CRDs. That mode is not used here — see NOTES.md for why.
+
+image:
+  repository: cortexcpacr6hy6uurw.azurecr.io/images/agentgateway
+  tag: v1.4.1
+  pullPolicy: IfNotPresent
+
+# The kubelet has no registry credential of its own; the reconciler puts this
+# secret in every application namespace.
+imagePullSecrets:
+  - name: cortex-registry
+
+# Only used to copy the configuration into place before startup. The
+# agentgateway image is distroless and has no shell, so it cannot do this
+# itself.
+initImage:
+  repository: cortexcpacr6hy6uurw.azurecr.io/images/busybox
+  tag: "1.36"
+
+# One, deliberately. agentgateway bootstraps its own configuration file on
+# first start and the UI writes changes back to it. That file lives in the
+# pod, so a second replica would keep a separate configuration and the UI
+# would show different state depending on which pod answered.
+replicas: 1
+
+# The port the UI is served on, and what the platform routes to.
+port: 4000
+
+# The gateway the UI attaches to. "default" is reserved by agentgateway for the
+# gateway its own bootstrap config creates, so this is named for what it does.
+uiGatewayName: ui
+
+# Readiness and metrics. Separate from the UI port so that neither is published
+# through the platform's gateway.
+readinessPort: 15021
+statsPort: 15020
+
+resources:
+  requests: { cpu: 50m, memory: 128Mi }
+  limits: { cpu: 1, memory: 1Gi }
+
+nameOverride: ""
+fullnameOverride: ""
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
