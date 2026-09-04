@@ -1,0 +1,6 @@
+apiVersion: v2
+name: authz-service
+description: SpiceDB-backed authorization service for gateway access and application-scoped roles
+type: application
+version: 0.2.2
+appVersion: "0.1.0"

@@ -1,0 +1,54 @@
+# Extracted from the Cortex platform chart
+# (platform/charts/cortex-platform-0.1.0/.../templates/authz-service.yaml).
+#
+# What was deliberately left behind: the legacy credential-rotation and
+# in-cluster-to-managed Postgres migration jobs, the Cilium L7 policies, and the
+# cert-manager Certificate for the local Postgres. Those exist to carry an
+# already-running Cortex installation forward; a first install here has nothing
+# to migrate from.
+
+namespace: cortex-authz
+
+image: cortexcpacr6hy6uurw.azurecr.io/images/authz-service:0.1.0
+imagePullPolicy: IfNotPresent
+replicas: 1
+
+images:
+  spicedb: docker.io/authzed/spicedb:v1.29.0
+  zed: docker.io/authzed/zed:v0.21.1
+  postgres: docker.io/library/postgres:16-alpine
+  busybox: docker.io/library/busybox:1.36
+
+# The apex the ext-authz Host parser matches <app>.<subdomain>.<domain>
+# against. It MUST equal the domain the platform publishes apps on, or every
+# request is denied with 403.
+routingDomain: ""
+
+# Secrets are supplied by the platform's secret store, which materialises them
+# as a Kubernetes Secret in this namespace. Nothing here holds a credential.
+secrets:
+  secretName: authz-secrets
+  spicedbPresharedKeyKey: spicedb-preshared-key
+  adminTokenKey: authz-admin-token
+  postgresPasswordKey: postgres-password
+
+# SpiceDB's datastore, supplied by this service's infrastructure. The
+# authorization store is where every access decision is ultimately resolved, so
+# it is a managed database rather than a pod with a volume.
+postgres:
+  host: ""
+  port: "5432"
+  user: ""
+  database: spicedb
+  sslMode: require
+
+resources:
+  authz:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits:   { cpu: 500m, memory: 512Mi }
+  spicedb:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits:   { cpu: 500m, memory: 512Mi }
+  postgres:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits:   { cpu: 500m, memory: 512Mi }

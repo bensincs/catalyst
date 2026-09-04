@@ -1,0 +1,83 @@
+// Cortex platform SpiceDB schema
+//
+// Simple access model: a user either has access to a resource or they don't.
+// All HTTP methods (GET, POST, PUT, DELETE) on a resource require the same
+// `can_access` permission — there are no read/write/admin tiers per resource.
+//
+// Access to any application is derived from app-role membership: a user gains
+// `can_access` on an application automatically when they are a member of any
+// app_role linked to that application via the `role` relation. Every app must
+// declare at least one app_role; the operator links app_role objects to their
+// parent application when it seeds them. The legacy `accessor` relation remains
+// schema-valid so stale tuples can age out, but it no longer grants access.
+//
+// Consistency contract (enforced by callers, not the schema):
+//   - Grant/revoke writes  → fully_consistent
+//   - Permission checks    → at_least_as_fresh + ZedToken
+
+definition user {}
+
+// bootstrap represents a time-limited magic-link identity for a tenant that
+// has not yet configured an OIDC identity provider. A single bootstrap subject
+// exists per tenant (bootstrap:<tenantName>) and is written as bootstrap_access on
+// cortex-tenant-ui by the tenant-operator when identityProvider is nil. It is
+// deleted automatically when the tenant transitions to full OIDC mode.
+definition bootstrap {}
+
+definition tenant {
+    // WHY: tenant is kept as an anchor object so applications can declare
+    // which tenant they belong to, enabling future bulk revocation.
+    relation member: user
+}
+
+definition application {
+    relation tenant: tenant
+    // Legacy compatibility only. Existing tuples remain valid but confer no
+    // permission; new user access is represented exclusively by app roles.
+    relation accessor: user | bootstrap
+    // Temporary pre-OIDC magic-link access is kept separate from legacy tuples.
+    relation bootstrap_access: bootstrap
+    // WHY: `role` links an application to each of its app_role objects. The
+    // operator writes one `application#role@app_role:<id>` edge per declared
+    // role when it seeds an ApplicationDeployment. `can_access` then resolves
+    // to any user who is a member of at least one of those roles, so granting a
+    // user a role automatically grants gateway access — no separate accessor
+    // grant is needed.
+    relation role: app_role
+
+    permission can_access = bootstrap_access + role->member
+}
+
+definition agent {
+    relation tenant: tenant
+    relation accessor: user
+
+    permission can_access = accessor
+}
+
+// ---------------------------------------------------------------------------
+// App-scoped roles & permissions (data-driven; no per-app schema changes).
+//
+// Object ids fold the tenant in as a suffix and use collision-safe encoding
+// (see routes/app_permissions.py _role_object/_permission_object). Examples:
+//   app_role:insight|admin_tenant_a
+//   app_permission:insight|report_dot_manage_tenant_a
+//
+// Membership:  app_role:<app>|<role>_<tenant>#member@user:<sub>
+// Assignment:  app_role_assignment:<app>|<sub>_<tenant>#role@app_role:<app>|<role>_<tenant>
+// Grant:       app_permission:<app>|<perm>_<tenant>#granted_to@app_role:<app>|<role>_<tenant>
+// Check:       app_permission:<app>|<perm>_<tenant>#check  for user:<sub>
+// ---------------------------------------------------------------------------
+definition app_role {
+    relation member: user
+}
+
+definition app_role_assignment {
+    relation role: app_role
+    permission assigned = role
+}
+
+definition app_permission {
+    relation granted_to: app_role
+    permission check = granted_to->member
+}

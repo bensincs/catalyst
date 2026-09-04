@@ -1,0 +1,112 @@
+{
+  "secretSets": [
+    {
+      "name": "authz secrets",
+      "description": "Credentials the authorization service and its SpiceDB datastore run on. Supplied once per tenant and stored in that tenant's own Key Vault, where the platform cannot read them back.",
+      "keys": [
+        "spicedb-preshared-key",
+        "authz-admin-token",
+        "postgres-password"
+      ]
+    }
+  ],
+  "applications": [
+    {
+      "name": "authz service",
+      "description": "SpiceDB-backed authorization service. Answers gateway access decisions (/v1/ext-authz) and application-scoped role and permission queries (/v1/apps/...). Extracted from the Cortex platform chart.",
+      "chart": "authz-service",
+      "repoURL": "oci://cortexcpacr6hy6uurw.azurecr.io/charts",
+      "targetRevision": "0.2.2",
+      "namespace": "cortex-authz",
+      "authRequired": false,
+      "values": "routingDomain: msft.ae\nimage: cortexcpacr6hy6uurw.azurecr.io/images/authz-service:0.1.1\n",
+      "dependencies": [
+        {
+          "kind": "secret_set",
+          "id": "authz-secrets"
+        },
+        {
+          "kind": "infrastructure",
+          "id": "authz-db"
+        }
+      ],
+      "wiring": [
+        {
+          "sourceKind": "secret_set",
+          "sourceId": "authz-secrets",
+          "output": "secretName",
+          "helmPath": "secrets.secretName"
+        },
+        {
+          "sourceKind": "secret_set",
+          "sourceId": "authz-secrets",
+          "output": "key:spicedb-preshared-key",
+          "helmPath": "secrets.spicedbPresharedKeyKey"
+        },
+        {
+          "sourceKind": "secret_set",
+          "sourceId": "authz-secrets",
+          "output": "key:authz-admin-token",
+          "helmPath": "secrets.adminTokenKey"
+        },
+        {
+          "sourceKind": "secret_set",
+          "sourceId": "authz-secrets",
+          "output": "key:postgres-password",
+          "helmPath": "secrets.postgresPasswordKey"
+        },
+        {
+          "sourceKind": "infrastructure",
+          "sourceId": "authz-db",
+          "output": "host",
+          "helmPath": "postgres.host"
+        },
+        {
+          "sourceKind": "infrastructure",
+          "sourceId": "authz-db",
+          "output": "port",
+          "helmPath": "postgres.port"
+        },
+        {
+          "sourceKind": "infrastructure",
+          "sourceId": "authz-db",
+          "output": "administratorLogin",
+          "helmPath": "postgres.user"
+        },
+        {
+          "sourceKind": "infrastructure",
+          "sourceId": "authz-db",
+          "output": "databaseName",
+          "helmPath": "postgres.database"
+        },
+        {
+          "sourceKind": "infrastructure",
+          "sourceId": "authz-db",
+          "output": "sslMode",
+          "helmPath": "postgres.sslMode"
+        }
+      ]
+    }
+  ],
+  "infrastructure": [
+    {
+      "name": "authz db",
+      "description": "SpiceDB's datastore for the authorization service. The admin password is read from the tenant's own Key Vault by ARM at deploy time, so the control plane never handles it.",
+      "bicepModule": "br:cortexcpacr6hy6uurw.azurecr.io/bicep/authz:0.1.0",
+      "bicepParams": {
+        "name": "authz-{{tenantHash}}",
+        "location": "{{region}}",
+        "vaultName": "{{vaultName}}",
+        "vaultResourceGroup": "{{vaultResourceGroup}}",
+        "peSubnetId": "{{peSubnetId}}",
+        "dnsZoneResourceGroup": "{{dnsZoneResourceGroup}}",
+        "secretSetId": "authz-secrets",
+        "administratorLogin": "authzadmin",
+        "skuName": "Standard_B2ms",
+        "skuTier": "Burstable",
+        "storageMb": 32768,
+        "backupRetentionDays": 7
+      }
+    }
+  ]
+}

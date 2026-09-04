@@ -1,0 +1,152 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: spicedb-schema
+  namespace: {{ .Values.namespace }}
+data:
+  cortex.zed: |
+{{ .Files.Get "cortex.zed" | indent 4 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: spicedb
+  namespace: {{ .Values.namespace }}
+spec:
+  selector: { app: spicedb }
+  ports:
+    - { name: grpc, port: 50051, targetPort: 50051 }
+    - { name: http, port: 8443, targetPort: 8443 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spicedb
+  namespace: {{ .Values.namespace }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: spicedb }
+  template:
+    metadata:
+      labels: { app: spicedb }
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile: { type: RuntimeDefault }
+      initContainers:
+        # SpiceDB will not serve against an unmigrated database — it starts,
+        # fails to read its own metadata table and exits. Running the migration
+        # here rather than as a separate Job ties it to the pod that depends on
+        # it, so ordering cannot drift and an upgrade cannot start serving
+        # before its schema is in place. Migrating an up-to-date database is a
+        # no-op, so this is safe on every restart.
+        - name: datastore-migrate
+          image: {{ .Values.images.spicedb | quote }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          args:
+            - datastore
+            - migrate
+            - head
+            - --datastore-engine=postgres
+            - --datastore-conn-uri=$(SPICEDB_DATASTORE_CONN_URI)
+          env:
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.secretName }}
+                  key: {{ .Values.secrets.postgresPasswordKey }}
+            - name: SPICEDB_DATASTORE_CONN_URI
+              value: "postgres://{{ required "postgres.user is required" .Values.postgres.user }}:$(PGPASSWORD)@{{ required "postgres.host is required" .Values.postgres.host }}:{{ .Values.postgres.port }}/{{ .Values.postgres.database }}?sslmode={{ .Values.postgres.sslMode }}"
+      containers:
+        - name: spicedb
+          image: {{ .Values.images.spicedb | quote }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          args:
+            - serve
+            - --grpc-preshared-key=$(SPICEDB_GRPC_PRESHARED_KEY)
+            - --datastore-engine=postgres
+            - --datastore-conn-uri=$(SPICEDB_DATASTORE_CONN_URI)
+          env:
+            - name: SPICEDB_GRPC_PRESHARED_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.secretName }}
+                  key: {{ .Values.secrets.spicedbPresharedKeyKey }}
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.secretName }}
+                  key: {{ .Values.secrets.postgresPasswordKey }}
+            - name: SPICEDB_DATASTORE_CONN_URI
+              value: "postgres://{{ required "postgres.user is required" .Values.postgres.user }}:$(PGPASSWORD)@{{ required "postgres.host is required" .Values.postgres.host }}:{{ .Values.postgres.port }}/{{ .Values.postgres.database }}?sslmode={{ .Values.postgres.sslMode }}"
+          ports:
+            - { name: grpc, containerPort: 50051 }
+            - { name: http, containerPort: 8443 }
+          readinessProbe:
+            tcpSocket: { port: 50051 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources: {{- toYaml .Values.resources.spicedb | nindent 12 }}
+---
+# SpiceDB will not answer a permission check against a schema it does not have,
+# so the schema is loaded as part of installing the service rather than being a
+# manual step. Re-running it is safe: writing the same schema is idempotent.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: spicedb-schema-load
+  namespace: {{ .Values.namespace }}
+  annotations:
+    # Argo-native hook annotations only. Carrying helm.sh/hook as well means two
+    # systems each believe they own when this runs, and it ran under neither —
+    # SpiceDB came up with no schema, and the authorization service answered
+    # /ready with a 500 that said nothing about a missing schema.
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 10
+  template:
+    spec:
+      restartPolicy: OnFailure
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile: { type: RuntimeDefault }
+      initContainers:
+        - name: wait-for-spicedb
+          image: {{ .Values.images.busybox | quote }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          command:
+            - sh
+            - -c
+            - until nc -z spicedb.{{ .Values.namespace }}.svc.cluster.local 50051; do sleep 3; done
+      containers:
+        - name: schema-load
+          image: {{ .Values.images.zed | quote }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          args:
+            - schema
+            - write
+            - /schema/cortex.zed
+            - --endpoint=spicedb.{{ .Values.namespace }}.svc.cluster.local:50051
+            - --token=$(SPICEDB_GRPC_PRESHARED_KEY)
+            - --insecure
+          env:
+            - name: SPICEDB_GRPC_PRESHARED_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.secretName }}
+                  key: {{ .Values.secrets.spicedbPresharedKeyKey }}
+          volumeMounts:
+            - { name: schema, mountPath: /schema }
+      volumes:
+        - name: schema
+          configMap: { name: spicedb-schema }

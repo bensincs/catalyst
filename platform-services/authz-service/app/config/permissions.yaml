@@ -1,0 +1,49 @@
+# Cortex Platform Permissions Registry
+# This file defines all platform-level permissions that can be granted to roles.
+# Each permission has a unique key, display name, description, and namespace.
+
+platform_permissions:
+  - key: users.manage
+    name: Manage Users
+    description: Create, update, and delete user accounts
+    namespace: platform
+
+  - key: roles.manage
+    name: Manage Roles
+    description: Create, modify, and delete roles
+    namespace: platform
+
+  - key: permissions.manage
+    name: Manage Permissions
+    description: Grant and revoke permissions
+    namespace: platform
+
+  - key: tenants.manage
+    name: Manage Tenants
+    description: Create and configure tenants
+    namespace: platform
+
+  - key: audit.view
+    name: View Audit Logs
+    description: Access audit trail and security logs
+    namespace: platform
+
+  - key: settings.manage
+    name: Manage Settings
+    description: Configure platform-wide settings
+    namespace: platform
+
+  - key: roles.assign
+    name: Assign Roles
+    description: Add and remove users from roles
+    namespace: platform
+
+  - key: documents.create
+    name: Create Documents
+    description: Create new documents
+    namespace: platform
+
+  - key: documents.delete_any
+    name: Delete Any Document
+    description: Delete any document in the tenant (override ownership)
+    namespace: platform
