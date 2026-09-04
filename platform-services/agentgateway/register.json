@@ -3,22 +3,23 @@
     "Registers agentgateway in the platform catalog. Apply with:",
     "    cortexctl create -f platform-services/agentgateway/register.json",
     "",
-    "This runs agentgateway in STANDALONE mode — a single binary that serves its",
+    "This runs agentgateway in STANDALONE mode \u2014 a single binary that serves its",
     "own UI. Upstream also ships a Kubernetes mode built on the Gateway API, with",
     "a controller and four CRDs. That mode is not used here, and NOTES.md records",
     "why: three of those CRDs are larger than the annotation Argo writes when it",
     "applies a resource, so they cannot be installed through the platform as it",
     "is configured today.",
     "",
-    "No infrastructure is declared. Standalone agentgateway keeps its",
-    "configuration in a file and needs no database, cache or object store. It",
-    "gains dependencies only when something is configured that has them — a",
-    "global rate limit needs Redis, for instance — so there is nothing to",
-    "provision until then.",
+    "The database is what makes the UI worth having. agentgateway reads its",
+    "configuration file as a baseline and, with a database configured, writes",
+    "everything managed from the UI to a database overlay instead of back to the",
+    "file. Without it those changes live in the pod: lost on restart, and never",
+    "agreed on by two replicas. It holds the request log too, which is where the",
+    "token and cost accounting comes from.",
     "",
-    "No roles are declared either. agentgateway has no role vocabulary of its",
-    "own, so the platform grants the default 'user' role and access is simply",
-    "whether you may reach it at all.",
+    "No roles are declared. agentgateway has no role vocabulary of its own, so",
+    "the platform grants the default 'user' role and access is simply whether you",
+    "may reach it at all.",
     "",
     "authRequired puts it behind the platform's login. The Entra redirect URI is",
     "NOT automated: add https://agentgateway.apps.msft.ae/oauth2/callback to app",
@@ -29,6 +30,36 @@
     "chart's fullname helper collapses to the chart name, so it is",
     "'agentgateway'. Guessing wrong gives a gateway 500 with healthy pods."
   ],
+  "secretSets": [
+    {
+      "name": "agentgateway secrets",
+      "description": "The PostgreSQL credential agentgateway stores its UI-managed configuration and request logs under. Supplied once per tenant and stored in that tenant's own Key Vault, where the platform cannot read it back.",
+      "keys": [
+        "postgres-password"
+      ]
+    }
+  ],
+  "infrastructure": [
+    {
+      "name": "agentgateway db",
+      "description": "Holds agentgateway's UI-managed configuration and its request logs. The admin password is read from the tenant's own Key Vault by ARM at deploy time, so the control plane never handles it.",
+      "bicepModule": "br:cortexcpacr6hy6uurw.azurecr.io/bicep/agentgateway:0.1.0",
+      "bicepParams": {
+        "name": "agentgateway-{{tenantHash}}",
+        "location": "{{region}}",
+        "vaultName": "{{vaultName}}",
+        "vaultResourceGroup": "{{vaultResourceGroup}}",
+        "peSubnetId": "{{peSubnetId}}",
+        "dnsZoneResourceGroup": "{{dnsZoneResourceGroup}}",
+        "secretSetId": "agentgateway-secrets",
+        "administratorLogin": "agwadmin",
+        "skuName": "Standard_B2ms",
+        "skuTier": "Burstable",
+        "storageMb": 32768,
+        "backupRetentionDays": 7
+      }
+    }
+  ],
   "applications": [
     {
       "name": "agentgateway",
@@ -36,14 +67,68 @@
       "namespace": "agentgateway",
       "repoURL": "oci://cortexcpacr6hy6uurw.azurecr.io/charts",
       "chart": "agentgateway",
-      "targetRevision": "0.1.0",
-      "values": "image:\n  repository: cortexcpacr6hy6uurw.azurecr.io/images/agentgateway\n  tag: v1.4.1\n",
+      "targetRevision": "0.2.0",
+      "values": "image:\n  repository: cortexcpacr6hy6uurw.azurecr.io/images/agentgateway\n  tag: v1.5.0\n",
       "exposeService": "agentgateway",
       "exposePort": 4000,
       "hostname": "agentgateway",
       "authRequired": true,
       "embed": true,
-      "icon": "git-branch"
+      "icon": "git-branch",
+      "dependencies": [
+        {
+          "kind": "infrastructure",
+          "id": "agentgateway-db"
+        },
+        {
+          "kind": "secret_set",
+          "id": "agentgateway-secrets"
+        }
+      ],
+      "wiring": [
+        {
+          "sourceKind": "secret_set",
+          "sourceId": "agentgateway-secrets",
+          "output": "secretName",
+          "helmPath": "secrets.secretName"
+        },
+        {
+          "sourceKind": "secret_set",
+          "sourceId": "agentgateway-secrets",
+          "output": "key:postgres-password",
+          "helmPath": "secrets.postgresPasswordKey"
+        },
+        {
+          "sourceKind": "infrastructure",
+          "sourceId": "agentgateway-db",
+          "output": "host",
+          "helmPath": "database.host"
+        },
+        {
+          "sourceKind": "infrastructure",
+          "sourceId": "agentgateway-db",
+          "output": "port",
+          "helmPath": "database.port"
+        },
+        {
+          "sourceKind": "infrastructure",
+          "sourceId": "agentgateway-db",
+          "output": "administratorLogin",
+          "helmPath": "database.user"
+        },
+        {
+          "sourceKind": "infrastructure",
+          "sourceId": "agentgateway-db",
+          "output": "databaseName",
+          "helmPath": "database.name"
+        },
+        {
+          "sourceKind": "infrastructure",
+          "sourceId": "agentgateway-db",
+          "output": "sslMode",
+          "helmPath": "database.sslMode"
+        }
+      ]
     }
   ]
 }

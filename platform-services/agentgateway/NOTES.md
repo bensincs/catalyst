@@ -49,22 +49,54 @@ reasoning about it:
   interface, which listens on localhost. It reaches the platform's port only
   because the config attaches it to a named gateway.
 
-## The configuration is not persistent
+## The database, and why the configuration needs one
 
-The configuration is seeded from a ConfigMap and copied into an `emptyDir` at
-startup, because the UI writes changes back to the file it was given and a
-ConfigMap mounts read-only — mounted directly, every save in the UI fails.
+agentgateway reads its configuration file as a **baseline**. With
+`config.storage.mode: hybrid` everything managed from the UI is written to a
+database overlay instead of back to the file, so the two never compete: the
+ConfigMap says what the platform deploys, the database holds what an operator
+has since changed.
 
-The consequence: **changes made in the UI are lost when the pod restarts.** The
-durable place to change configuration is `chart/templates/configmap.yaml`.
+Without a database the UI still works, but its changes are written to the file
+in the pod — lost on restart, and never agreed on by two replicas. The database
+is therefore what makes the UI worth having, and what allows more than one
+replica to run at all. It holds the request log too, which is where the token
+and cost accounting comes from.
 
-This is also why there is one replica and a `Recreate` strategy. Two replicas
-would keep separate configurations behind one Service, and the UI would show
-different state depending on which pod answered.
+Because the UI no longer writes to the file, the ConfigMap is mounted directly
+and read-only. In `file` mode that same mount makes every save in the UI fail.
 
-There is no PodDisruptionBudget, deliberately. With a single replica,
-`minAvailable: 1` permits no disruption at all, which blocks node drains and
-stalls cluster upgrades.
+`config.storage.mode` is **nested under `config`**, not top level. At the top
+level agentgateway rejects it outright and lists the fields it does accept —
+`storage` is not among them, in either v1.4.1 or v1.5.0.
+
+Turning the database off is supported (`database.enabled: false`), but then
+`replicas` must be 1: the chart falls back to a `Recreate` strategy so two pods
+holding different configurations never overlap, and drops the
+PodDisruptionBudget, which against a single replica would permit no disruption
+at all and block node drains.
+
+## Known: the database password is printed to the pod log
+
+agentgateway echoes its fully-resolved configuration at startup, and the
+resolved value includes the database URL **with the password in it**. It appears
+twice in the first few seconds of every pod's log.
+
+The credential is only assembled in the environment — it is never written into
+the ConfigMap, and `/api/config` returns the unsubstituted
+`$AGENTGATEWAY_DATABASE_URL` rather than the resolved value. The startup echo is
+the one place it escapes, and it is upstream behaviour rather than anything this
+chart does.
+
+Rotating does not fix it: a new password is echoed the same way on the next
+start. What limits it is the network. The server has
+`publicNetworkAccess: Disabled` and is reachable only through its private
+endpoint, so the credential is useless without access inside the tenant's own
+virtual network. Anyone who can read pod logs there could already reach the
+database.
+
+Worth raising upstream. Until then, treat these pod logs as sensitive and keep
+them out of any aggregator with a wider audience than the cluster.
 
 ## Authentication
 
@@ -77,13 +109,21 @@ The Entra redirect URI is **not** automated by the platform.
 `https://agentgateway.apps.msft.ae/oauth2/callback` was added by hand to app
 `6eb003c0-169c-4b12-bc5e-aa5d6af04f2b`.
 
-## No infrastructure
+## Testing against a real cluster
 
-Standalone agentgateway keeps its state in a file and needs no database, cache
-or object store, so nothing is provisioned. It gains dependencies only when
-something is configured that has them — a global rate limit needs Redis, and
-request logging to Postgres needs a database. Add them when a feature is turned
-on, not before.
+Two things caught me out and are worth knowing before repeating this.
+
+The **published JSON schema describes the newest release**, not whichever
+version you are running. `config.storage` was designed against it and then
+rejected by v1.4.1, which is what prompted the move to v1.5.0. Check the version
+you actually deploy.
+
+**Argo tracks ownership by the `app.kubernetes.io/instance` label**, which Helm
+sets from the release name. Rendering this chart with `helm template
+agentgateway` into a scratch namespace produced resources carrying the same
+label as the real application, and Argo pruned them within seconds — the objects
+were reported created and then simply vanished. Use a different release name
+when testing.
 
 ## Registering it
 

@@ -1,10 +1,13 @@
 {{/*
 agentgateway's configuration.
 
-Seeded from here, then copied into a writable volume at startup — see the
-deployment. The binary refuses to start in Kubernetes without a configuration
-file: outside Kubernetes it writes itself a default one, but in a cluster it
-exits with "configuration is required when running in Kubernetes".
+This is a BASELINE only. `storage.mode: hybrid` means anything managed from the
+UI is written to the database instead of back here, so the two are not in
+competition: this file says what the platform deploys, the database holds what
+an operator has since changed.
+
+Mounted read-only. That is safe precisely because the UI writes to the database
+— with storage in `file` mode a read-only mount makes every save in the UI fail.
 */}}
 apiVersion: v1
 kind: ConfigMap
@@ -23,6 +26,23 @@ data:
       # authentication of its own, and this pod is reachable from anywhere in
       # the cluster.
       adminAddr: 127.0.0.1:15000
+
+      {{- if .Values.database.enabled }}
+      # The URL carries a password, so it is assembled in the environment from a
+      # Kubernetes Secret and referenced here. Writing it into this ConfigMap
+      # would put the credential in plain sight of anyone who can read the
+      # namespace.
+      database:
+        url: $AGENTGATEWAY_DATABASE_URL
+      storage:
+        # Read this file as a baseline, keep UI-managed resources in the
+        # database. Without this the UI's changes live in the pod and are lost
+        # with it, and two replicas would disagree about the configuration.
+        #
+        # Nested under `config`, not at the top level: the top level rejects it
+        # outright and lists the fields it does accept.
+        mode: hybrid
+      {{- end }}
 
     gateways:
       {{ .Values.uiGatewayName }}:

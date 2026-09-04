@@ -7,11 +7,13 @@ spec:
   replicas: {{ .Values.replicas }}
   selector:
     matchLabels: {{- include "agentgateway.selectorLabels" . | nindent 6 }}
-  # The configuration lives in the pod, so two of them must never overlap: a
-  # rolling update would briefly serve two different configurations behind one
-  # Service. Recreate accepts a gap instead.
+  {{- if not .Values.database.enabled }}
+  # Without a database the configuration lives in the pod, so two of them must
+  # never overlap: a rolling update would briefly serve two different
+  # configurations behind one Service. Recreate accepts a gap instead.
   strategy:
     type: Recreate
+  {{- end }}
   template:
     metadata:
       labels: {{- include "agentgateway.selectorLabels" . | nindent 8 }}
@@ -22,28 +24,18 @@ spec:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
     spec:
       automountServiceAccountToken: false
+      {{- if gt (int .Values.replicas) 1 }}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: {{- include "agentgateway.selectorLabels" . | nindent 14 }}
+      {{- end }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets: {{- toYaml . | nindent 8 }}
       {{- end }}
       securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
-      # The configuration is copied out of the ConfigMap rather than mounted
-      # from it. A ConfigMap mounts read-only, and the UI writes changes back to
-      # the configuration file — mounted directly, every edit in the UI would
-      # fail. Copying keeps the UI usable; the cost is that those edits live in
-      # the pod and are lost when it restarts. See NOTES.md.
-      #
-      # A separate image does the copying because the agentgateway image is
-      # distroless: it has no shell and no cp.
-      initContainers:
-        - name: seed-config
-          image: "{{ .Values.initImage.repository }}:{{ .Values.initImage.tag }}"
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
-          securityContext: {{- toYaml .Values.securityContext | nindent 12 }}
-          command: ["/bin/sh", "-c", "cp /seed/config.yaml /config/config.yaml"]
-          volumeMounts:
-            - { name: seed, mountPath: /seed }
-            - { name: config, mountPath: /config }
-          resources: {{- toYaml .Values.resources | nindent 12 }}
       containers:
         - name: agentgateway
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
@@ -59,12 +51,24 @@ spec:
               containerPort: {{ .Values.statsPort }}
           env:
             # The root filesystem is read-only, so anything the process writes
-            # relative to HOME has to land on the writable volume.
+            # relative to HOME has to land on a writable volume.
             - name: HOME
-              value: /config
+              value: /tmp
+            {{- if .Values.database.enabled }}
+            # Assembled here rather than written into the ConfigMap, so the
+            # password is never in a resource that is readable as plain text.
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.secretName }}
+                  key: {{ .Values.secrets.postgresPasswordKey }}
+            - name: AGENTGATEWAY_DATABASE_URL
+              value: "postgres://{{ .Values.database.user }}:$(PGPASSWORD)@{{ required "database.host is required when database.enabled" .Values.database.host }}:{{ .Values.database.port }}/{{ .Values.database.name }}?sslmode={{ .Values.database.sslMode }}"
+            {{- end }}
           volumeMounts:
             - name: config
               mountPath: /config
+              readOnly: true
             - name: tmp
               mountPath: /tmp
           # agentgateway publishes a readiness endpoint of its own, so neither
@@ -80,15 +84,10 @@ spec:
             failureThreshold: 3
           resources: {{- toYaml .Values.resources | nindent 12 }}
       volumes:
-        # Deliberately not a PersistentVolumeClaim and deliberately not a
-        # ConfigMap. A ConfigMap mounts read-only, so the UI could not save;
-        # a claim would make this stateful before anyone has decided what the
-        # configuration should say. Configuration made through the UI is lost
-        # when the pod restarts — see NOTES.md.
+        # Mounted straight from the ConfigMap. This is only safe because
+        # UI-managed configuration goes to the database — see the ConfigMap.
         - name: config
-          emptyDir: {}
-        - name: tmp
-          emptyDir: {}
-        - name: seed
           configMap:
             name: {{ include "agentgateway.fullname" . }}
+        - name: tmp
+          emptyDir: {}

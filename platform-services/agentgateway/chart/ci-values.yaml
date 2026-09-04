@@ -3,3 +3,8 @@
 image:
   repository: example.invalid/agentgateway
   tag: v1.4.1
+
+# CI has no platform wiring, so the database host is never filled in.
+database:
+  enabled: false
+replicas: 1

@@ -5,7 +5,7 @@
 
 image:
   repository: cortexcpacr6hy6uurw.azurecr.io/images/agentgateway
-  tag: v1.4.1
+  tag: v1.5.0
   pullPolicy: IfNotPresent
 
 # The kubelet has no registry credential of its own; the reconciler puts this
@@ -13,18 +13,28 @@ image:
 imagePullSecrets:
   - name: cortex-registry
 
-# Only used to copy the configuration into place before startup. The
-# agentgateway image is distroless and has no shell, so it cannot do this
-# itself.
-initImage:
-  repository: cortexcpacr6hy6uurw.azurecr.io/images/busybox
-  tag: "1.36"
+# Where UI-managed configuration and request logs are kept. Wired to a
+# PostgreSQL server the platform provisions.
+#
+# With this disabled agentgateway still runs, but everything done in the UI
+# lives in the pod: it is lost on restart, and two replicas cannot agree on it.
+database:
+  enabled: true
+  host: ""
+  port: 5432
+  name: agentgateway
+  user: agwadmin
+  sslMode: require
 
-# One, deliberately. agentgateway bootstraps its own configuration file on
-# first start and the UI writes changes back to it. That file lives in the
-# pod, so a second replica would keep a separate configuration and the UI
-# would show different state depending on which pod answered.
-replicas: 1
+secrets:
+  # The Kubernetes Secret the platform materialises from the tenant's vault.
+  secretName: agentgateway-secrets
+  postgresPasswordKey: postgres-password
+
+# Two. UI-managed configuration lives in the database rather than in the pod,
+# so replicas agree with each other and one can be lost without taking the
+# gateway down. With `database.enabled: false` this must be 1 — see NOTES.md.
+replicas: 2
 
 # The port the UI is served on, and what the platform routes to.
 port: 4000

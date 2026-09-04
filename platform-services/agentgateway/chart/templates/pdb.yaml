@@ -1,0 +1,18 @@
+{{- if gt (int .Values.replicas) 1 }}
+{{/*
+Only when there is more than one replica.
+
+A budget of minAvailable 1 against a single replica permits no disruption at
+all, which does not protect anything — it blocks node drains and stalls cluster
+upgrades instead.
+*/}}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "agentgateway.fullname" . }}
+  labels: {{- include "agentgateway.labels" . | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: {{- include "agentgateway.selectorLabels" . | nindent 6 }}
+{{- end }}
