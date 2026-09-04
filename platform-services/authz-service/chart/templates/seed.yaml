@@ -1,0 +1,64 @@
+{{- if and .Values.seed.enabled .Values.seed.members }}
+# Seeds the first administrators.
+#
+# Runs after the schema is loaded — a role cannot be written against a schema
+# SpiceDB does not yet have — and is idempotent: the role is ensured with PUT
+# and members are added with a call that tolerates already being a member, so
+# re-running on upgrade changes nothing.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: authz-seed
+  namespace: {{ .Values.namespace }}
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    # After the schema load, which is also PostSync.
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  backoffLimit: 10
+  template:
+    spec:
+      restartPolicy: OnFailure
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: seed
+          image: {{ .Values.images.curl | default "docker.io/curlimages/curl:8.21.0" | quote }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          env:
+            - name: AUTHZ_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.secretName }}
+                  key: {{ .Values.secrets.adminTokenKey }}
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              BASE=http://authz-service.{{ .Values.namespace }}.svc.cluster.local:8080/v1/apps/{{ .Values.seed.app }}
+              AUTH="Authorization: Bearer $AUTHZ_ADMIN_TOKEN"
+
+              until curl -sf -m 5 http://authz-service.{{ .Values.namespace }}.svc.cluster.local:8080/ready >/dev/null; do
+                echo "waiting for authz-service"; sleep 3
+              done
+
+              echo "ensuring role {{ .Values.seed.role }}"
+              curl -sS -f -X PUT "$BASE/roles/{{ .Values.seed.role }}" \
+                -H "$AUTH" -H 'Content-Type: application/json' -d '{}'
+
+              {{- range .Values.seed.members }}
+              echo "granting {{ . }}"
+              curl -sS -f -X POST "$BASE/roles/{{ $.Values.seed.role }}/members" \
+                -H "$AUTH" -H 'Content-Type: application/json' \
+                -d '{"subject":{{ . | quote }}}'
+              {{- end }}
+              echo "seed complete"
+{{- end }}

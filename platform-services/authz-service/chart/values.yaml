@@ -42,6 +42,20 @@ postgres:
   database: spicedb
   sslMode: require
 
+# Who can administer app access before anyone has been granted it.
+#
+# Access to an application is derived from app-role membership, so on a fresh
+# install nobody holds any role — including the role needed to reach the admin
+# UI and grant one. Without at least one seeded member that is a closed loop.
+# These members are written once at install; everyone else is added through the
+# UI afterwards.
+seed:
+  enabled: true
+  app: authz-admin
+  role: admin
+  # Subjects, e.g. "user:ben@msft.ae". A bare address is treated as a user.
+  members: []
+
 resources:
   authz:
     requests: { cpu: 50m, memory: 128Mi }

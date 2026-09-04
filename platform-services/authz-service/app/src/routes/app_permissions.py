@@ -247,44 +247,80 @@ def _resolve_tenant(header_tenant: str, body_tenant: str | None = None) -> str:
 
 
 class AddRoleMemberRequest(BaseModel):
-    tenant_id: str = Field(
-        description="Tenant; must match the x-cortex-tenant header"
+    tenant_id: str | None = Field(
+        default=None,
+        description=(
+            "Tenant. Optional: this deployment serves exactly one tenant, so a "
+            "caller with no reason to know its id may omit this. When supplied "
+            "it must name the tenant this deployment serves — it selects "
+            "nothing, it only has to agree."
+        ),
     )
     subject: str = Field(description="Subject, e.g. 'user:alice@example.com'")
 
 
 class RemoveRoleMemberRequest(BaseModel):
-    tenant_id: str = Field(
-        description="Tenant; must match the x-cortex-tenant header"
+    tenant_id: str | None = Field(
+        default=None,
+        description=(
+            "Tenant. Optional: this deployment serves exactly one tenant, so a "
+            "caller with no reason to know its id may omit this. When supplied "
+            "it must name the tenant this deployment serves — it selects "
+            "nothing, it only has to agree."
+        ),
     )
     subject: str = Field(description="Subject, e.g. 'user:alice@example.com'")
 
 
 class GrantRolePermissionRequest(BaseModel):
-    tenant_id: str = Field(
-        description="Tenant; must match the x-cortex-tenant header"
+    tenant_id: str | None = Field(
+        default=None,
+        description=(
+            "Tenant. Optional: this deployment serves exactly one tenant, so a "
+            "caller with no reason to know its id may omit this. When supplied "
+            "it must name the tenant this deployment serves — it selects "
+            "nothing, it only has to agree."
+        ),
     )
     permission: str = Field(description="App permission name, e.g. 'report.manage'")
 
 
 class RemoveRolePermissionRequest(BaseModel):
-    tenant_id: str = Field(
-        description="Tenant; must match the x-cortex-tenant header"
+    tenant_id: str | None = Field(
+        default=None,
+        description=(
+            "Tenant. Optional: this deployment serves exactly one tenant, so a "
+            "caller with no reason to know its id may omit this. When supplied "
+            "it must name the tenant this deployment serves — it selects "
+            "nothing, it only has to agree."
+        ),
     )
     permission: str = Field(description="App permission name, e.g. 'report.manage'")
 
 
 class CheckAppPermissionRequest(BaseModel):
-    tenant_id: str = Field(
-        description="Tenant; must match the x-cortex-tenant header"
+    tenant_id: str | None = Field(
+        default=None,
+        description=(
+            "Tenant. Optional: this deployment serves exactly one tenant, so a "
+            "caller with no reason to know its id may omit this. When supplied "
+            "it must name the tenant this deployment serves — it selects "
+            "nothing, it only has to agree."
+        ),
     )
     permission: str = Field(description="App permission name, e.g. 'report.manage'")
     subject: str = Field(description="Subject, e.g. 'user:alice@example.com'")
 
 
 class ListSubjectRolesRequest(BaseModel):
-    tenant_id: str = Field(
-        description="Tenant; must match the x-cortex-tenant header"
+    tenant_id: str | None = Field(
+        default=None,
+        description=(
+            "Tenant. Optional: this deployment serves exactly one tenant, so a "
+            "caller with no reason to know its id may omit this. When supplied "
+            "it must name the tenant this deployment serves — it selects "
+            "nothing, it only has to agree."
+        ),
     )
     subject: str = Field(description="Subject, e.g. 'user:alice@example.com'")
 
@@ -294,8 +330,14 @@ class ListSubjectRolesResponse(BaseModel):
 
 
 class EnsureRoleRequest(BaseModel):
-    tenant_id: str = Field(
-        description="Tenant; must match the x-cortex-tenant header"
+    tenant_id: str | None = Field(
+        default=None,
+        description=(
+            "Tenant. Optional: this deployment serves exactly one tenant, so a "
+            "caller with no reason to know its id may omit this. When supplied "
+            "it must name the tenant this deployment serves — it selects "
+            "nothing, it only has to agree."
+        ),
     )
 
 
