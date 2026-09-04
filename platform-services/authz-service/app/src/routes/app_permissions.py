@@ -13,6 +13,7 @@ from data.models import (
     GrantPermissionResponse,
     RevokePermissionResponse,
 )
+from common.tenant import TENANT_ID
 from data.spicedb_client import (
     SpiceDBClient,
     SpiceDBPreconditionError,
@@ -222,15 +223,27 @@ def _decode_subject(subject: str) -> str:
 
 
 def _resolve_tenant(header_tenant: str, body_tenant: str | None = None) -> str:
-    if not header_tenant:
-        raise HTTPException(status_code=401, detail=f"Missing {_TENANT_HEADER} header")
-    if body_tenant is not None and body_tenant != header_tenant:
+    """Resolve the tenant for a roles/permissions call.
+
+    This deployment serves exactly one tenant, so the tenant is configuration
+    rather than something a caller supplies. The header and body are still
+    honoured when present — but only to REJECT a mismatch, never to select a
+    different tenant. Callers that omit them (the admin UI, which has no reason
+    to know a tenant id) get the configured one.
+    """
+    supplied = header_tenant or body_tenant
+    if supplied and supplied != TENANT_ID:
+        raise HTTPException(
+            status_code=403,
+            detail=f"tenant_id does not match the tenant this deployment serves",
+        )
+    if body_tenant is not None and header_tenant and body_tenant != header_tenant:
         raise HTTPException(
             status_code=403,
             detail=f"tenant_id does not match {_TENANT_HEADER} header",
         )
-    _tenant_suffix(header_tenant)
-    return header_tenant
+    _tenant_suffix(TENANT_ID)
+    return TENANT_ID
 
 
 class AddRoleMemberRequest(BaseModel):

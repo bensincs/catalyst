@@ -16,7 +16,10 @@ from data.models import (
 from tests.conftest import ZEDTOKEN_READ, ZEDTOKEN_WRITE
 
 ADMIN_TOKEN = "test-admin-token"
-TENANT = "tenant-a"
+# The tenant this deployment serves. It must match the one the app is
+# configured with (conftest sets AUTHZ_TENANT_ID): a single-tenant deployment
+# refuses a request naming any other tenant rather than serving it.
+TENANT = "tenant-alpha"
 AUTH = {"authorization": f"Bearer {ADMIN_TOKEN}"}
 TENANT_HEADER = {"x-cortex-tenant": TENANT}
 HEADERS = {**AUTH, **TENANT_HEADER}

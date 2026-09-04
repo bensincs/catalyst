@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
 from common.audit import AuditEvent, elapsed_ms, request_context_from, subject_id
+from common.tenant import TENANT_ID
 from common.dependencies import get_authz_client
 from common.token_decoder import decode_access_token, extract_bearer_token
 from data.spicedb_client import SpiceDBClient, SpiceDBUnavailableError, sanitize_tenant_id
@@ -241,17 +242,16 @@ async def _ext_authz_check_impl(
 
     appname, _subdomain = parsed
 
-    if trusted_tenant is not None:
-        tenant = trusted_tenant
-    else:
-        # Legacy un-tenanted ext_authz path — fall back to the Host subdomain.
-        # Deprecated: the operator now stamps metadata.name into the ext_authz path.
+    # Single-tenant: the tenant is configuration, never anything a caller can
+    # influence. A trusted path segment that disagrees is a misconfiguration
+    # worth surfacing rather than honouring.
+    if trusted_tenant is not None and trusted_tenant != TENANT_ID:
         logger.warning(
-            "ext_authz request without trusted tenant path segment; "
-            "falling back to Host subdomain %r",
-            _subdomain,
+            "ext_authz path names tenant %r but this deployment serves %r; using the configured tenant",
+            trusted_tenant,
+            TENANT_ID,
         )
-        tenant = _subdomain
+    tenant = TENANT_ID
 
     host = host_header
 

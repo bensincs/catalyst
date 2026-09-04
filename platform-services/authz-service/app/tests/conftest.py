@@ -49,6 +49,12 @@ ZEDTOKEN_WRITE = "zedtoken-snap-write-01"
 TEST_ROUTING_DOMAIN = "cortex.ai"
 os.environ.setdefault("ROUTING_DOMAIN", TEST_ROUTING_DOMAIN)
 
+# This deployment serves exactly one tenant, so the suite runs AS tenant-alpha.
+# TENANT_B is retained deliberately: it is no longer "another tenant whose data
+# must stay separate" but "a tenant this deployment does not serve", and every
+# request naming it must be refused rather than quietly served.
+os.environ.setdefault("AUTHZ_TENANT_ID", TENANT_A)
+
 # ---------------------------------------------------------------------------
 # SpiceDB mock
 # ---------------------------------------------------------------------------
