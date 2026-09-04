@@ -38,6 +38,10 @@ param spicedbPresharedKey string
 @description('LiteLLM master key.')
 param llmGatewayMasterKey string
 
+@description('Admin token for the platform authorization service. cortex resolves a user\'s roles through authz-service; without this it raises "authz token is not configured" and /auth/me fails for every user.')
+@secure()
+param authzAdminToken string
+
 resource vault 'Microsoft.KeyVault/vaults@2023-07-01' existing = {
   name: keyVaultName
 }
@@ -82,7 +86,13 @@ resource llmMasterKey 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
   properties: { value: llmGatewayMasterKey }
 }
 
-resource spicedbKey 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
+resource authzAdminTokenSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
+  parent: vault
+  name: 'insight-authz-admin-token'
+  properties: { value: authzAdminToken }
+}
+
+resource spicedbPresharedKeySecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
   parent: vault
   name: 'insight-spicedb-preshared-key'
   properties: { value: spicedbPresharedKey }

@@ -104,6 +104,9 @@ param vaultResourceGroup string
 @description('Secret store id whose keys hold the insight credentials. The vault secret names are set-<id>--<key>.')
 param secretSetId string = 'insight-secrets'
 
+@description('Secret store id holding the platform authorization service credentials. Separate from the one above because the admin token has to match the one authz-service itself runs with.')
+param authzSecretSetId string = 'authz-secrets'
+
 // Zone ids are derived rather than passed: the names are fixed by Azure (a
 // private endpoint's DNS zone group only works against these exact names), so
 // eight parameters would be eight chances to get one wrong.
@@ -315,6 +318,10 @@ module contractSecrets 'modules/contract-secrets.bicep' = {
     jwtSecretKey: tenantVault.getSecret('set-${secretSetId}--jwt-secret-key')
     spicedbPresharedKey: tenantVault.getSecret('set-${secretSetId}--spicedb-preshared-key')
     llmGatewayMasterKey: tenantVault.getSecret('set-${secretSetId}--llm-gateway-master-key')
+    // The platform authorization service's admin token. It belongs to the authz
+    // secret store, not Insight's, because the same token has to match the one
+    // authz-service itself runs with.
+    authzAdminToken: tenantVault.getSecret('set-${authzSecretSetId}--authz-admin-token')
   }
   dependsOn: [ kv ]
 }
