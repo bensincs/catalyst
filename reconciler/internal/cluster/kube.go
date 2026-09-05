@@ -237,11 +237,11 @@ func (k *kube) reconcileApplications(ctx context.Context, apps []shared.DesiredA
 					// crash-loop the login path on every fresh install.
 					sessionHash := shortHash(ing.OIDCClientID + "|" + ing.OIDCClientSecret)
 					if _, err := k.dyn.Resource(depGVR).Namespace(a.Namespace).
-						Apply(ctx, sessionStoreName(name), sessionStoreDeployment(name, a.Namespace, a.ID, sessionHash), ssaOpts); err != nil {
+						Apply(ctx, sessionStoreName(an), sessionStoreDeployment(an, a.Namespace, a.ID, sessionHash), ssaOpts); err != nil {
 						note("apply session store", err)
 					}
 					if _, err := k.dyn.Resource(svcGVR).Namespace(a.Namespace).
-						Apply(ctx, sessionStoreName(name), sessionStoreService(name, a.Namespace, a.ID), ssaOpts); err != nil {
+						Apply(ctx, sessionStoreName(an), sessionStoreService(an, a.Namespace, a.ID), ssaOpts); err != nil {
 						note("apply session store service", err)
 					}
 					// Before the Deployment: the pod mounts this, and a pod that

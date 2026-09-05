@@ -902,7 +902,7 @@ func TestSessionPasswordIsStableAcrossReconciles(t *testing.T) {
 // Two of them would not share the sessions they hold, so during a rolling
 // update a request could be answered by whichever replica did not have yours.
 func TestSessionStoreIsASingleReplicaAndDoesNotOverlap(t *testing.T) {
-	d := sessionStoreDeployment("todo", "todo", "app-1", "hash")
+	d := sessionStoreDeployment("todo-auth", "todo", "app-1", "hash")
 
 	replicas, _, _ := unstructured.NestedInt64(d.Object, "spec", "replicas")
 	if replicas != 1 {
@@ -918,7 +918,7 @@ func TestSessionStoreIsASingleReplicaAndDoesNotOverlap(t *testing.T) {
 // onto a read-only root filesystem. Left on, the first save would turn every
 // login into a refusal.
 func TestSessionStoreDoesNotTryToPersist(t *testing.T) {
-	d := sessionStoreDeployment("todo", "todo", "app-1", "hash")
+	d := sessionStoreDeployment("todo-auth", "todo", "app-1", "hash")
 	args := containerArgs(t, d, "redis")
 
 	joined := strings.Join(args, " ")
@@ -977,4 +977,38 @@ func hasEnvFromSecret(t *testing.T, d *unstructured.Unstructured, container, nam
 		}
 	}
 	return false
+}
+
+// The store's hostname comes from the proxy's resource name, not the name an
+// operator typed.
+//
+// The todo application is called "todo app". Building the URL from that gave
+// "redis://todo app-auth-sessions...", a hostname that can never resolve, and
+// broke the login it was meant to fix.
+func TestSessionStoreHostnameIsALegalDNSName(t *testing.T) {
+	a := shared.DesiredApplication{
+		ID: "app-1", Name: "todo app", Namespace: "todo-app", AuthRequired: true,
+	}
+	ing := &shared.IngressConfig{OIDCIssuer: "https://issuer.example/v2.0", OIDCClientID: "cid"}
+
+	d := authDeployment("todo-app-auth", "todo-app", a, ing, "todo.apps.example")
+
+	for _, arg := range containerArgs(t, d, "oauth2-proxy") {
+		if !strings.HasPrefix(arg, "--redis-connection-url=") {
+			continue
+		}
+		if strings.ContainsAny(arg, " ") {
+			t.Fatalf("hostname cannot resolve: %q", arg)
+		}
+		want := "--redis-connection-url=redis://todo-app-auth-sessions.todo-app.svc.cluster.local:6379"
+		if arg != want {
+			t.Fatalf("want %q, got %q", want, arg)
+		}
+		// The Service the reconciler creates must answer to exactly that name.
+		if got := sessionStoreName("todo-app-auth"); got != "todo-app-auth-sessions" {
+			t.Fatalf("Service would be %q, which the URL does not name", got)
+		}
+		return
+	}
+	t.Fatal("no session store URL on the proxy")
 }

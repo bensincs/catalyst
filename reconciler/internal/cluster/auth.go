@@ -161,7 +161,7 @@ func authDeployment(name, namespace string, a shared.DesiredApplication, ing *sh
 		// cookie — see sessionStoreImage — and a split cookie loses the refresh
 		// token, which is what ends a session an hour after signing in.
 		"--session-store-type=redis",
-		"--redis-connection-url=" + sessionStoreURL(a.Name, namespace),
+		"--redis-connection-url=" + sessionStoreURL(name, namespace),
 		"--pass-authorization-header=true",
 		"--pass-basic-auth=false",
 		"--pass-user-headers=true",
@@ -629,7 +629,11 @@ func (k *kube) secretValue(ctx context.Context, ref shared.SecretKeyRef) (string
 /* ── Login sessions ───────────────────────────────────────────────────────── */
 
 // sessionStoreName is the Redis holding login sessions for one app's proxy.
-func sessionStoreName(appName string) string { return authName(appName) + "-sessions" }
+//
+// Takes the proxy's own resource name, which is already a legal DNS label. An
+// application's Name is what an operator typed — "todo app" — and putting that
+// in a hostname produces one that can never resolve.
+func sessionStoreName(authName string) string { return authName + "-sessions" }
 
 // sessionPasswordFor derives the store's password.
 //
@@ -645,8 +649,8 @@ func sessionPasswordFor(tenantSlug, appID, clientSecret string) string {
 // sessionStoreURL is what oauth2-proxy connects to. The password is supplied
 // separately, through the environment, so it is not written into an argument
 // list that shows up in `kubectl describe` and every crash report.
-func sessionStoreURL(appName, namespace string) string {
-	return fmt.Sprintf("redis://%s.%s.svc.cluster.local:6379", sessionStoreName(appName), namespace)
+func sessionStoreURL(authName, namespace string) string {
+	return fmt.Sprintf("redis://%s.%s.svc.cluster.local:6379", sessionStoreName(authName), namespace)
 }
 
 // sessionStoreDeployment renders the Redis behind one app's login.
@@ -658,8 +662,8 @@ func sessionStoreURL(appName, namespace string) string {
 //
 // The cost of that choice is honest and small: if this pod restarts, everyone
 // signed into this app signs in again.
-func sessionStoreDeployment(appName, namespace, appID string, credentialsHash string) *unstructured.Unstructured {
-	name := sessionStoreName(appName)
+func sessionStoreDeployment(authName, namespace, appID string, credentialsHash string) *unstructured.Unstructured {
+	name := sessionStoreName(authName)
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "apps/v1",
 		"kind":       "Deployment",
@@ -716,7 +720,7 @@ func sessionStoreDeployment(appName, namespace, appID string, credentialsHash st
 							"--maxmemory-policy", "volatile-lru",
 						},
 						"env": []any{
-							secretEnv("REDIS_PASSWORD", authName(appName), sessionPasswordKey),
+							secretEnv("REDIS_PASSWORD", authName, sessionPasswordKey),
 						},
 						"ports": []any{map[string]any{"name": "redis", "containerPort": int64(6379)}},
 						"readinessProbe": map[string]any{
@@ -742,8 +746,8 @@ func sessionStoreDeployment(appName, namespace, appID string, credentialsHash st
 }
 
 // sessionStoreService is how the proxy reaches the store.
-func sessionStoreService(appName, namespace, appID string) *unstructured.Unstructured {
-	name := sessionStoreName(appName)
+func sessionStoreService(authName, namespace, appID string) *unstructured.Unstructured {
+	name := sessionStoreName(authName)
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "v1",
 		"kind":       "Service",
