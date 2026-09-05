@@ -21,6 +21,10 @@ let grants = [];   // [{subject, app, role}]
 let catalog = [];  // [{name, roles: []}]
 let editing = null; // the address being edited, or null when adding
 
+// Marks that we have already bounced through the identity provider on this
+// visit, so a sign-in that does not take cannot loop the page.
+const REAUTH_TRIED = "authz.reauth.tried";
+
 const address = (s) => s.replace(/^user:/, "");
 const subjectOf = (a) => (a.includes(":") ? a : `user:${a}`);
 
@@ -30,10 +34,31 @@ function say(el, text, kind) {
 }
 
 async function json(resp) {
-  if (resp.status === 401)
-    throw new Error("Your session has ended. Reload the page to sign in again.");
+  // A 401 means the sign-in cookie is no longer good. The gateway answers a
+  // navigation with a redirect to the identity provider but a fetch with a
+  // plain 401, so asking the person to reload was asking them to do by hand
+  // the one thing that fixes it. Reloading navigates, which signs them back in
+  // — usually without them seeing anything, because the identity provider
+  // still has them signed in.
+  //
+  // replace() rather than reload() so a failed attempt does not accumulate in
+  // the back button.
+  if (resp.status === 401) {
+    // Only ever once per visit. If signing in again did not fix it, reloading
+    // a second time would loop the page forever and never say why.
+    if (sessionStorage.getItem(REAUTH_TRIED)) {
+      throw new Error("Signing in did not work. Reload the page to try again.");
+    }
+    sessionStorage.setItem(REAUTH_TRIED, "1");
+    window.location.replace(window.location.href);
+    // Stops the caller rendering an error against a page that is going away.
+    throw new Error("Signing you in again…");
+  }
   if (resp.status === 403) throw new Error("You do not administer app access.");
   if (!resp.ok) throw new Error(`Request failed (${resp.status}).`);
+  // Signing in worked, so a later expiry in this same tab is allowed to bounce
+  // through the identity provider again rather than refusing on a stale flag.
+  sessionStorage.removeItem(REAUTH_TRIED);
   return resp.json();
 }
 
