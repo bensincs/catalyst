@@ -48,6 +48,22 @@ const (
 	// oauth2ProxyImage fronts apps that require a login. Pinned: the edge auth
 	// component is not something to float on :latest.
 	oauth2ProxyImage = "quay.io/oauth2-proxy/oauth2-proxy:v7.15.0"
+	// sessionStoreImage holds the login sessions for oauth2-proxy.
+	//
+	// The session does not fit in a cookie. It carries an access token, an ID
+	// token and a refresh token, and for Entra those are about 2.0kB, 1.9kB and
+	// 1.6kB — around 7.5kB once encrypted and base64-encoded, against a 4kB
+	// limit per cookie. Even keeping only the ID and refresh tokens, the least
+	// that could work, comes to roughly 4.8kB. There is no combination of
+	// settings that fits, so the cookie is split, and a split cookie loses the
+	// refresh token: the session goes from holding one to not, and the next
+	// refresh fails with "session is expired".
+	//
+	// Held here instead, the cookie becomes a short ticket and both oauth2-proxy
+	// replicas read the same session — which also settles a second fault, since
+	// Entra invalidates a refresh token when it is used and one replica
+	// refreshing would break the copy the other still held.
+	sessionStoreImage = "docker.io/library/redis:7.4-alpine"
 	// agcNSGRule opens the AGC subnet's NSG for inbound client traffic to the
 	// frontend. The AKS add-on's subnet NSG only has the default rules (ending in
 	// DenyAllInBound), which drops client SYNs to the AGC data-path proxies that

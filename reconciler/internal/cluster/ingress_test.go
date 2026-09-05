@@ -835,3 +835,146 @@ func TestAnApplicationWithNoRolesStillGetsOne(t *testing.T) {
 		t.Errorf("want a single default role, got %v", paths)
 	}
 }
+
+// The login session is kept server-side, not in the browser.
+//
+// It does not fit in a cookie. An Entra session carries an access token, an ID
+// token and a refresh token — roughly 7.5kB once encrypted and base64-encoded,
+// against a 4kB limit per cookie. oauth2-proxy splits it, and a split cookie
+// loses the refresh token: the session goes from holding one to not, and the
+// next refresh ends it. That is what signed people out an hour after signing in.
+func TestSessionsAreStoredOutsideTheCookie(t *testing.T) {
+	a := shared.DesiredApplication{ID: "app-1", Name: "todo", Namespace: "todo", AuthRequired: true}
+	ing := &shared.IngressConfig{OIDCIssuer: "https://issuer.example/v2.0", OIDCClientID: "cid"}
+
+	d := authDeployment("todo-auth", "todo", a, ing, "todo.apps.example")
+	args := containerArgs(t, d, "oauth2-proxy")
+
+	if !hasArg(args, "--session-store-type=redis") {
+		t.Errorf("session is still kept in the cookie; args: %v", args)
+	}
+	// The store must be named by its own Service, not localhost: both proxy
+	// replicas have to read the same sessions, or one refreshing invalidates
+	// the refresh token the other still holds.
+	want := "--redis-connection-url=redis://todo-auth-sessions.todo.svc.cluster.local:6379"
+	if !hasArg(args, want) {
+		t.Errorf("want %q; args: %v", want, args)
+	}
+}
+
+// The password reaches the proxy through the environment.
+//
+// In the connection URL it would appear in the argument list, which is shown by
+// kubectl describe and copied into every crash report.
+func TestSessionPasswordIsNotInTheArgumentList(t *testing.T) {
+	a := shared.DesiredApplication{ID: "app-1", Name: "todo", Namespace: "todo", AuthRequired: true}
+	ing := &shared.IngressConfig{OIDCIssuer: "https://issuer.example/v2.0", OIDCClientID: "cid"}
+
+	d := authDeployment("todo-auth", "todo", a, ing, "todo.apps.example")
+	for _, arg := range containerArgs(t, d, "oauth2-proxy") {
+		if strings.Contains(arg, "@") && strings.Contains(arg, "redis://") {
+			t.Errorf("credential in an argument: %q", arg)
+		}
+	}
+	if !hasEnvFromSecret(t, d, "oauth2-proxy", "OAUTH2_PROXY_REDIS_PASSWORD") {
+		t.Error("OAUTH2_PROXY_REDIS_PASSWORD is not read from a Secret")
+	}
+}
+
+// The password is the same on every reconcile.
+//
+// Generating a fresh one each pass would rotate the store out from under
+// everyone signed in, so every reconcile would sign the whole tenant out.
+func TestSessionPasswordIsStableAcrossReconciles(t *testing.T) {
+	first := sessionPasswordFor("t-1", "app-1", "client-secret")
+	again := sessionPasswordFor("t-1", "app-1", "client-secret")
+	if first != again {
+		t.Fatal("password changed between reconciles; every pass would sign everyone out")
+	}
+	if other := sessionPasswordFor("t-1", "app-2", "client-secret"); other == first {
+		t.Error("two apps share a session store password")
+	}
+	if first == cookieSecretFor("t-1", "app-1", "client-secret") {
+		t.Error("session password equals the cookie key; one secret leaking would give both")
+	}
+}
+
+// Two of them would not share the sessions they hold, so during a rolling
+// update a request could be answered by whichever replica did not have yours.
+func TestSessionStoreIsASingleReplicaAndDoesNotOverlap(t *testing.T) {
+	d := sessionStoreDeployment("todo", "todo", "app-1", "hash")
+
+	replicas, _, _ := unstructured.NestedInt64(d.Object, "spec", "replicas")
+	if replicas != 1 {
+		t.Errorf("want a single replica, got %d", replicas)
+	}
+	strategy, _, _ := unstructured.NestedString(d.Object, "spec", "strategy", "type")
+	if strategy != "Recreate" {
+		t.Errorf("want Recreate so two never overlap, got %q", strategy)
+	}
+}
+
+// Redis stops accepting writes when a background save fails, and it cannot save
+// onto a read-only root filesystem. Left on, the first save would turn every
+// login into a refusal.
+func TestSessionStoreDoesNotTryToPersist(t *testing.T) {
+	d := sessionStoreDeployment("todo", "todo", "app-1", "hash")
+	args := containerArgs(t, d, "redis")
+
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "--save  ") && !strings.Contains(joined, `--save `) {
+		t.Errorf("snapshotting is not disabled; args: %v", args)
+	}
+	if !hasArg(args, "no") || !hasArg(args, "--appendonly") {
+		t.Errorf("append-only log is not disabled; args: %v", args)
+	}
+	if !hasArg(args, "--requirepass") {
+		t.Errorf("anything in the cluster can reach a ClusterIP; args: %v", args)
+	}
+}
+
+func containerArgs(t *testing.T, d *unstructured.Unstructured, container string) []string {
+	t.Helper()
+	cs, _, _ := unstructured.NestedSlice(d.Object, "spec", "template", "spec", "containers")
+	for _, c := range cs {
+		m := c.(map[string]any)
+		if m["name"] != container {
+			continue
+		}
+		var out []string
+		for _, a := range m["args"].([]any) {
+			out = append(out, a.(string))
+		}
+		return out
+	}
+	t.Fatalf("no container %q", container)
+	return nil
+}
+
+func hasArg(args []string, want string) bool {
+	for _, a := range args {
+		if a == want {
+			return true
+		}
+	}
+	return false
+}
+
+func hasEnvFromSecret(t *testing.T, d *unstructured.Unstructured, container, name string) bool {
+	t.Helper()
+	cs, _, _ := unstructured.NestedSlice(d.Object, "spec", "template", "spec", "containers")
+	for _, c := range cs {
+		m := c.(map[string]any)
+		if m["name"] != container {
+			continue
+		}
+		for _, e := range m["env"].([]any) {
+			em := e.(map[string]any)
+			if em["name"] == name {
+				_, ok := em["valueFrom"]
+				return ok
+			}
+		}
+	}
+	return false
+}

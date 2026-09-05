@@ -227,9 +227,22 @@ func (k *kube) reconcileApplications(ctx context.Context, apps []shared.DesiredA
 				if a.AuthRequired && tlsReady && ing.OIDCConfigured() {
 					an := authName(name)
 					cookie := cookieSecretFor(o.TenantSlug, a.ID, ing.OIDCClientSecret)
+					sessionPw := sessionPasswordFor(o.TenantSlug, a.ID, ing.OIDCClientSecret)
 					si := k.dyn.Resource(secGVR).Namespace(a.Namespace)
-					if _, err := si.Apply(ctx, an, authSecret(an, a.Namespace, a.ID, ing.OIDCClientSecret, cookie), ssaOpts); err != nil {
+					if _, err := si.Apply(ctx, an, authSecret(an, a.Namespace, a.ID, ing.OIDCClientSecret, cookie, sessionPw), ssaOpts); err != nil {
 						note("apply auth secret", err)
+					}
+					// Before the proxy: the proxy refuses to start when it cannot
+					// reach its session store, so bringing this up second would
+					// crash-loop the login path on every fresh install.
+					sessionHash := shortHash(ing.OIDCClientID + "|" + ing.OIDCClientSecret)
+					if _, err := k.dyn.Resource(depGVR).Namespace(a.Namespace).
+						Apply(ctx, sessionStoreName(name), sessionStoreDeployment(name, a.Namespace, a.ID, sessionHash), ssaOpts); err != nil {
+						note("apply session store", err)
+					}
+					if _, err := k.dyn.Resource(svcGVR).Namespace(a.Namespace).
+						Apply(ctx, sessionStoreName(name), sessionStoreService(name, a.Namespace, a.ID), ssaOpts); err != nil {
+						note("apply session store service", err)
 					}
 					// Before the Deployment: the pod mounts this, and a pod that
 					// starts without it crash-loops on a missing config file

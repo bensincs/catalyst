@@ -43,6 +43,9 @@ const (
 // the app name so it is stable and collision-free within the namespace.
 func authName(appName string) string { return appName + "-auth" }
 
+// Key in the auth Secret holding the session store's password.
+const sessionPasswordKey = "session-password"
+
 // authRedirectURL is the OAuth callback for an app — what the customer must
 // register as a redirect URI on their app registration.
 func authRedirectURL(host string) string {
@@ -66,7 +69,7 @@ func cookieSecretFor(tenantSlug, appID, clientSecret string) string {
 
 // authSecret holds the app's oauth2-proxy credentials: the customer's OIDC
 // client secret (delivered by the control plane) and the derived cookie key.
-func authSecret(name, namespace, appID, clientSecret, cookieSecret string) *unstructured.Unstructured {
+func authSecret(name, namespace, appID, clientSecret, cookieSecret, sessionPassword string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "v1",
 		"kind":       "Secret",
@@ -77,8 +80,9 @@ func authSecret(name, namespace, appID, clientSecret, cookieSecret string) *unst
 		},
 		"type": "Opaque",
 		"stringData": map[string]any{
-			"client-secret": clientSecret,
-			"cookie-secret": cookieSecret,
+			"client-secret":    clientSecret,
+			"cookie-secret":    cookieSecret,
+			sessionPasswordKey: sessionPassword,
 		},
 	}}
 }
@@ -153,6 +157,11 @@ func authDeployment(name, namespace string, a shared.DesiredApplication, ing *sh
 		// discovering it has by being refused downstream.
 		"--cookie-refresh=15m",
 		"--cookie-expire=8h",
+		// Keep the session here, not in the browser. It does not fit in a
+		// cookie — see sessionStoreImage — and a split cookie loses the refresh
+		// token, which is what ends a session an hour after signing in.
+		"--session-store-type=redis",
+		"--redis-connection-url=" + sessionStoreURL(a.Name, namespace),
 		"--pass-authorization-header=true",
 		"--pass-basic-auth=false",
 		"--pass-user-headers=true",
@@ -187,6 +196,10 @@ func authDeployment(name, namespace string, a shared.DesiredApplication, ing *sh
 						"env": []any{
 							secretEnv("OAUTH2_PROXY_CLIENT_SECRET", name, "client-secret"),
 							secretEnv("OAUTH2_PROXY_COOKIE_SECRET", name, "cookie-secret"),
+							// Supplied here rather than in the connection URL, which
+							// would put the password in an argument list that shows
+							// up in kubectl describe and every crash report.
+							secretEnv("OAUTH2_PROXY_REDIS_PASSWORD", name, sessionPasswordKey),
 						},
 						"ports": []any{map[string]any{"name": authPortName, "containerPort": int64(authPort)}},
 						"readinessProbe": map[string]any{
@@ -611,4 +624,139 @@ func (k *kube) secretValue(ctx context.Context, ref shared.SecretKeyRef) (string
 		return "", fmt.Errorf("decode %s/%s/%s: %w", ref.Namespace, ref.Name, ref.Key, err)
 	}
 	return string(decoded), nil
+}
+
+/* ── Login sessions ───────────────────────────────────────────────────────── */
+
+// sessionStoreName is the Redis holding login sessions for one app's proxy.
+func sessionStoreName(appName string) string { return authName(appName) + "-sessions" }
+
+// sessionPasswordFor derives the store's password.
+//
+// Derived rather than generated so it is the same on every reconcile: a fresh
+// random password each pass would rotate the store out from under every signed
+// in person. It never leaves the cluster, and is the same shape as the cookie
+// key beside it.
+func sessionPasswordFor(tenantSlug, appID, clientSecret string) string {
+	sum := sha256.Sum256([]byte("cortex-session-store|" + tenantSlug + "|" + appID + "|" + clientSecret))
+	return base64.URLEncoding.EncodeToString(sum[:])[:43]
+}
+
+// sessionStoreURL is what oauth2-proxy connects to. The password is supplied
+// separately, through the environment, so it is not written into an argument
+// list that shows up in `kubectl describe` and every crash report.
+func sessionStoreURL(appName, namespace string) string {
+	return fmt.Sprintf("redis://%s.%s.svc.cluster.local:6379", sessionStoreName(appName), namespace)
+}
+
+// sessionStoreDeployment renders the Redis behind one app's login.
+//
+// One replica, and no persistence. A session is not durable state: it can
+// always be rebuilt by signing in again, and the identity provider usually does
+// that without the person seeing anything. Replicating or persisting it would
+// buy little and cost a great deal more than it is worth.
+//
+// The cost of that choice is honest and small: if this pod restarts, everyone
+// signed into this app signs in again.
+func sessionStoreDeployment(appName, namespace, appID string, credentialsHash string) *unstructured.Unstructured {
+	name := sessionStoreName(appName)
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "apps/v1",
+		"kind":       "Deployment",
+		"metadata": map[string]any{
+			"name":      name,
+			"namespace": namespace,
+			"labels":    map[string]any{labelManaged: "true", labelAppID: appID},
+		},
+		"spec": map[string]any{
+			"replicas": int64(1),
+			"selector": map[string]any{"matchLabels": map[string]any{"app": name}},
+			// Never two at once. They would not share the sessions they hold, so
+			// during a rolling update a request could be answered by whichever
+			// one did not have yours.
+			"strategy": map[string]any{"type": "Recreate"},
+			"template": map[string]any{
+				"metadata": map[string]any{
+					"labels": map[string]any{"app": name, labelManaged: "true", labelAppID: appID},
+					"annotations": map[string]any{
+						"cortex.io/credentials-hash": credentialsHash,
+					},
+				},
+				"spec": map[string]any{
+					"automountServiceAccountToken": false,
+					"securityContext": map[string]any{
+						"runAsNonRoot": true,
+						"runAsUser":    int64(999),
+						"runAsGroup":   int64(999),
+						"fsGroup":      int64(999),
+					},
+					"containers": []any{map[string]any{
+						"name":  "redis",
+						"image": sessionStoreImage,
+						"securityContext": map[string]any{
+							"allowPrivilegeEscalation": false,
+							"readOnlyRootFilesystem":   true,
+							"capabilities":             map[string]any{"drop": []any{"ALL"}},
+						},
+						// Anything in the cluster can reach a ClusterIP, so this
+						// asks for a password like any other service would.
+						//
+						// --save "" turns off snapshotting: with a read-only root
+						// filesystem a snapshot cannot be written, and Redis stops
+						// accepting writes when a background save fails — which
+						// would refuse logins rather than lose a session.
+						"args": []any{
+							"redis-server",
+							"--requirepass", "$(REDIS_PASSWORD)",
+							"--save", "",
+							"--appendonly", "no",
+							// Sessions carry their own expiry, so evict those
+							// before ever refusing a write for want of memory.
+							"--maxmemory", "192mb",
+							"--maxmemory-policy", "volatile-lru",
+						},
+						"env": []any{
+							secretEnv("REDIS_PASSWORD", authName(appName), sessionPasswordKey),
+						},
+						"ports": []any{map[string]any{"name": "redis", "containerPort": int64(6379)}},
+						"readinessProbe": map[string]any{
+							"tcpSocket":           map[string]any{"port": int64(6379)},
+							"initialDelaySeconds": int64(3),
+							"periodSeconds":       int64(10),
+						},
+						"livenessProbe": map[string]any{
+							"tcpSocket":           map[string]any{"port": int64(6379)},
+							"initialDelaySeconds": int64(20),
+							"periodSeconds":       int64(20),
+							"failureThreshold":    int64(3),
+						},
+						"resources": map[string]any{
+							"requests": map[string]any{"cpu": "10m", "memory": "32Mi"},
+							"limits":   map[string]any{"memory": "256Mi"},
+						},
+					}},
+				},
+			},
+		},
+	}}
+}
+
+// sessionStoreService is how the proxy reaches the store.
+func sessionStoreService(appName, namespace, appID string) *unstructured.Unstructured {
+	name := sessionStoreName(appName)
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "v1",
+		"kind":       "Service",
+		"metadata": map[string]any{
+			"name":      name,
+			"namespace": namespace,
+			"labels":    map[string]any{labelManaged: "true", labelAppID: appID},
+		},
+		"spec": map[string]any{
+			"selector": map[string]any{"app": name},
+			"ports": []any{map[string]any{
+				"name": "redis", "port": int64(6379), "targetPort": int64(6379),
+			}},
+		},
+	}}
 }
